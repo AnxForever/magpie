@@ -312,3 +312,25 @@ func TestWSLClaudeStandIn(t *testing.T) {
 	}
 	noOwnClaude(t)
 }
+
+// A WSL agent is found by its id however it is spelt — the distro's own
+// case, lower, upper — and by a prefix of it: an id in lowercase comes up
+// wherever a typed name is lowercased before it is looked for.
+func TestWSLAgentIDFound(t *testing.T) {
+	root, _ := claudeDistroHome(t, `{"model": "claude-opus-5-5"}`)
+	fakeWSL(t, "Debian\r\n", "Debian\r\n", map[string]string{
+		"Debian": "home:/home/me\ndir:.claude\n",
+	}, map[string]string{"Debian": root})
+	if ds := wslDistros(); len(ds) != 1 || ds[0].Name != "Debian" {
+		t.Fatalf("%+v", ds)
+	}
+	for _, q := range []string{"claude@wsl:Debian", "claude@wsl:debian", "CLAUDE@WSL:DEBIAN", "claude@wsl"} {
+		a, err := Find(q)
+		if err != nil || a.ID != "claude@wsl:Debian" {
+			t.Errorf("%q: %v, %+v", q, err, a)
+		}
+	}
+	if _, err := Find("codex@wsl:Debian"); err == nil {
+		t.Error("codex@wsl:Debian found though the distro has none")
+	}
+}
