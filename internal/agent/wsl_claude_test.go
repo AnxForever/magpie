@@ -321,16 +321,28 @@ func TestWSLAgentIDFound(t *testing.T) {
 	fakeWSL(t, "Debian\r\n", "Debian\r\n", map[string]string{
 		"Debian": "home:/home/me\ndir:.claude\n",
 	}, map[string]string{"Debian": root})
-	if ds := wslDistros(); len(ds) != 1 || ds[0].Name != "Debian" {
+	ds := wslDistros()
+	if len(ds) != 1 || ds[0].Name != "Debian" {
 		t.Fatalf("%+v", ds)
 	}
+	agents := wslAgentsOf(ds)
+	if len(agents) != 1 || agents[0].ID != "claude@wsl:Debian" {
+		t.Fatalf("agents: %+v", agents)
+	}
 	for _, q := range []string{"claude@wsl:Debian", "claude@wsl:debian", "CLAUDE@WSL:DEBIAN", "claude@wsl"} {
-		a, err := Find(q)
-		if err != nil || a.ID != "claude@wsl:Debian" {
+		a, err := findIn(q, agents)
+		if err != nil {
 			t.Errorf("%q: %v, %+v", q, err, a)
+			continue
+		}
+		if a == nil || a.ID != "claude@wsl:Debian" {
+			t.Errorf("%q: got %+v, want claude@wsl:Debian", q, a)
 		}
 	}
-	if _, err := Find("codex@wsl:Debian"); err == nil {
-		t.Error("codex@wsl:Debian found though the distro has none")
+	if a, err := findIn("codex@wsl:Debian", agents); err == nil {
+		t.Errorf("codex@wsl:Debian found: %+v", a)
+	} else if a != nil {
+		t.Errorf("unknown agent returned %+v with error %v", a, err)
 	}
+	noOwnClaude(t)
 }

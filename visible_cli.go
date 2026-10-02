@@ -48,8 +48,8 @@ func visibleCmd(args []string) error {
 		fmt.Println(visibleUsage)
 		return nil
 	}
-	s := settings.Load()
 	if len(args) == 0 {
+		s := settings.Load()
 		if len(s.Visible) == 0 {
 			fmt.Println(muted.Render("  every agent is shown every model · magpie visible <agent> <family>,… narrows one"))
 		}
@@ -72,6 +72,18 @@ func visibleCmd(args []string) error {
 		return models([]string{id})
 	}
 	list := splitList(strings.Join(args[1:], ","))
+	if err := setVisible(id, list); err != nil {
+		return err
+	}
+	fmt.Println(green.Render("✓"), "saved")
+	return models([]string{id})
+}
+
+// setVisible saves which models an agent is shown under the same lowercase
+// key VisibleTo reads, and tells its files to follow.
+func setVisible(id string, list []string) error {
+	id = strings.ToLower(id)
+	s := settings.Load()
 	if len(list) == 1 && strings.EqualFold(list[0], "all") {
 		delete(s.Visible, id)
 	} else {
@@ -95,8 +107,7 @@ func visibleCmd(args []string) error {
 	if catalog.Changed != nil {
 		catalog.Changed() // the agents' files follow
 	}
-	fmt.Println(green.Render("✓"), "saved")
-	return models([]string{id})
+	return nil
 }
 
 func orNone(xs []string) string {
