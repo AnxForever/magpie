@@ -44,8 +44,68 @@ func GetYAMLMap(path, keyPath string) map[string]string {
 	return out
 }
 
+// GetYAMLList reads the scalar items of the list at a key path.
+func GetYAMLList(path, keyPath string) []string {
+	root, err := loadYAML(path)
+	if err != nil || root == nil {
+		return nil
+	}
+	n := lookupYAML(root, strings.Split(keyPath, "."))
+	if n == nil || n.Kind != yaml.SequenceNode {
+		return nil
+	}
+	var out []string
+	for _, c := range n.Content {
+		if c.Kind == yaml.ScalarNode {
+			out = append(out, c.Value)
+		}
+	}
+	return out
+}
+
+// GetYAMLText reads the value at a key path as the YAML it is written in —
+// a list flow ("[a, b]") or block as it is — for SetYAML to put back as a
+// YAMLText.
+func GetYAMLText(path, keyPath string) (string, bool) {
+	root, err := loadYAML(path)
+	if err != nil || root == nil {
+		return "", false
+	}
+	n := lookupYAML(root, strings.Split(keyPath, "."))
+	if n == nil {
+		return "", false
+	}
+	b, err := yaml.Marshal(n)
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSuffix(string(b), "\n"), true
+}
+
+// YAMLText, as a KV's value, is set as the YAML it reads as rather than as
+// a string: a list read with GetYAMLText goes back written as it was.
+type YAMLText string
+
+// EditYAMLTextStrings is EditYAMLStrings on YAML text (a YAMLText) rather
+// than a file: fn's answers in place of every string in it.
+func EditYAMLTextStrings(text YAMLText, fn func(string) string) (YAMLText, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &doc); err != nil || len(doc.Content) == 0 {
+		return text, err
+	}
+	if !mapStrings(doc.Content[0], fn) {
+		return text, nil
+	}
+	b, err := yaml.Marshal(doc.Content[0])
+	if err != nil {
+		return text, err
+	}
+	return YAMLText(strings.TrimSuffix(string(b), "\n")), nil
+}
+
 // SetYAML sets key paths in a YAML file; a value may be a scalar, a map,
-// a slice or a struct with yaml tags. Missing files and parents are created.
+// a slice, a struct with yaml tags or YAMLText. Missing files and parents
+// are created.
 func SetYAML(path string, kvs ...KV) error {
 	root, err := loadYAML(path)
 	if err != nil {
@@ -56,7 +116,13 @@ func SetYAML(path string, kvs ...KV) error {
 	}
 	for _, kv := range kvs {
 		var v yaml.Node
-		if err := v.Encode(kv.Value); err != nil {
+		if t, ok := kv.Value.(YAMLText); ok {
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(t), &doc); err != nil || len(doc.Content) == 0 {
+				return fmt.Errorf("%s: %s: not YAML: %q", path, kv.Path, string(t))
+			}
+			v = *doc.Content[0]
+		} else if err := v.Encode(kv.Value); err != nil {
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		setYAML(root, strings.Split(kv.Path, "."), &v)
@@ -93,6 +159,42 @@ func DelYAML(path string, keyPaths ...string) error {
 		return nil
 	}
 	return writeYAML(path, root)
+}
+
+// EditYAMLStrings calls fn on every string under the key paths — mapping
+// keys and values, sequence items, at any depth — and puts fn's answer in
+// its place, comments and quoting kept. The file is written only when an
+// answer differs, so an fn that answers what it is given only reads.
+func EditYAMLStrings(path string, keyPaths []string, fn func(string) string) error {
+	root, err := loadYAML(path)
+	if err != nil || root == nil {
+		return err
+	}
+	changed := false
+	for _, kp := range keyPaths {
+		if n := lookupYAML(root, strings.Split(kp, ".")); n != nil {
+			changed = mapStrings(n, fn) || changed
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return writeYAML(path, root)
+}
+
+// mapStrings puts fn's answer in place of every string under n, and says
+// whether any differs.
+func mapStrings(n *yaml.Node, fn func(string) string) bool {
+	changed := false
+	if n.Kind == yaml.ScalarNode && n.ShortTag() == "!!str" {
+		if v := fn(n.Value); v != n.Value {
+			n.Value, changed = v, true
+		}
+	}
+	for _, c := range n.Content {
+		changed = mapStrings(c, fn) || changed
+	}
+	return changed
 }
 
 // JSONToYAML writes a JSON or JSONC file out as block-style YAML, key
@@ -216,5 +318,62 @@ func blockStyle(n *yaml.Node) {
 	}
 	for _, c := range n.Content {
 		blockStyle(c)
+	}
+}
+
+// BlockList is raw, a file whose one document is a top-level sequence
+// written in flow style ([ {id: a}, {id: b} ], what dsh's own writers keep
+// a file that starts as []), with that sequence written as a block list
+// instead: one "- " item after another, each entry's mappings and lists in
+// block style too, its scalars quoted as they were. The lines before the
+// sequence and the comment lines after it stay as written. ok is false, and
+// raw is left to the caller, for anything else: a block list, a mapping,
+// several documents, or text that isn't YAML.
+func BlockList(raw string) (string, bool) {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	dec := yaml.NewDecoder(strings.NewReader(raw))
+	var doc, more yaml.Node
+	if dec.Decode(&doc) != nil || dec.Decode(&more) == nil {
+		return "", false
+	}
+	if len(doc.Content) != 1 {
+		return "", false
+	}
+	seq := doc.Content[0]
+	if seq.Kind != yaml.SequenceNode || seq.Style&yaml.FlowStyle == 0 {
+		return "", false
+	}
+	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
+	start := min(max(seq.Line-1, 0), len(lines))
+	end := len(lines)
+	for end > start {
+		if t := strings.TrimSpace(lines[end-1]); t != "" && !strings.HasPrefix(t, "#") {
+			break
+		}
+		end--
+	}
+	out := append([]string{}, lines[:start]...)
+	if len(seq.Content) == 0 {
+		out = append(out, "[]")
+	} else {
+		seq.HeadComment, seq.LineComment, seq.FootComment = "", "", ""
+		unflow(seq)
+		var buf bytes.Buffer
+		enc := yaml.NewEncoder(&buf)
+		enc.SetIndent(2)
+		if enc.Encode(seq) != nil || enc.Close() != nil {
+			return "", false
+		}
+		out = append(out, strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")...)
+	}
+	out = append(out, lines[end:]...)
+	return strings.Join(out, "\n") + "\n", true
+}
+
+// unflow writes n's mappings and sequences in block style.
+func unflow(n *yaml.Node) {
+	n.Style &^= yaml.FlowStyle
+	for _, c := range n.Content {
+		unflow(c)
 	}
 }

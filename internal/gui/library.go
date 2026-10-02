@@ -23,6 +23,9 @@ type libraryJSON struct {
 	*library.View
 	Result *library.Result `json:"result,omitempty"`
 	Home   string          `json:"home"` // for the page to show paths under it as ~
+	// Problems are every one still standing, the page's list of what an
+	// agent couldn't be given: not only those a chip can carry
+	Problems []library.Problem `json:"problems,omitempty"`
 }
 
 func libraryView(res *library.Result) (libraryJSON, error) {
@@ -34,7 +37,7 @@ func libraryView(res *library.Result) (libraryJSON, error) {
 	lastProblems.Unlock()
 	v, err := library.Read(p)
 	home, _ := os.UserHomeDir()
-	return libraryJSON{View: v, Result: res, Home: home}, err
+	return libraryJSON{View: v, Result: res, Home: home, Problems: p}, err
 }
 
 // marketJSON is a market's list, and why it may be short: a search that
@@ -253,12 +256,14 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			Agents []string `json:"agents"`
 			Source string
 			Paths  []string
-			Names  []string // the skills to update, of those a check found changed
+			Names  []string // the skills to update, of those a check found changed; to bring in, of those found in the agents
 			Server library.Server
+			Agent  string            // the agent whose own skill is in the library's way
 			ID     string            // a market server's, or a market skill's in its repository
 			Values map[string]string // what a market server needs
 			Dir    string            // a project's folder
 			Copy   bool              // a project gets copies, not links
+			On     bool              // every skill or server given to the agents, or taken from them
 			library.InstructionsChange
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -278,6 +283,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.SaveServer(in.Old, in.Server)
 		case "servers/agents":
 			res, err = library.ServerAgents(in.Name, in.Agents)
+		case "servers/agents-all":
+			res, err = library.EveryServerAgents(in.Agents, in.On)
 		case "servers/remove":
 			res, err = library.RemoveServer(in.Name)
 		case "servers/import":
@@ -292,10 +299,20 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.UpdateSomeSkills(in.Names)
 		case "skills/agents":
 			res, err = library.SkillAgents(in.Name, in.Agents)
+		case "skills/agents-all":
+			res, err = library.EverySkillAgents(in.Agents, in.On)
 		case "skills/remove":
 			res, err = library.RemoveSkill(in.Name)
+		case "skills/remove-all":
+			res, err = library.RemoveSkills(in.Names)
 		case "skills/import":
 			res, err = library.ImportSkill(in.Name)
+		case "skills/import-all":
+			res, err = library.ImportSkills(in.Names)
+		case "skills/use-library":
+			res, err = library.UseLibrarySkill(in.Name, in.Agent)
+		case "skills/keep-own":
+			res, err = library.KeepAgentSkill(in.Name, in.Agent)
 		case "market/server":
 			res, err = library.InstallServer(in.ID, in.Values, in.Agents)
 		case "market/skill":

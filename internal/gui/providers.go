@@ -16,6 +16,7 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // The providers page: the vendors the user added, the presets they can add
@@ -50,12 +51,17 @@ type providerJSON struct {
 	Website   string            `json:"website"`
 	KeysURL   string            `json:"keysUrl"`
 	Headers   map[string]string `json:"headers,omitempty"`
+	// the vendor searches the web by itself (provider.Searches)
+	Searches bool `json:"searches"`
 	// the proxy its requests go through: "" the global one, "direct"
 	// none, or an address (#237)
 	Proxy string `json:"proxy"`
 	// the proxy of each of a subscription's accounts that has one of its
 	// own, by its name in lower case; the others follow Proxy
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
+	// the models each account or key the user narrowed serves alone, by
+	// its name in lower case or its key's id (#474); the others serve all
+	AccountModels map[string][]string `json:"accountModels,omitempty"`
 	// where a custom provider's balance is asked (see provider.Balance)
 	BalanceURL  string `json:"balanceURL,omitempty"`
 	BalancePath string `json:"balancePath,omitempty"`
@@ -78,23 +84,39 @@ type providerJSON struct {
 		Masked   string `json:"masked"`
 		Optional bool   `json:"optional"`
 	} `json:"key"`
-	Ready     bool               `json:"ready"`
-	Chosen    []string           `json:"chosen"`             // the user's explicit picks, if any
-	Fallback  []string           `json:"fallback"`           // where requests go when this one can't take them
-	Routing   string             `json:"routing"`            // how requests spread over its keys or accounts
-	Affinity  string             `json:"affinity"`           // how long a conversation stays with who answered it
-	Models    []modelJSON        `json:"models"`             // everything the vendor lists, exposed ones flagged
-	Exposed   int                `json:"exposed"`            // how many reach the agents
-	Draws     int                `json:"draws,omitempty"`    // how many of its models draw images (gateway.Drawers)
-	DrawIDs   []string           `json:"drawIds,omitempty"`  // those models' ids, listed apart in its editor
-	Unlisted  bool               `json:"unlisted"`           // its models serve only through routing groups
-	Off       bool               `json:"off"`                // switched off: kept, but agents get none of its models
-	Contexts  map[string]int     `json:"contexts,omitempty"` // the windows the user set, "*" for all its models
-	Fetched   string             `json:"fetched"`            // "3h ago" when the list came from the vendor
-	Agents    []providerAgent    `json:"agents"`             // detected agents, current ones flagged
-	Sponsored bool               `json:"sponsored"`
-	KeyList   []provider.KeyInfo `json:"keyList"`           // its keys, in the order requests try them
-	Account   *accountJSON       `json:"account,omitempty"` // a signed-in agent, see provider.Account
+	Ready    bool        `json:"ready"`
+	Chosen   []string    `json:"chosen"`            // the user's explicit picks, if any
+	Fallback []string    `json:"fallback"`          // where requests go when this one can't take them
+	Routing  string      `json:"routing"`           // how requests spread over its keys or accounts
+	Affinity string      `json:"affinity"`          // how long a conversation stays with who answered it
+	Models   []modelJSON `json:"models"`            // everything the vendor lists, exposed ones flagged
+	Exposed  int         `json:"exposed"`           // how many reach the agents
+	Draws    int         `json:"draws,omitempty"`   // how many of its models draw images (gateway.Drawers)
+	DrawIDs  []string    `json:"drawIds,omitempty"` // those models' ids, listed apart in its editor
+	Unlisted bool        `json:"unlisted"`          // its models serve only through routing groups
+	// Groups are the routing groups ("group/<id>") each of its models is
+	// in, by model id: what an unlisted one is still used through, and the
+	// editor names those in none
+	Groups    map[string][]string `json:"groups,omitempty"`
+	Off       bool                `json:"off"`                // switched off: kept, but agents get none of its models
+	Contexts  map[string]int      `json:"contexts,omitempty"` // the windows the user set, "*" for all its models
+	Fetched   *time.Time          `json:"fetched,omitempty"`  // when the list came from the vendor; the page says how long ago in its language
+	Agents    []providerAgent     `json:"agents"`             // detected agents, current ones flagged
+	Sponsored bool                `json:"sponsored"`
+	KeyList   []provider.KeyInfo  `json:"keyList"`           // its keys, in the order requests try them
+	Account   *accountJSON        `json:"account,omitempty"` // a signed-in agent, see provider.Account
+	// Move is where a built-in subscription stands with the community
+	// plugin that can run it (provider.Move): set for those that have one
+	Move *moveJSON `json:"move,omitempty"`
+}
+
+type moveJSON struct {
+	Package string `json:"package"`
+	// State is "" (built-in, never moved), "plugin", "back" or "failed"
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
+	// Why is a failed move's reason, which the page says in its language
+	Why *provider.MoveWhy `json:"why,omitempty"`
 }
 
 // stepPlanJSON: whether a StepFun provider's platform sign-in is kept, and
@@ -113,6 +135,9 @@ type accountJSON struct {
 	Icon  string `json:"agentIcon"`
 	// Logins are the agent's accounts magpie remembers, to switch between
 	Logins []provider.Login `json:"logins,omitempty"`
+	// Builtin is a plugin's provider id, for a plugin beside a built-in
+	// subscription (cursor-plugin's cursor): its plan named as the built-in's
+	Builtin string `json:"builtin,omitempty"`
 }
 
 type providerAgent struct {
@@ -134,12 +159,16 @@ type presetJSON struct {
 
 type gatewayJSON struct {
 	URL     string         `json:"url"`
+	LAN     bool           `json:"lan"`
+	LANURLs []string       `json:"lanURLs,omitempty"`
+	Open    bool           `json:"open,omitempty"` // listens beyond loopback with no key: anyone reaching it is let in
 	Running bool           `json:"running"`
 	Mine    bool           `json:"mine"`   // this process serves it
 	Window  bool           `json:"window"` // the magpie serving it shows its routing
 	Models  int            `json:"models"`
 	Calls   []gateway.Call `json:"calls"`
-	Groups  []gwGroupJSON  `json:"groups"` // the catalog's routing groups, listed before the models
+	Groups  []gwGroupJSON  `json:"groups"`  // the catalog's routing groups, listed before the models
+	Archive archiveJSON    `json:"archive"` // the request archive's switch, and where it goes
 }
 
 // gwGroupJSON is a routing group as the Gateway view lists it.
@@ -165,9 +194,21 @@ type providersJSON struct {
 	// signed in to after Codex was switched to another; "" when none is
 	// left behind (provider.CodexDaemonStale).
 	CodexDaemon string `json:"codexDaemon,omitempty"`
+	// Plugins are the providers the plugins sign in to, for the add sheet
+	Plugins []pluginSubJSON `json:"plugins"`
+	// OnPlugins are the built-in subscriptions moved onto their plugins,
+	// which the add sheet offers as the plugin's alone
+	OnPlugins []string `json:"onPlugins,omitempty"`
+	// Movable are the built-in subscriptions a community plugin can run,
+	// deprecated in magpie itself: the add sheet marks them so
+	Movable []string `json:"movable,omitempty"`
 	// Moved is the agents the change moved off models it stopped serving
 	// (agent.Reseat), for the page to say so.
 	Moved []agent.Move `json:"moved,omitempty"`
+	// FileError is why providers.json can't be read (provider.FileError):
+	// the page says so over what is listed, which is then the signed-in
+	// accounts alone, never "add your first provider".
+	FileError string `json:"fileError,omitempty"`
 }
 
 // agentModel is the model an agent is on, as magpie's catalog names it.
@@ -210,7 +251,7 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Decide: p.Decide,
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		Proxy: p.Proxy, AccountProxies: p.AccountProxies, Headers: p.Headers, BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, ModelsURL: p.ModelsURL,
+		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, Headers: p.Headers, Searches: p.Searches, BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.Models, Models: []modelJSON{}, Agents: []providerAgent{},
 		Fallback: p.Fallback, Routing: p.Routing, Affinity: p.Affinity, Unlisted: p.Unlisted, Off: p.Off, Contexts: p.Contexts,
 	}
@@ -236,12 +277,27 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 	}
 	out.Key.Set = p.Key != ""
 	out.Key.Masked = provider.Mask(p.Key)
+	if provider.Movable(p.ID) {
+		m, _ := provider.MigrationOf(p.ID)
+		out.Move = &moveJSON{Package: provider.MovePackage(p.ID), State: m.State, Error: m.Err, Why: m.Why}
+		if m.State == provider.MoveMoving {
+			out.Move.State = ""
+		}
+	}
 	out.KeyList = p.KeyList()
 	if out.KeyList == nil {
 		out.KeyList = []provider.KeyInfo{}
 	}
 	if !out.Key.Set && p.Ready() {
 		out.Key.Optional = true
+	}
+	for id, gs := range provider.MemberGroups() {
+		if m, ok := strings.CutPrefix(id, p.ID+"/"); ok {
+			if out.Groups == nil {
+				out.Groups = map[string][]string{}
+			}
+			out.Groups[m] = gs
+		}
 	}
 	if a := p.Account; a != nil {
 		out.Account = &accountJSON{Account: *a, Agent: a.Agent, Name: a.Agent, Icon: "generic"}
@@ -269,6 +325,18 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 			out.Account.Name, out.Account.Icon = "Command Code", "commandcode"
 		}
 		out.Account.Logins = provider.Logins(a.Agent)
+		if pp, ok := provider.PluginOf(p.ID); ok && p.IsPlugin() {
+			// a plugin's sign-in: named for the provider it signs in to,
+			// the page following it by the provider's id
+			out.Account.Agent, out.Account.Name, out.Account.Icon, out.Account.Builtin = p.ID, pp.Name, pluginIcon(pp), pp.ID
+			if provider.Moved(pp.ID) {
+				out.Account.Icon = p.Icon // the built-in's, as it was
+			}
+			out.Account.Logins = provider.Logins(p.ID)
+			if out.Icon == "" || out.Icon == "generic" {
+				out.Icon = out.Account.Icon
+			}
+		}
 	}
 	exposed := map[string]bool{}
 	for _, m := range p.Exposed() {
@@ -322,8 +390,8 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 		out.DrawIDs = append(out.DrawIDs, m.ID)
 	}
 	out.Draws = len(out.DrawIDs)
-	if t, ok := p.Fetched(); ok {
-		out.Fetched = ago(t)
+	if t, ok := p.Listed(); ok {
+		out.Fetched = &t
 	}
 	for _, a := range agents {
 		pa := providerAgent{ID: a.ID, Name: a.Name, Icon: a.Icon, Current: a.pid == p.ID, Model: a.model}
@@ -346,6 +414,11 @@ func providersState() providersJSON {
 	provider.FetchNew(8 * time.Second)
 	agents := agent.Detected()
 	s := providersJSON{Providers: []providerJSON{}, Presets: []presetJSON{}, Excluded: []excludedJSON{}}
+	s.OnPlugins = provider.OnPlugins()
+	s.Movable = provider.MovableIDs()
+	if err := provider.FileError(); err != nil {
+		s.FileError = err.Error()
+	}
 	for _, x := range provider.Excluded() {
 		e := excludedJSON{Exclusion: x, Name: x.Agent, Icon: "generic"}
 		if a, err := agent.Find(x.Agent); err == nil {
@@ -366,7 +439,11 @@ func providersState() providersJSON {
 		s.Presets = append(s.Presets, presetJSON{PresetDef: pr, Added: have[pr.ID], ZhipuTeam: team})
 	}
 	cat := provider.Catalog()
-	s.Gateway = gatewayJSON{URL: gateway.URL(), Models: len(cat), Calls: []gateway.Call{}, Groups: []gwGroupJSON{}}
+	s.Gateway = gatewayJSON{URL: gateway.URL(), Open: gateway.OpenToAnyone(), Models: len(cat), Calls: []gateway.Call{}, Groups: []gwGroupJSON{}}
+	s.Gateway.LAN = settings.Load().LAN
+	if s.Gateway.LAN {
+		s.Gateway.LANURLs = gateway.LANURLs()
+	}
 	for _, e := range cat {
 		if e.Group == "" {
 			continue
@@ -387,29 +464,54 @@ func providersState() providersJSON {
 	} else {
 		s.Gateway.Running, s.Gateway.Window = gateway.Serving()
 	}
+	s.Gateway.Archive = archiveState()
 	s.CodexDaemon = provider.CodexDaemonStale()
+	s.Plugins = pluginSubs()
 	return s
 }
 
-func ago(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Round(time.Minute).Minutes()))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Round(time.Hour).Hours()))
-	default:
-		return t.Format("Jan 2")
-	}
+// failMove is fail with why the move failed, for the page to say it in
+// its reader's language.
+func failMove(rw http.ResponseWriter, err error) {
+	rw.Header().Set("Content-Type", "application/json")
+	rw.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(rw).Encode(map[string]any{"error": err.Error(), "why": provider.WhyOf(err)})
+}
+
+// moveProvider and moveBackProvider are provider.Move and MoveBack, for
+// tests to stand in for.
+var (
+	moveProvider     = provider.Move
+	moveBackProvider = provider.MoveBack
+)
+
+// moveContext keeps a move going though the page that asked for it goes
+// (closed, reloaded): stopped halfway, a move leaves accounts in neither
+// place until it is run again.
+func moveContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 }
 
 func providerRoutes(mux *http.ServeMux, w Windows) {
 	importAppsRoutes(mux)
+	pluginRoutes(mux, w)
 	traceRoutes(mux)
 	groupRoutes(mux)
 	mux.HandleFunc("GET /api/providers", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, providersState())
+	})
+	// the order the Providers tab lists them in, which is the order they
+	// are tried in too (#499)
+	mux.HandleFunc("POST /api/providers/arrange", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Order []string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetOrder(in.Order); err != nil {
+			fail(rw, err)
+			return
+		}
 		writeJSON(rw, providersState())
 	})
 	// a picture for a provider, picked in the editor: kept by content before
@@ -471,7 +573,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			provider.Provider
 			// Proxy is the proxy its requests go through (#237), "" to
 			// follow the global one; a save that leaves it out keeps it
-			Proxy *string `json:"proxy"`
+			Proxy        *string  `json:"proxy"`
+			AccountOrder []string `json:"accountOrder"`
 			// New is set by the editor's Add: the provider is one more, never
 			// one replacing the provider that has its id or name
 			New bool `json:"new"`
@@ -480,6 +583,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			ClearBalanceToken bool `json:"clearBalanceToken"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
+			// CopyOf, with New, is the provider the new one is a copy of
+			// (#268): its key and what else the form doesn't carry are
+			// taken from it when left out
+			CopyOf string `json:"copyOf"`
 			// Model and ModelName, for name: the name the user gives one
 			// of its models, "" for its own again
 			Model     string `json:"model"`
@@ -493,6 +600,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Test, for test: models to send a request each, in place of
 			// one per endpoint
 			Test []string `json:"test"`
+			// Account and Allow, for accountmodels: the account (its name)
+			// or key (its id) and the models it alone serves, none for all
+			// the provider's (#474)
+			Account string   `json:"account"`
+			Allow   []string `json:"allow"`
+			// Typed, for test and models: the request carries the editor's
+			// form, which is tried as it stands before a Save (see typed)
+			Typed bool `json:"typed"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			fail(rw, err)
@@ -504,6 +619,21 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		case "show":
 			// a signed-in account the user removed, back with its picks
 			if err := provider.ShowAccount(in.ID); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "move":
+			// a built-in subscription's accounts onto its community plugin
+			ctx, cancel := moveContext(r)
+			defer cancel()
+			if err := moveProvider(ctx, in.ID); err != nil {
+				failMove(rw, err)
+				return
+			}
+		case "moveback":
+			ctx, cancel := moveContext(r)
+			defer cancel()
+			if err := moveBackProvider(ctx, in.ID); err != nil {
 				fail(rw, err)
 				return
 			}
@@ -519,6 +649,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if pr, err := provider.FromPreset(in.Preset); err == nil && in.Chat == "" && in.Responses == "" && in.Anthropic == "" {
 				pr.Key, pr.Models, pr.Fallback, pr.Headers, pr.BalanceToken, pr.Contexts = in.Key, in.Models, in.Fallback, in.Headers, in.BalanceToken, in.Contexts
 				pr.ZhipuTeam = in.ZhipuTeam
+				pr.Searches = in.Searches
 				if in.Name != "" {
 					pr.Name = in.Name
 				}
@@ -539,7 +670,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.Proxy != nil {
 					in.Proxy = *req.Proxy
 				}
-				id, err := provider.Add(in)
+				add := provider.Add
+				if req.CopyOf != "" {
+					add = func(p provider.Provider) (string, error) { return provider.AddCopy(p, req.CopyOf) }
+				}
+				id, err := add(in)
 				if err != nil {
 					fail(rw, err)
 					return
@@ -565,6 +700,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// each account's own proxy likewise: {} clears them
 				if in.AccountProxies == nil && old != nil {
 					in.AccountProxies = old.AccountProxies
+				}
+				// each account's own models are set on their own, with
+				// accountmodels
+				if old != nil {
+					in.AccountModels = old.AccountModels
 				}
 				// a Zhipu key's team likewise: {} clears it
 				if in.ZhipuTeam == nil && old != nil {
@@ -636,6 +776,21 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+		case "arrange":
+			// Promoting the first row is the same account switch as Make first:
+			// keep the agents' catalogs in sync with the new primary sign-in.
+			var err error
+			moved, err = agent.Reseat(func() error { return provider.SetAccountOrder(in.ID, req.AccountOrder) })
+			if err != nil {
+				fail(rw, err)
+				return
+			}
+			agent.SyncCatalog()
+		case "accountmodels":
+			if err := provider.SetAccountModels(in.ID, req.Account, req.Allow); err != nil {
+				fail(rw, err)
+				return
+			}
 		case "route":
 			if err := provider.SetRouting(in.ID, in.Routing); err != nil {
 				fail(rw, err)
@@ -671,6 +826,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+			saved := *p
+			if req.Typed {
+				q := typed(*p, in, req.Proxy)
+				p = &q
+			}
 			if len(req.Test) > 0 {
 				// an image model's test draws a picture, which takes longer
 				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
@@ -683,7 +843,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			writeJSON(rw, struct {
 				Results  []provider.Result `json:"results"`
 				Provider providerJSON      `json:"provider"`
-			}{p.Test(ctx), providerInfo(*p, agentUses(agent.Detected(), provider.GroupFinder()))})
+			}{p.Test(ctx), providerInfo(saved, agentUses(agent.Detected(), provider.GroupFinder()))})
 			return
 		case "balance":
 			// the editor's check of a balance as it stands in the form,
@@ -727,8 +887,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 			defer cancel()
+			ask := *p
+			if req.Typed {
+				ask = typed(*p, in, req.Proxy)
+			}
 			var ms []catalog.Model
-			if ms, err = p.Fetch(ctx); err != nil {
+			if ms, err = ask.Fetch(ctx); err != nil {
 				fail(rw, err)
 				return
 			}
@@ -976,4 +1140,30 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// typed is the saved provider p as the editor's form has it (in), for
+// Refresh and Test models before a Save: a key pasted to replace the saved
+// one is the one asked with, and the URLs, headers and proxy typed are
+// where and how. Nothing is saved. What the form left blank (the key above
+// all) is the saved one's; the provider's other keys are kept.
+func typed(p, in provider.Provider, proxy *string) provider.Provider {
+	if k := strings.TrimSpace(in.Key); k != "" && k != p.Key {
+		p.Key, p.KeyName, p.KeyProtocol = k, "", ""
+	}
+	for _, f := range []struct {
+		to *string
+		v  string
+	}{{&p.Chat, in.Chat}, {&p.Responses, in.Responses}, {&p.Anthropic, in.Anthropic}, {&p.ModelsURL, in.ModelsURL}} {
+		if v := strings.TrimSpace(f.v); v != "" {
+			*f.to = v
+		}
+	}
+	if in.Headers != nil {
+		p.Headers = in.Headers
+	}
+	if proxy != nil {
+		p.Proxy = *proxy
+	}
+	return p
 }

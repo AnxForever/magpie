@@ -26,6 +26,16 @@ const RoutingGroups = "Routing groups"
 func viaMagpie(agent, prefix string) []Option {
 	var out, groups []Option
 	shown, _ := provider.CatalogFor(agent)
+	// own: whether a provider is the account the agent is signed in to,
+	// asked once a provider (OwnPaused reads the saved logins)
+	own := map[string]bool{}
+	for _, e := range shown {
+		if a := e.Provider.Account; a != nil && a.Agent == agent && !a.StandIn() {
+			if _, ok := own[e.Provider.ID]; !ok {
+				own[e.Provider.ID] = !e.Provider.OwnPaused()
+			}
+		}
+	}
 	for _, e := range shown {
 		if e.Group != "" {
 			groups = append(groups, Option{Value: prefix + e.ID, Label: e.Name, Note: "routing group · via magpie",
@@ -37,7 +47,7 @@ func viaMagpie(agent, prefix string) []Option {
 			note = a.User + " · via magpie"
 		}
 		out = append(out, Option{Value: prefix + e.ID, Label: e.Name, Note: note,
-			Icon: e.Provider.Icon, Group: e.Provider.Name, Ref: e.ID, Free: e.Free, Context: e.Context})
+			Icon: e.Provider.Icon, Group: e.Provider.Name, Ref: e.ID, Free: e.Free, Context: e.Context, own: own[e.Provider.ID]})
 	}
 	return append(groups, out...)
 }
@@ -72,8 +82,9 @@ func firstOf(xs []string) string {
 func magpieModels(agent string) []catalog.Model {
 	var out []catalog.Model
 	shown, _ := provider.CatalogFor(agent)
-	for _, e := range shown {
-		m := catalog.Model{ID: e.ID, Name: e.Label(), Provider: firstOf(e.Provider.Catalogs()), Efforts: e.Efforts, Images: e.Images, Context: e.Context, Output: e.Output}
+	labels := provider.Labels(shown)
+	for i, e := range shown {
+		m := catalog.Model{ID: e.ID, Name: labels[i], Provider: firstOf(e.Provider.Catalogs()), Efforts: e.Efforts, Images: e.Images, ImageInput: e.ImageInput, Context: e.Context, Output: e.Output}
 		// APIs is the one to ask it on for the gateway to relay the request
 		// as it is; none for a group, whose members may each want another
 		if e.Group == "" {
@@ -84,6 +95,17 @@ func magpieModels(agent string) []catalog.Model {
 		out = append(out, m)
 	}
 	return out
+}
+
+// maxTokens is the output limit an agent is handed for m, kept within the
+// context window it is handed with it: models.dev lists some models' output
+// above their window (deepseek-chat's 384000 against 128000). An unknown
+// window leaves the output as it is.
+func maxTokens(m catalog.Model) int {
+	if m.Context > 0 && m.Output > m.Context {
+		return m.Context
+	}
+	return m.Output
 }
 
 // group tags every option with a group name.

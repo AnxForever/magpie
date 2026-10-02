@@ -262,7 +262,7 @@ var openCodeVersion = func() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := proc.CommandContext(ctx, bin, "--version")
+	cmd := proc.ProbeContext(ctx, bin, "--version")
 	cmd.Stdin = nil
 	out, err := cmd.Output()
 	if err != nil {
@@ -412,7 +412,7 @@ func dropBlock(path, open, close string) error {
 
 func writeOrRemove(path, s string) error {
 	if strings.TrimSpace(s) == "" {
-		return os.Remove(path)
+		return edit.Remove(path)
 	}
 	return edit.WriteAtomic(path, []byte(s))
 }

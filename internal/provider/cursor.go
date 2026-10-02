@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,7 +72,7 @@ func askCursorStatus() (user, plan string, ok bool, err error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := agentCommand(ctx, path, "about", "--format", "json").Output()
+	out, err := agentProbe(ctx, path, "about", "--format", "json").Output()
 	user, plan, said := parseCursorAbout(out)
 	switch {
 	case user != "":
@@ -137,7 +138,7 @@ func cursorModels(ctx context.Context) ([]catalog.Model, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	out, err := agentCommand(ctx, path, "models").Output()
+	out, err := agentProbe(ctx, path, "models").Output()
 	if err != nil {
 		return nil, errorf("cursor-agent models: %v", err)
 	}
@@ -223,7 +224,20 @@ func startCursorSignIn(s *signInFlow) error {
 	return runCLISignIn(s, "cursor-agent login", append(os.Environ(), "NO_OPEN_BROWSER=1"), true, nil, func() (string, string, bool) {
 		forgetCursorStatus()
 		return askCursorIdentity()
-	}, path, "login")
+	}, cursorLinkWhole, path, "login")
+}
+
+// cursorLinkWhole says a link from `cursor-agent login` carries what
+// cursor.com/loginDeepControl signs in with: a link cut short where the
+// CLI broke its line (#261: "https://cursor.com/loginDeepControl?") gets
+// "This sign-in link is incomplete or has expired" from the page.
+func cursorLinkWhole(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
+	}
+	q := u.Query()
+	return q.Get("challenge") != "" && q.Get("uuid") != ""
 }
 
 // cursorVersionFallback is the CLI version said when no install names one.
@@ -337,7 +351,7 @@ func CursorToken() (string, error) {
 			tok = t // renewed while this waited
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			_ = agentCommand(ctx, path, "status").Run()
+			_ = agentProbe(ctx, path, "status").Run()
 			cancel()
 			tok = readCursorToken()
 		}

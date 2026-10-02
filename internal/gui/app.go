@@ -3,6 +3,7 @@
 package gui
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -19,8 +20,10 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	"github.com/yetone/magpie/internal/autostart"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/omarchy"
+	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/shortcut"
 	"github.com/yetone/magpie/internal/stats"
@@ -78,6 +81,10 @@ type host struct {
 	glides      atomic.Int64 // the newest panel glide; older ones stop
 	query       string       // what the windows' URLs carry (a forced theme)
 
+	// closing is set while a full-screen main window, closed, leaves full
+	// screen; it is hidden once it has
+	closing atomic.Bool
+
 	ready     chan struct{} // closed once the main window can be shown
 	readyOnce sync.Once
 }
@@ -92,14 +99,18 @@ func (h *host) whenReady(fn func()) {
 
 func (h *host) HidePanel() { h.panel.Hide() }
 func (h *host) ShowMain(view string) {
+	h.closing.Store(false) // opened again while leaving full screen: it stays
 	h.panel.Hide()
 	if view != "" {
-		h.main.SetURL("/?view=" + view + h.query)
+		h.main.SetURL(mainURL(view, h.query))
 	}
 	h.dock(settings.Load(), true)
 	h.main.Show()
 	h.main.Focus()
 }
+
+// MainShown says whether the window is up.
+func (h *host) MainShown() bool { return h.main != nil && h.main.IsVisible() }
 
 // Import opens the window on an import link, for the user to confirm.
 func (h *host) Import(link string) {
@@ -107,6 +118,7 @@ func (h *host) Import(link string) {
 	h.whenReady(func() {
 		h.panel.Hide()
 		h.main.SetURL("/?view=providers&import=" + id + h.query)
+		h.closing.Store(false)
 		h.dock(settings.Load(), true)
 		h.main.Show()
 		h.main.Focus()
@@ -234,6 +246,11 @@ func Run(version string, showMain bool, link string) error {
 		}
 		// Windows has no installer to put magpie in the Start menu
 		shortcut.Ensure()
+		// Open at login as this version writes it (the Mac's, so a restart
+		// to update from a magpie opened at login comes back)
+		if err := autostart.Refresh(); err != nil {
+			log.Println("open at login:", err)
+		}
 	}()
 	// MAGPIE_THEME=light|dark forces the palette; handy for screenshots.
 	theme := ""
@@ -264,10 +281,18 @@ func Run(version string, showMain bool, link string) error {
 		Windows:        application.WindowsOptions{DisableQuitOnLastWindowClosed: true},
 		// A version downloaded but not restarted into is installed on the
 		// way out, so the next launch is the new one.
-		OnShutdown: func() { updates.install(false) },
+		// Quitting doesn't come back to main on a Mac (NSApp terminate:
+		// exits), so the CLIs still being asked something end here.
+		OnShutdown: func() {
+			proc.EndProbes()
+			updates.install(false)
+		},
 		// Wails exits on some webview errors; say why before it does.
 		ErrorHandler: func(err error) { log.Println("magpie:", err) },
 	})
+	if Started != nil {
+		h.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) { Started() })
+	}
 
 	onDock = func(s settings.Settings) { h.dock(s, h.main.IsVisible()) }
 	// The Dock icon opens the window. Wails would show every hidden window
@@ -288,21 +313,22 @@ func Run(version string, showMain bool, link string) error {
 	}
 	// and no smaller than its page's least at the text size
 	minW, minH := windowMin(zoom, 0, 0)
+	// Windows' title bar in the page's colour from the first frame; the
+	// page keeps it so as its theme changes (TintTitleBar)
+	winOpts, winBg := windowChrome(cmp.Or(os.Getenv("MAGPIE_THEME"), settings.Load().Theme))
 	h.main = h.app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:      "main",
-		Title:     "magpie",
-		URL:       "/?" + theme,
-		Width:     max(width, minW),
-		Height:    max(height, minH),
-		MinWidth:  minW,
-		MinHeight: minH,
-		Zoom:      zoom,
-		Hidden:    true,
-		Mac: application.MacWindow{
-			// no InvisibleTitleBarHeight: that strip drags from anywhere in
-			// it, tabs included; the header marks what drags instead
-			TitleBar: application.MacTitleBarHiddenInset,
-		},
+		Name:             "main",
+		Title:            "magpie",
+		URL:              "/?" + theme,
+		Width:            max(width, minW),
+		Height:           max(height, minH),
+		MinWidth:         minW,
+		MinHeight:        minH,
+		Zoom:             zoom,
+		Hidden:           true,
+		Mac:              mainMacWindow(),
+		Windows:          winOpts,
+		BackgroundColour: winBg,
 	})
 	// A resize is kept once it settles; a maximised or full-screen window
 	// is the screen's size, not one the user gave it.
@@ -332,29 +358,52 @@ func Run(version string, showMain bool, link string) error {
 	})
 	// Closing the window keeps the tray alive; quitting is a menu action.
 	h.main.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		h.main.Hide()
-		h.dock(settings.Load(), false)
 		e.Cancel()
+		if closeStep(runtime.GOOS, h.main.IsFullscreen()) == closeLeaveFullscreen {
+			h.leaveFullscreenThenHide()
+			return
+		}
+		h.hideMain()
+	})
+	h.main.OnWindowEvent(events.Mac.WindowDidExitFullScreen, func(*application.WindowEvent) {
+		if h.closing.Swap(false) {
+			h.hideMain()
+		}
 	})
 
+	// the menu in the page's language, relabelled when that changes (#301)
+	labels := trayMenuLabels(trayLang(settings.Load().Lang, systemLang), version, "")
 	menu := h.app.NewMenu()
-	menu.Add("Open magpie").OnClick(func(*application.Context) { h.ShowMain("") })
+	open := menu.Add(labels.open).OnClick(func(*application.Context) { h.ShowMain("") })
 	menu.AddSeparator()
-	menu.Add("Version " + version).SetEnabled(false)
-	restart := menu.Add("Restart to Update").SetHidden(true)
+	ver := menu.Add(labels.version).SetEnabled(false)
+	restart := menu.Add(labels.restart).SetHidden(true)
 	restart.OnClick(func(*application.Context) {
-		if restartToUpdate(false) {
+		// the window comes back if it was open; the tray alone if not
+		if restartToUpdate(false, h.MainShown(), "") {
 			h.app.Quit()
 		}
 	})
-	menu.Add("Quit magpie").OnClick(func(*application.Context) { h.app.Quit() })
+	quit := menu.Add(labels.quit).OnClick(func(*application.Context) { h.app.Quit() })
+	var ready string // the version waiting for a restart; on the main thread
+	relabel := func() {
+		l := trayMenuLabels(trayLang(settings.Load().Lang, systemLang), version, ready)
+		open.SetLabel(l.open)
+		ver.SetLabel(l.version)
+		restart.SetLabel(l.restart)
+		quit.SetLabel(l.quit)
+		menu.Update()
+	}
+	onLang = func() { application.InvokeSync(relabel) }
 	updates.onReady = func(v string) {
 		application.InvokeSync(func() {
-			restart.SetLabel("Restart to Update to " + v).SetHidden(false)
-			menu.Update()
+			ready = v
+			restart.SetHidden(false)
+			relabel()
 		})
 	}
 	updates.start()
+	news.start()
 	// the library written into the agents again, once: one installed or
 	// updated since (or an edit by hand) gets it without a visit to the page
 	go func() {
@@ -372,6 +421,7 @@ func Run(version string, showMain bool, link string) error {
 		// set before the tray starts, it is the item's id too, which
 		// Omarchy's bar pins it by (Wails calls it "Wails" otherwise)
 		h.tray.SetLabel("magpie")
+		go dropTrayName()
 	}
 	h.tray.SetTooltip("magpie")
 	if runtime.GOOS == "darwin" {
@@ -382,6 +432,7 @@ func Run(version string, showMain bool, link string) error {
 	h.tray.SetMenu(menu)
 	h.tray.AttachWindow(h.panel).WindowOffset(6)
 	h.watchTrayUsage()
+	h.watchAlerts()
 	// the quick panel by the icon, or the main window if the user would
 	// rather (Settings → Tray icon)
 	h.tray.OnClick(func() {
@@ -415,7 +466,7 @@ func Run(version string, showMain bool, link string) error {
 		h.whenReady(h.applyZoom)
 	}
 	if showMain {
-		h.whenReady(func() { h.ShowMain("") })
+		h.whenReady(func() { h.ShowMain(argView(OpenView)) })
 	}
 	if OpenPanel {
 		h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
@@ -439,14 +490,15 @@ func Run(version string, showMain bool, link string) error {
 }
 
 // singleInstance makes a second launch hand over to this one, off the Mac.
-// The id covers the executable and the config dir, so a build elsewhere or
-// a sandboxed HOME runs on its own.
+// The id covers the config dir, so a sandboxed HOME runs on its own, but
+// not the executable: two copies of magpie on one config (one autostarted
+// from where it was first run, another from where it was put later) would
+// share the gateway's port and put two icons in the tray.
 func singleInstance(h *host) *application.SingleInstanceOptions {
 	if runtime.GOOS == "darwin" || !sessionBus() {
 		return nil
 	}
-	exe, _ := os.Executable()
-	sum := sha256.Sum256([]byte(exe + "\x00" + settings.Dir()))
+	sum := sha256.Sum256([]byte(settings.Dir()))
 	return &application.SingleInstanceOptions{
 		UniqueID: "ai.usemagpie.app.i" + hex.EncodeToString(sum[:6]),
 		OnSecondInstanceLaunch: func(d application.SecondInstanceData) {
@@ -460,6 +512,8 @@ func singleInstance(h *host) *application.SingleInstanceOptions {
 			case len(args) == 1 && args[0] == "tray":
 			case len(args) == 1 && args[0] == "panel":
 				h.whenReady(func() { application.InvokeAsync(h.togglePanel) })
+			case len(args) == 2 && (args[0] == "gui" || args[0] == "app"):
+				h.whenReady(func() { h.ShowMain(argView(args[1])) })
 			default:
 				h.whenReady(func() { h.ShowMain("") })
 			}
@@ -487,10 +541,18 @@ func (h *host) flap() {
 		if err != nil {
 			break
 		}
-		h.tray.SetTemplateIcon(b)
+		h.setBird(b)
 		time.Sleep(30 * time.Millisecond)
 	}
-	h.tray.SetTemplateIcon(trayIcon)
+	h.setBird(trayIcon)
+}
+
+// setBird sets a frame of the bird: in the menu bar's image while it shows
+// the usage cards (trayImageFrame), else as the tray's icon.
+func (h *host) setBird(b []byte) {
+	if !trayImageFrame(b) {
+		h.tray.SetTemplateIcon(b)
+	}
 }
 
 // panelOptions: the tray panel's window, frameless and see-through. On
@@ -534,6 +596,15 @@ func panelOptions(goos, theme string) application.WebviewWindowOptions {
 // does; a second `magpie panel` toggles it in the running one. Omarchy's bar
 // icon runs it (see omarchy.AddWidget).
 var OpenPanel bool
+
+// OpenView is the tab the window opens on, as `magpie gui settings` asks:
+// a restart to update comes back where it was asked for.
+var OpenView string
+
+// Started is called once the app has started, by when Wails handles SIGINT
+// and SIGTERM itself (it starts listening as it runs, before the app is
+// said to have started); until then a signal is magpie's to handle.
+var Started func()
 
 // togglePanel opens the quick panel by the tray icon, or closes it.
 func (h *host) togglePanel() {

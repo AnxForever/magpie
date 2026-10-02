@@ -847,6 +847,7 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 func TestCodexAccountUpstream(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	claims := func(m map[string]any) string {
@@ -1058,10 +1059,12 @@ func TestOpenCodeGetsConversationSession(t *testing.T) {
 		}
 		return f.head.Get("x-opencode-session")
 	}
-	if got := send(http.Header{"Session_id": {"codex-ses"}}); got != "codex-ses" {
-		t.Errorf("agent's session: %q", got)
+	// in OpenCode's form (ses_…), one for each of the agent's sessions
+	codex := send(http.Header{"Session_id": {"codex-ses"}})
+	if !strings.HasPrefix(codex, "ses_") || send(http.Header{"Session_id": {"codex-ses"}}) != codex {
+		t.Errorf("agent's session: %q", codex)
 	}
-	if a, b := send(nil), send(nil); a == "" || a != b {
+	if a, b := send(nil), send(nil); !strings.HasPrefix(a, "ses_") || a != b || a == codex {
 		t.Errorf("derived session: %q %q", a, b)
 	}
 }
@@ -1260,7 +1263,7 @@ func TestRequestValidationBeforeRouting(t *testing.T) {
 }
 
 func TestGeminiRequestValidation(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	f := &fake{t: t, reply: sse(
 		`data: {"id":"c1","choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}`,
 		`data: [DONE]`)}
@@ -1286,7 +1289,7 @@ func TestGeminiRequestValidation(t *testing.T) {
 }
 
 func TestRequestValidationPreservesPayload(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	f := &fake{t: t, ctype: "application/json", reply: `{"id":"r1","output":[]}`}
 	setup(t, provider.Responses, f)
 	code, body := post(t, "/v1/responses", `{"model":"  fake/vendor/new-model  ","input":"hi","extension":{"number":9007199254740993}}`)

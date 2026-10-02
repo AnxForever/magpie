@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // ---- OpenAI Chat Completions --------------------------------------------------
@@ -36,6 +38,7 @@ type cRequest struct {
 			Name        string          `json:"name"`
 			Description string          `json:"description,omitempty"`
 			Parameters  json.RawMessage `json:"parameters,omitempty"`
+			Strict      *bool           `json:"strict,omitempty"`
 		} `json:"function"`
 	} `json:"tools,omitempty"`
 	ToolChoice          json.RawMessage `json:"tool_choice,omitempty"`
@@ -104,7 +107,7 @@ func parseChat(body []byte) (*Request, error) {
 		if t.Type != "" && t.Type != "function" {
 			continue
 		}
-		r.Tools = append(r.Tools, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters})
+		r.Tools = append(r.Tools, Tool{Name: t.Function.Name, Description: t.Function.Description, Schema: t.Function.Parameters, Strict: t.Function.Strict != nil && *t.Function.Strict})
 	}
 	var tc string
 	if json.Unmarshal(c.ToolChoice, &tc) == nil {
@@ -176,7 +179,10 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})
 	}
-	deepseek := strings.Contains(host, "deepseek")
+	// DeepSeek takes a turn's reasoning back, wherever its models are
+	// served (#388), as Command Code's plugin does for a Go key, as the
+	// built-in replayed it to /alpha/generate
+	replay := strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID
 	// A tool message holds text only, so the images tools returned go to
 	// the model in a user message after the tool messages, as the start of
 	// the user's own message when one comes next: some models' chat
@@ -231,7 +237,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 			if len(calls) > 0 {
 				am["tool_calls"] = calls
 			}
-			if deepseek && think != "" {
+			if replay && think != "" {
 				am["reasoning_content"] = think
 			}
 			msgs = append(msgs, am)
@@ -293,6 +299,11 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	}
 	if r.Stream {
 		out["stream_options"] = map[string]any{"include_usage": true}
+	}
+	// Cursor's plugin reads fast mode here, as the built-in told Cursor;
+	// another's chat upstream may not know the tier
+	if r.Fast && host == "cursor" {
+		out["service_tier"] = "priority"
 	}
 	if r.MaxTokens > 0 {
 		if strings.HasSuffix(host, "openai.com") {
@@ -380,6 +391,30 @@ func geminiCompat(host, model string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+}
+
+// thinkingEffort moves the level the new Kimi Code (2.x) asks a Chat
+// request for, inside its thinking switch ({"type":"enabled","effort":
+// "high"}, #333), to reasoning_effort: where kimi-cli put it, beside
+// thinking's type, and where the gateway and every other Chat API read it.
+// A request that says reasoning_effort itself is left as it is.
+func thinkingEffort(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"effort"`)) {
+		return body
+	}
+	var v struct {
+		ReasoningEffort *string        `json:"reasoning_effort"`
+		Thinking        map[string]any `json:"thinking"`
+	}
+	if json.Unmarshal(body, &v) != nil || v.ReasoningEffort != nil {
+		return body
+	}
+	effort, _ := v.Thinking["effort"].(string)
+	if effort == "" {
+		return body
+	}
+	delete(v.Thinking, "effort")
+	return withFields(body, map[string]any{"reasoning_effort": effort, "thinking": v.Thinking})
 }
 
 // thinkingConfigField is Gemini's thinking_config as unfit remembers a
@@ -471,7 +506,7 @@ func (u cUsage) usage() Usage {
 func (u Usage) chat() map[string]any {
 	in := u.prompt()
 	return map[string]any{"prompt_tokens": in, "completion_tokens": u.Output, "total_tokens": in + u.Output,
-		"prompt_tokens_details":     map[string]any{"cached_tokens": u.CacheRead},
+		"prompt_tokens_details":     map[string]any{"cached_tokens": u.CacheRead, "cache_write_tokens": u.CacheWrite},
 		"completion_tokens_details": map[string]any{"reasoning_tokens": u.Reasoning}}
 }
 
@@ -480,6 +515,7 @@ func (u Usage) chat() map[string]any {
 type chatDecoder struct {
 	started bool
 	tool    int    // index of the open tool call, -1 for none
+	toolID  string // id of the open tool call, as some relays repeat it on every fragment
 	choice  string // index of the first choice seen; an empty string means none yet
 	// Gemini's OpenAI-compatible API, asked for thoughts, may give them
 	// in the text as a leading <thought>…</thought>: lead holds the text
@@ -561,10 +597,10 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		Choices []struct {
 			Index json.RawMessage `json:"index"`
 			Delta struct {
-				Content          *string     `json:"content"`
-				ReasoningContent string      `json:"reasoning_content"`
-				Reasoning        string      `json:"reasoning"`
-				ToolCalls        []cToolCall `json:"tool_calls"`
+				Content          json.RawMessage `json:"content"`
+				ReasoningContent string          `json:"reasoning_content"`
+				Reasoning        string          `json:"reasoning"`
+				ToolCalls        []cToolCall     `json:"tool_calls"`
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
@@ -577,7 +613,7 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		return nil
 	}
 	if ch.Error != nil {
-		emit(Event{Kind: KError, Text: ch.Error.Message})
+		emit(Event{Kind: KError, Text: ch.Error.Message, Code: refusedCode(data)})
 		return nil
 	}
 	if !d.started {
@@ -601,11 +637,20 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		if t == "" {
 			t = c.Delta.Reasoning
 		}
+		// Mistral's content may be typed parts, its thinking among them
+		// (#483): a chunk that couldn't be read as a string lost both
+		var content string
+		if text, think, ok := partsText(c.Delta.Content); ok {
+			t += think
+			content = text
+		} else {
+			json.Unmarshal(c.Delta.Content, &content)
+		}
 		if t != "" {
 			emit(Event{Kind: KThink, Text: t})
 		}
-		if c.Delta.Content != nil && *c.Delta.Content != "" {
-			d.text(*c.Delta.Content, emit)
+		if content != "" {
+			d.text(content, emit)
 		}
 		if len(c.Delta.ToolCalls) > 0 {
 			d.end(emit)
@@ -615,11 +660,14 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 			if tc.Index != nil {
 				idx = *tc.Index
 			}
-			if tc.ID != "" || tc.Function.Name != "" || idx != d.tool {
-				if idx != d.tool || tc.ID != "" {
-					d.tool = idx
-					emit(Event{Kind: KToolStart, ID: tc.ID, Name: tc.Function.Name})
-				}
+			// A delta carrying the id the open call already goes by — some
+			// relays repeat it on every fragment, where the spec sends it
+			// only on the first — or one more fragment of the open index,
+			// continues that call; only a new id or a new index starts the
+			// next one.
+			if idx != d.tool || (tc.ID != "" && tc.ID != d.toolID) {
+				d.tool, d.toolID = idx, tc.ID
+				emit(Event{Kind: KToolStart, ID: tc.ID, Name: tc.Function.Name})
 			}
 			if tc.Function.Arguments != "" {
 				emit(Event{Kind: KToolArgs, Text: tc.Function.Arguments})
@@ -759,10 +807,18 @@ func (e *chatEncoder) event(ev Event) {
 				"function": map[string]any{"arguments": ev.Text}}}}, nil, nil)
 		}
 	case KError:
-		e.w.event("", map[string]any{"error": map[string]any{"message": ev.Text, "type": "api_error"}})
+		failed := map[string]any{"message": ev.Text, "type": "api_error"}
+		if ev.Code != "" {
+			failed["code"] = ev.Code // preserve the upstream error type, including refusals
+		}
+		e.w.event("", map[string]any{"error": failed})
 	}
 	e.col.add(ev)
 }
+
+// keepalive is an SSE comment, as OpenAI-compatible servers keep a Chat
+// Completions stream alive; its readers skip one.
+func (e *chatEncoder) keepalive() { e.w.comment("keepalive") }
 
 func (e *chatEncoder) finish() {
 	if !e.started {

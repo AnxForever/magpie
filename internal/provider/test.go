@@ -37,6 +37,9 @@ func (p Provider) Test(ctx context.Context) []Result {
 		return p.testDecide(ctx)
 	}
 	p.Fetch(ctx)
+	if p.isClaudeAccount() {
+		return []Result{p.testClaude(ctx, p.testModel(p, Anthropic))}
+	}
 	var out []Result
 	for _, proto := range p.Speaks() {
 		q, ok := p.keyFor(proto)
@@ -45,7 +48,7 @@ func (p Provider) Test(ctx context.Context) []Result {
 			out = append(out, Result{Protocol: proto, Model: model, Error: "no key is on for this endpoint"})
 			continue
 		}
-		url, body := tiny(q, proto, model)
+		url, body := tiny(q, proto, UpstreamName(p, model))
 		out = append(out, probe(ctx, q, proto, url, q.Prepare([]byte(body)), model, testWait))
 	}
 	return out
@@ -57,6 +60,9 @@ func tiny(q Provider, proto Protocol, model string) (url, body string) {
 	url, body = tinyBody(q, proto, model)
 	if q.Account != nil && q.Account.Stream && body != "" {
 		body = strings.TrimSuffix(body, "}") + `,"stream":true}`
+	}
+	if q.OpenCodeFree(model) && body != "" {
+		body = zenFreeProbe(proto, body)
 	}
 	return url, body
 }
@@ -124,6 +130,9 @@ func (p Provider) TestModels(ctx context.Context, models []string) []Result {
 }
 
 func (p Provider) testOne(ctx context.Context, model string) Result {
+	if p.isClaudeAccount() {
+		return p.testClaude(ctx, model)
+	}
 	var protos []Protocol
 	for _, pr := range p.Speaks() {
 		if pr == Chat || pr == Responses || pr == Anthropic {
@@ -166,7 +175,12 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 	}
 	if draws {
 		// as the gateway does, one the images API doesn't serve is tried
-		// in chat, and only its answer said when that fails too
+		// in chat, and only its answer said when that fails too. Both go
+		// out under the name magpie knows the model by: the gateway builds
+		// those bodies itself and an upstream name is never written into
+		// one, so asking for the model's own here is what tests a drawing
+		// the way a real one is made — a name the vendor serves drawings
+		// by is not one magpie sends them as
 		url, body := tinyDrawing(q, model)
 		r := probe(ctx, q, proto, url, []byte(body), model, drawWait)
 		if !r.OK && (r.Status == 404 || r.Status == 405) {
@@ -177,7 +191,7 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 		}
 		return r
 	}
-	url, body := tiny(q, proto, model)
+	url, body := tiny(q, proto, UpstreamName(p, model))
 	return probe(ctx, q, proto, url, q.Prepare([]byte(body)), model, testWait)
 }
 
@@ -280,14 +294,14 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if p.IsOpenCode() {
-		req.Header.Set("x-opencode-session", "magpie-test-"+randomUUID())
+		OpenCodeClient(req.Header, "")
 	}
 	if err := p.Sign(ctx, req, proto, body); err != nil {
 		r.Error = err.Error()
 		return r
 	}
 	start := time.Now()
-	res, err := http.DefaultClient.Do(req)
+	res, err := p.Do(http.DefaultClient, req)
 	r.Millis = time.Since(start).Milliseconds()
 	if err != nil {
 		r.Error = strings.TrimPrefix(err.Error(), "Post \""+url+"\": ")
@@ -304,10 +318,33 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	return r
 }
 
+// BlockedHint is what a vendor's edge firewall blocking magpie's address
+// means, in plain words: Alibaba Cloud's (ESA, in front of zcode.z.ai)
+// answers a 405 HTML page, "Sorry, your request has been blocked due to
+// unusual activity", linking errors.aliyun.com. Nothing in the request is
+// at fault and magpie changes nothing about it: the address is.
+const BlockedHint = "the provider's network firewall blocked requests from this IP; wait a while, or switch to another network or proxy"
+
+// edgeBlocked matches such a block page, whoever's firewall served it.
+var edgeBlocked = regexp.MustCompile(`(?i)request has been blocked|errors\.aliyun\.com`)
+
+// EdgeBlocked says whether an error body is a firewall's block page rather
+// than the vendor's API answering, or one already put in plain words.
+func EdgeBlocked(b []byte) bool {
+	return edgeBlocked.Match(b) || bytes.Contains(b, []byte(BlockedHint)) || bytes.Contains(b, []byte(ZCodeStartBlockedHint))
+}
+
 // APIError pulls the human message out of an error body when there is one.
-// Google's "verify your account" refusal also says what to do about it,
-// with the link it gave.
+// A firewall's block page is put in plain words (BlockedHint); Google's
+// "verify your account" refusal also says what to do about it, with the
+// link it gave.
 func APIError(b []byte, fallback string) string {
+	if edgeBlocked.Match(b) {
+		if fallback == "" {
+			return BlockedHint
+		}
+		return fallback + " — " + BlockedHint
+	}
 	if link, ok := Verification(b); ok {
 		return VerifyMessage(apiError(b, fallback), link)
 	}
@@ -378,6 +415,50 @@ func VerifyMessage(said, link string) string {
 		return said + " — " + verifyAdvice + ": open " + link + " in a browser signed in to it, verify it, then try again"
 	}
 	return said + " — " + verifyAdvice + ": open the Antigravity app (or Gemini CLI) signed in to it and do what it asks, then try again"
+}
+
+// ErrorType is the kind of error a vendor's body names — the error's type
+// (rate_limit_error, usage_limit_reached), else its code — or "" when it
+// names none: what to set beside the status when a request failed.
+func ErrorType(b []byte) string {
+	var v struct {
+		Error json.RawMessage `json:"error"`
+		Type  string          `json:"type"`
+		Code  json.RawMessage `json:"code"`
+	}
+	if json.Unmarshal(b, &v) != nil {
+		return ""
+	}
+	name := func(raw json.RawMessage) string {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return strings.TrimSpace(s)
+		}
+		var n json.Number
+		if json.Unmarshal(raw, &n) == nil {
+			return n.String()
+		}
+		return ""
+	}
+	var e struct {
+		Type string          `json:"type"`
+		Code json.RawMessage `json:"code"`
+	}
+	if json.Unmarshal(v.Error, &e) == nil {
+		if e.Type != "" {
+			return e.Type
+		}
+		if c := name(e.Code); c != "" {
+			return c
+		}
+	}
+	if c := name(v.Code); c != "" {
+		return c
+	}
+	if v.Type != "" && v.Type != "error" {
+		return v.Type
+	}
+	return ""
 }
 
 func apiError(b []byte, fallback string) string {

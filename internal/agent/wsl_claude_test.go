@@ -40,7 +40,7 @@ func noOwnClaude(t *testing.T) {
 // The probe asks after Claude Code as after Codex and Pi, and reads what
 // it says.
 func TestWSLProbeFindsClaude(t *testing.T) {
-	for _, want := range []string{`[ -d "$HOME/.claude" ] && echo dir:.claude`, `command -v claude >/dev/null 2>&1 && echo bin:claude`,
+	for _, want := range []string{`[ -d "$HOME/.claude" ] && echo dir:.claude`, `p=$(command -v claude 2>/dev/null) && echo "bin:claude $p"`,
 		`[ -d "$HOME/.pi" ] && echo dir:.pi`, `[ -d "$HOME/.codex" ] && echo dir:.codex`} {
 		if !strings.Contains(wslProbeScript, want) {
 			t.Errorf("probe lacks %q:\n%s", want, wslProbeScript)
@@ -57,7 +57,7 @@ func TestWSLProbeFindsClaude(t *testing.T) {
 // effort it starts on; one with Codex, Pi and Claude Code has all three,
 // each read as before and kept apart in wsl.json.
 func TestWSLClaudeDiscovered(t *testing.T) {
-	root, home := claudeDistroHome(t, `{"model": "claude-opus-5-5", "effortLevel": "high"}`)
+	root, home := claudeDistroHome(t, `{"model": "claude-opus-5-5", "modelSettings": {"claude-opus-5-5": {"effortLevel": "high"}}}`)
 	allRoot := t.TempDir()
 	os.MkdirAll(filepath.Join(allRoot, "root", ".codex"), 0o755)
 	os.MkdirAll(filepath.Join(allRoot, "root", ".pi", "agent"), 0o755)

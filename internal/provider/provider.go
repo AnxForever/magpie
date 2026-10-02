@@ -20,6 +20,7 @@ import (
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 // Protocol is a wire API magpie can speak to an upstream.
@@ -94,6 +95,13 @@ type Provider struct {
 	// ignore them: their auth is the agent's own.
 	Headers map[string]string `json:"headers,omitempty"`
 
+	// Searches says the vendor answers a web search tool offered on its
+	// Anthropic or Responses API by itself (web_search_20250305,
+	// web_search): a relay in front of Anthropic's or OpenAI's API, which
+	// magpie can't tell from its host. A request offering one then goes to
+	// it as the client sent it, rather than given magpie's search (#359).
+	Searches bool `json:"searches,omitempty"`
+
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
 	// the global one (Settings' Proxy, the environment's, the system's),
@@ -105,6 +113,11 @@ type Provider struct {
 	// of its own, by its name in lower case, as Proxy takes one; an
 	// account not in it follows Proxy (see ProxyChoice).
 	AccountProxies map[string]string `json:"accountProxies,omitempty"`
+	// AccountModels is, for a provider holding several accounts or keys,
+	// the models each one the user narrowed serves, and no others (#474):
+	// an account by its name in lower case, a key by its KeyID. One not in
+	// it serves every model the provider does (see account_models.go).
+	AccountModels map[string][]string `json:"accountModels,omitempty"`
 
 	// BalanceURL, when set, is where the vendor tells what is left on a
 	// key, asked with the key the way a chat request carries it; BalancePath
@@ -173,6 +186,16 @@ type Provider struct {
 type file struct {
 	Providers []Provider `json:"providers"`
 	Groups    []Group    `json:"groups,omitempty"`
+	// Searches are the web search APIs a model's search goes to when no
+	// provider can search (see search_api.go).
+	Searches []SearchAPI `json:"searches,omitempty"`
+	// NoAutoGroups: the user turned off the groups magpie finds on its
+	// own (SetAutoGroups); the groups they made or changed stay.
+	NoAutoGroups bool `json:"noAutoGroups,omitempty"`
+	// Order is the order the user put the providers in on the Providers
+	// tab (#499), by id; one not in it follows those that are, in the
+	// order it was added (see SetOrder).
+	Order []string `json:"order,omitempty"`
 }
 
 // Path is the file the user's providers live in.
@@ -184,14 +207,57 @@ func Path() string {
 	return filepath.Join(home, ".config", "magpie", "providers.json")
 }
 
+// load is the file for a read that goes on without it: start-up, the
+// gateway, the catalog. One that can't be read is taken as empty there;
+// what lists the providers to the user says so (FileError), and an edit
+// refuses (read).
 func load() file {
-	var f file
-	if b, err := os.ReadFile(Path()); err == nil {
-		json.Unmarshal(b, &f)
-	}
+	f, _ := read()
 	return f
 }
 
+// ErrUnreadable is a providers.json that is there but can't be read or
+// decoded: never an empty catalog, to list as none, back up or write over.
+var ErrUnreadable = errors.New("providers.json can't be read")
+
+type unreadableError struct {
+	path string
+	err  error
+}
+
+func (e *unreadableError) Error() string {
+	return fmt.Sprintf("%s can't be read (%v); magpie left it unchanged — fix it or move it aside", e.path, e.err)
+}
+
+func (e *unreadableError) Unwrap() []error { return []error{ErrUnreadable, e.err} }
+
+// Reads used for an edit must keep errors: a broken file is not an empty
+// catalog to write over. Only a missing file is a first use.
+func read() (file, error) {
+	var f file
+	b, err := steady.ReadFile(Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return f, nil
+	}
+	if err != nil {
+		return f, &unreadableError{Path(), err}
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		return file{}, &unreadableError{Path(), err}
+	}
+	return f, nil
+}
+
+// FileError is why providers.json can't be read, nil when it can or isn't
+// there: for what lists the providers to say so, not "none yet".
+func FileError() error {
+	_, err := read()
+	return err
+}
+
+// store replaces providers.json whole, through a file renamed over it, so
+// that a read at that moment sees the old catalog or the new one, never a
+// file cut short.
 func store(f file) error {
 	p := Path()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -201,13 +267,10 @@ func store(f file) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(p, append(b, '\n'), 0o600); err != nil {
+	if err := writePrivate(p, append(b, '\n')); err != nil {
 		return err
 	}
 	pruneIcons(f)
-	if err := os.Chmod(p, 0o600); err != nil {
-		return err
-	}
 	// what agents were handed of the catalog may be out of date now
 	catalog.Touched()
 	return nil
@@ -217,7 +280,8 @@ func store(f file) error {
 // the signed-in agents. An entry in the file with no URL is only the
 // model picks for one of those accounts.
 func All() []Provider {
-	stored := load().Providers
+	f := load()
+	stored := f.Providers
 	picks := map[string]Provider{}
 	var out []Provider
 	for _, p := range stored {
@@ -234,7 +298,7 @@ func All() []Provider {
 		}
 		pk := picks[a.ID]
 		a.Models, a.Unlisted, a.Off, a.Fallback, a.Routing, a.Affinity, a.Contexts, a.Family = pk.Models, pk.Unlisted, pk.Off, pk.Fallback, pk.Routing, pk.Affinity, pk.Contexts, pk.Family
-		a.Proxy, a.AccountProxies = pk.Proxy, pk.AccountProxies
+		a.Proxy, a.AccountProxies, a.AccountModels = pk.Proxy, pk.AccountProxies, pk.AccountModels
 		if a.ID == "cursor" { // picked before its efforts were one model
 			a.Models = cursorPicks(a.Models)
 		}
@@ -243,7 +307,7 @@ func All() []Provider {
 		}
 		out = append(out, a)
 	}
-	return out
+	return ordered(out, f.Order)
 }
 
 // Hidden lists the signed-in accounts the user removed from magpie.
@@ -333,10 +397,10 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Affinity: p.Affinity, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Affinity: p.Affinity, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID)}
 	} else {
 		p.AccountProxies = nil // a provider of a key has no accounts to proxy apart
-		if slices.Contains(accountIDs, p.ID) && !stored(p.ID) {
+		if subscriptionID(p.ID) && !stored(p.ID) {
 			// taken, it would hide that subscription once signed in
 			return fmt.Errorf("%q is the id of the %s subscription; pick another name", p.ID, p.ID)
 		}
@@ -350,7 +414,10 @@ func Save(p Provider) error {
 			return fmt.Errorf("%s needs an API key", p.Name)
 		}
 	}
-	f := load()
+	f, err := read()
+	if err != nil {
+		return err
+	}
 	for i := range f.Providers {
 		if f.Providers[i].ID == p.ID {
 			if p.Was == nil {
@@ -370,6 +437,10 @@ func Save(p Provider) error {
 // second key of a vendor, or one key for another workspace, is a provider of
 // its own rather than one replacing the first. It answers the id saved.
 func Add(p Provider) (string, error) {
+	return add(p, true)
+}
+
+func add(p Provider, once bool) (string, error) {
 	p.ID = strings.ToLower(strings.TrimSpace(p.ID))
 	if p.ID == "" {
 		p.ID = Slug(p.Name)
@@ -380,14 +451,54 @@ func Add(p Provider) (string, error) {
 		p.ID = hostID(p)
 	}
 	// the same key on the same host with the same headers is the one
-	// already here, not another: adding it twice would only split its usage
+	// already here, not another: adding it twice would only split its usage.
+	// A copy the user asked for is taken (AddCopy).
 	for _, h := range All() {
-		if h.Account == nil && sameProvider(h, normalize(p)) {
+		if once && h.Account == nil && sameProvider(h, normalize(p)) {
 			return "", fmt.Errorf("%s is already added with that key (%s); magpie provider key %s <key> changes its key", h.Name, h.ID, h.ID)
 		}
 	}
 	p.ID, p.Name = freeID(p.ID), freeName(p.Name)
 	return p.ID, Save(p)
+}
+
+// AddCopy adds p, a copy the user made of the provider from (#268), beside
+// it: what the form doesn't carry — the keys, the balance token, how
+// requests spread over the keys, where they fall back to — is from's where
+// p leaves it out. The same key on the same host is taken, the copy being
+// asked for (another model list, another endpoint). A signed-in account is
+// never copied: its sign-in is the agent's.
+func AddCopy(p Provider, from string) (string, error) {
+	src, err := Find(from)
+	if err != nil {
+		return "", err
+	}
+	if src.Account != nil {
+		return "", fmt.Errorf("%s is a signed-in account, which can't be copied", src.Name)
+	}
+	if p.Key == "" {
+		p.Key, p.KeyName, p.KeyProtocol = src.Key, src.KeyName, src.KeyProtocol
+		p.Keys = slices.Clone(src.Keys)
+		p.Routing, p.Affinity = src.Routing, src.Affinity
+	}
+	if p.BalanceToken == "" {
+		p.BalanceToken = src.BalanceToken
+	}
+	if p.ZhipuTeam == nil {
+		p.ZhipuTeam = src.ZhipuTeam
+	}
+	if p.Fallback == nil {
+		p.Fallback = slices.Clone(src.Fallback)
+	}
+	p.Unlisted = p.Unlisted || src.Unlisted
+	p.Searches = p.Searches || src.Searches
+	if p.Website == "" {
+		p.Website = src.Website
+	}
+	if p.KeysURL == "" {
+		p.KeysURL = src.KeysURL
+	}
+	return add(p, false)
 }
 
 // hostID is an id for a provider from the host it is on: api.relay.com is
@@ -435,7 +546,7 @@ func freeName(name string) string {
 }
 
 // accountIDs are the ids of the subscriptions magpie can list (account.go).
-var accountIDs = []string{"antigravity", "claude", "codex", CommandCodePlanID, "copilot", "cursor", "devin", "dimagent", "factory", "gemini", "grok", "kiro", MiMoID, "qoder", "workbuddy", WorkBuddyAIID, "zcode", "zed"}
+var accountIDs = []string{"antigravity", "claude", "codex", CommandCodePlanID, "copilot", "cursor", "devin", "factory", "gemini", "grok", "kiro", MiMoID, "qoder", QoderCNID, "workbuddy", WorkBuddyAIID, "zcode", "zed"}
 
 func stored(id string) bool {
 	for _, p := range load().Providers {
@@ -467,7 +578,10 @@ func quietAccount(id string) bool {
 // QuietAccount stops reminding the user of an account they removed: its
 // "Add it back" line goes, and it is offered only from the Add sheet.
 func QuietAccount(id string) error {
-	f := load()
+	f, err := read()
+	if err != nil {
+		return err
+	}
 	for i := range f.Providers {
 		if f.Providers[i].ID == id && f.Providers[i].Hidden {
 			f.Providers[i].Quiet = true
@@ -480,7 +594,10 @@ func QuietAccount(id string) error {
 // ShowAccount brings back the signed-in account of an agent the user had
 // removed from magpie.
 func ShowAccount(id string) error {
-	f := load()
+	f, err := read()
+	if err != nil {
+		return err
+	}
 	for i := range f.Providers {
 		if f.Providers[i].ID == id && f.Providers[i].Hidden {
 			f.Providers[i].Hidden, f.Providers[i].Quiet = false, false
@@ -490,11 +607,15 @@ func ShowAccount(id string) error {
 	return nil
 }
 
-// Delete removes a provider. An account is only hidden from magpie (its
-// model picks kept); signing out is the agent's job.
+// Delete removes a provider. An account, a built-in's or a plugin's, is
+// only hidden from magpie (its accounts and model picks kept, shown again
+// from Hidden or by signing in); signing out is each account's Remove.
 func Delete(id string) error {
+	f, err := read()
+	if err != nil {
+		return err
+	}
 	if _, ok := find(Accounts(), id); ok {
-		f := load()
 		for i := range f.Providers {
 			if f.Providers[i].ID == id {
 				f.Providers[i].Hidden = true
@@ -504,7 +625,6 @@ func Delete(id string) error {
 		f.Providers = append(f.Providers, Provider{ID: id, Hidden: true})
 		return store(f)
 	}
-	f := load()
 	keep := f.Providers[:0]
 	found := false
 	for _, p := range f.Providers {
@@ -536,7 +656,9 @@ func normalize(p Provider) Provider {
 	p.Key = strings.TrimSpace(p.Key)
 	p.Proxy = strings.TrimSpace(p.Proxy)
 	p.AccountProxies = normalAccountProxies(p.AccountProxies)
+	p.AccountModels = normalAccountModels(p.AccountModels)
 	p.ZhipuTeam = p.ZhipuTeam.normal()
+	p.remoteMagpieEndpoints()
 	for _, u := range []*string{&p.Chat, &p.Responses, &p.Anthropic, &p.Decide, &p.Website, &p.KeysURL} {
 		*u = strings.TrimRight(strings.TrimSpace(*u), "/")
 		if *u != "" && !strings.Contains(*u, "://") {
@@ -666,7 +788,7 @@ func (p Provider) Base(proto Protocol) string {
 // Speaks lists the protocols the vendor serves natively, preferred first.
 func (p Provider) Speaks() []Protocol {
 	// a Google sign-in speaks Code Assist, and only that
-	if p.Account != nil && p.Account.codeAssist != "" {
+	if p.Account != nil && p.Account.codeAssist != "" && !p.IsPlugin() {
 		return []Protocol{CodeAssist}
 	}
 	var out []Protocol
@@ -675,10 +797,14 @@ func (p Provider) Speaks() []Protocol {
 			out = append(out, pr)
 		}
 	}
+	// a plugin's Gemini models, beside what else it serves
+	if p.IsPlugin() && p.Account.codeAssist != "" {
+		out = append(out, CodeAssist)
+	}
 	return out
 }
 
-// ResponsesFirst: an OpenAI model on OpenAI's API, Copilot's or Bedrock's,
+// ResponsesFirst: an OpenAI model on OpenAI's API, Copilot's, PipeLLM's or Bedrock's,
 // which is best asked on the Responses API though Chat serves it too.
 func (p Provider) ResponsesFirst(model string) bool {
 	if p.Responses != "" && p.IsBedrock() {
@@ -686,7 +812,7 @@ func (p Provider) ResponsesFirst(model string) bool {
 	}
 	// Azure OpenAI's deployments are named as the user likes; one named
 	// for its model (gpt-5-codex, o4-mini) is taken for it
-	if p.Responses == "" || (p.ID != "copilot" && HostOf(p.Responses) != "api.openai.com" && !p.IsAzure()) {
+	if p.Responses == "" || (p.ID != "copilot" && HostOf(p.Responses) != "api.openai.com" && HostOf(p.Responses) != "api.pipellm.ai" && !p.IsAzure()) {
 		return false
 	}
 	m := strings.ToLower(model[strings.LastIndex(model, "/")+1:])
@@ -725,6 +851,9 @@ func (p Provider) Native(model string) Protocol {
 
 // Host is the vendor's API host, for display.
 func (p Provider) Host() string {
+	if p.Account != nil && p.Account.moved {
+		return p.Account.wasHost // not plugin://<id>
+	}
 	for _, pr := range p.Speaks() {
 		if u := p.Base(pr); u != "" {
 			return HostOf(u)

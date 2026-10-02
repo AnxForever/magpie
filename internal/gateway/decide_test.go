@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -11,9 +12,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // jevUp is a System One API: it answers each question it is asked with
@@ -80,7 +83,7 @@ func (u *jevUp) turns() []map[string]any {
 // the model prefix, with that prefix taken off the model. /systemone is
 // not served.
 func TestSystemOneRoutesByPrefix(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setHome(t, t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	type hit struct {
@@ -117,7 +120,7 @@ func TestSystemOneRoutesByPrefix(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"model": q.Model, "answers": map[string]any{"intent": map[string]any{"choice": "bug"}}})
+			json.NewEncoder(w).Encode(map[string]any{"model": q.Model, "answers": map[string]any{"intent": map[string]any{"choice": "bug"}}, "usage": map[string]int{"input_tokens": 10, "output_tokens": 2}})
 		}))
 		return srv, &hits, &mu, &status, &ctype, &failBody
 	}
@@ -138,6 +141,7 @@ func TestSystemOneRoutesByPrefix(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer magpie")
+		req.Header.Set(SessionHeader, "decision-session")
 		s.Handler().ServeHTTP(rec, req)
 		return rec
 	}
@@ -147,6 +151,12 @@ func TestSystemOneRoutesByPrefix(t *testing.T) {
 	}
 	if n := len(s.trace.routes); n != 1 {
 		t.Fatalf("traced %d", n)
+	}
+	if r := s.trace.routes[0]; r.Session != "decision-session" || len(r.Usage) != 1 || r.Usage[0].Provider != "load-a" || r.Usage[0].Model != "jev-latest" {
+		t.Fatalf("decision accounting: %+v", r)
+	}
+	if recs := usage.Load(time.Time{}); len(recs) != 1 || recs[0].RouteID == 0 || recs[0].RouteID != s.trace.routes[0].ID {
+		t.Fatalf("usage route: %+v", recs)
 	}
 	if r := s.trace.routes[0]; r.Provider != "load-a" || r.Model != "load-a/jev-latest" || !r.Done || r.Status != 200 || len(r.Tries) != 1 || r.Tries[0].Model != "jev-latest" || r.Tries[0].ID != "load-a" {
 		t.Fatalf("route %+v", r)
@@ -367,6 +377,35 @@ func TestWithEffort(t *testing.T) {
 			if !strings.Contains(got, w) {
 				t.Errorf("%s %s at %s: %s, want %s", c.proto, c.in, c.effort, got, w)
 			}
+		}
+	}
+}
+
+// A turn at another effort changes nothing of what the vendor caches (#502):
+// for Claude thinking adaptively, output_config's effort alone, its thinking
+// as it was; for the Responses API, reasoning's effort alone — not the
+// instructions, tools, input or prompt_cache_key.
+func TestWithEffortKeepsTheCachedPrefix(t *testing.T) {
+	for _, c := range []struct {
+		proto provider.Protocol
+		in    string
+		field string
+	}{
+		{provider.Anthropic, `{"model":"claude-opus-5-5","max_tokens":32000,"thinking":{"type":"adaptive"},"output_config":{"effort":"max"},"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a <b> & c","cache_control":{"type":"ephemeral"}}]}]}`, "output_config"},
+		{provider.Responses, `{"model":"gpt-6-astra","instructions":"sys","prompt_cache_key":"thread","reasoning":{"effort":"xhigh","summary":"auto"},"tools":[{"type":"function","name":"read"}],"input":[{"role":"user","content":"a <b> & c"}]}`, "reasoning"},
+	} {
+		lo, hi := withEffort(c.proto, []byte(c.in), "low"), withEffort(c.proto, []byte(c.in), "high")
+		var a, b map[string]json.RawMessage
+		if json.Unmarshal(lo, &a) != nil || json.Unmarshal(hi, &b) != nil {
+			t.Fatalf("%s: %s / %s", c.proto, lo, hi)
+		}
+		for k := range a {
+			if k != c.field && !bytes.Equal(a[k], b[k]) {
+				t.Errorf("%s: %s changed with the effort: %s / %s", c.proto, k, a[k], b[k])
+			}
+		}
+		if bytes.Equal(a[c.field], b[c.field]) {
+			t.Errorf("%s: effort not changed: %s", c.proto, a[c.field])
 		}
 	}
 }

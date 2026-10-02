@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/proc"
 )
 
@@ -88,7 +90,7 @@ func codexVersion() string {
 		}
 		if exe := codexExecutable(); exe != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if out, err := proc.CommandContext(ctx, exe, "--version").Output(); err == nil {
+			if out, err := proc.ProbeContext(ctx, exe, "--version").Output(); err == nil {
 				newer(string(out)) // "codex-cli 0.155.1"
 			}
 			cancel()
@@ -238,6 +240,9 @@ func (a *Account) Lists(model string) bool {
 	if a == nil {
 		return true
 	}
+	if a.plugin != nil {
+		return a.pluginLists(model)
+	}
 	live, _, ok := catalog.Live(accountModels(a.Agent, a.User))
 	if !ok {
 		return true
@@ -276,14 +281,47 @@ func CodexListed() []catalog.Model {
 	})
 }
 
+// CodexNativeHidden is the ChatGPT account's own model slugs the user took
+// out of Codex's list (HiddenModels): the backend lists them, and the
+// gateway drops them from its /models answer as it does the ones not picked.
+func CodexNativeHidden() map[string]bool {
+	off := HiddenModels("codex")
+	if len(off) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, e := range Catalog() {
+		if off[e.ID] && e.Group == "" && e.Provider.Account != nil && e.Provider.Account.Agent == "codex" {
+			out[e.Model] = true
+		}
+	}
+	return out
+}
+
+// CodexListTag names the list Codex is handed, for its ETag: magpie's models
+// and the account's own taken out of it, so either changing has Codex ask
+// for the list again.
+func CodexListTag() string {
+	ms := CodexListed()
+	off := slices.Sorted(maps.Keys(CodexNativeHidden()))
+	for _, slug := range off {
+		ms = append(ms, catalog.Model{ID: "-" + slug})
+	}
+	return codexcat.Tag(ms)
+}
+
 // CodexNativePicked is the set of the ChatGPT account's own model slugs the
 // user kept, and whether they narrowed that list at all. The backend lists
 // every model the account can reach; when the user has picked among them on
 // the codex provider, the gateway keeps its /models answer to those (see
 // codexModels). Not narrowed — the account's list is left whole.
+//
+// A provider switched off picks nothing, as it serves no agent anything
+// (Provider.Off): its picks are kept for when it is switched on again and
+// are not a narrowing now.
 func CodexNativePicked() (map[string]bool, bool) {
 	p, ok := find(All(), "codex")
-	if !ok || len(p.Models) == 0 {
+	if !ok || p.Off || len(p.Models) == 0 {
 		return nil, false
 	}
 	keep := make(map[string]bool, len(p.Models))
@@ -298,11 +336,14 @@ func CodexNativePicked() (map[string]bool, bool) {
 // account (buildResponses).
 func codexListed(shown []Entry, members func(id string) []Member) []catalog.Model {
 	var ms []catalog.Model
-	for _, e := range shown {
+	// named among all shown: the account's own, which the backend lists,
+	// are in Codex's picker beside these
+	labels := Labels(shown)
+	for i, e := range shown {
 		if e.Group == "" && e.Provider.Account != nil && e.Provider.Account.Agent == "codex" {
 			continue
 		}
-		m := catalog.Model{ID: e.ID, Name: e.Label(), Efforts: e.Efforts, Images: e.Images, Context: e.Context}
+		m := catalog.Model{ID: e.ID, Name: labels[i], Efforts: e.Efforts, Images: e.Images, Context: e.Context}
 		if e.Group != "" {
 			for _, mb := range members(e.ID) {
 				if a := mb.Provider.Account; a != nil && a.Agent == "codex" && strings.HasPrefix(mb.Model, "gpt-") {

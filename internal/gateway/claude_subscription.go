@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -56,9 +57,19 @@ type subscriptionBridge struct {
 // A run left for its conversation's next turn waits idleLongest at most,
 // and idleMost of them are kept, the longest waiting let go first: each is
 // a Claude Code process.
+//
+// It waits as long as the prompt cache it wrote lasts: on a subscription
+// within its limits Claude Code writes Anthropic's cache for an hour
+// (claudeCacheTTL, with its CLAUDE_CODE_PROMPT_CACHE_TTL unset), and a run
+// let go sooner has its conversation told to a new one in one message, a
+// prefix the cache has never seen, so the whole of it is written again
+// while what the old run wrote is still there to read (#463: a turn
+// after 39 minutes idle wrote the conversation again). Past the hour the cache is gone
+// either way, and the run would only hold a process.
 const (
-	idleLongest = 20 * time.Minute
-	idleMost    = 6
+	claudeCacheTTL = time.Hour
+	idleLongest    = claudeCacheTTL
+	idleMost       = 6
 )
 
 // parkLongest is how long a run started anew for each turn (Cursor)
@@ -66,6 +77,23 @@ const (
 // sends none; one whose tool ran longer gets its answer all the same, from a
 // run started with the whole conversation, as its next turn would be.
 var parkLongest = 5 * time.Minute
+
+// A run whose reply called nothing but a tool that ends its caller's turn
+// (finalTools: an Agent SDK or workflow subagent's StructuredOutput, answered
+// by the client itself) hears no result for it when the call was good, the
+// subagent done: it waits finalGrace, for the error result a call that
+// broke its schema gets at once, and is let go (#345).
+var (
+	finalGrace = 30 * time.Second
+	finalTools = map[string]bool{"StructuredOutput": true}
+)
+
+// Of the runs waiting on their caller's tool calls, parkedMost are kept
+// once they have waited parkLongest, the longest waiting let go first: a
+// caller stopped with its calls unanswered (a subagent its workflow ended)
+// sends none, and each is a Claude Code process. One let go that does get
+// its results is started anew with the whole conversation.
+const parkedMost = 16
 
 type subscriptionRun struct {
 	bridge *subscriptionBridge
@@ -75,7 +103,7 @@ type subscriptionRun struct {
 	tree   *proc.Tree // cmd once started, with all it starts
 	tmp    string
 
-	// the tools it was started with: its agent is told them once
+	// the tools its agent was told of, as it started and since
 	tools map[string]bool
 
 	mu      sync.Mutex
@@ -93,6 +121,15 @@ type subscriptionRun struct {
 	idleKey string
 	idleAt  time.Time
 	convKey string
+
+	// effort is the level its Claude Code thinks at, as it started (its
+	// --effort) or was told since (setEffort); "" is Claude Code's own
+	effort string
+
+	// told is the conversation as the client had it in its last request
+	// here (historyKey): tool results are the run's while the client's
+	// conversation goes on from that one.
+	told string
 
 	// An agent whose stream does not carry its tool calls in full (Cursor)
 	// learns of them here, as the MCP helper hands each one over, and opens
@@ -117,6 +154,11 @@ type subscriptionRun struct {
 	// reply's two tool calls the second is made only once the first has its
 	// result, while the client ran both and sent both results back at once.
 	early map[string]mcpToolResult
+
+	// asked is the client's tools its reply called, and parkedAt when it
+	// began waiting on them
+	asked    []string
+	parkedAt time.Time
 }
 
 // waitTool collects a tool result that took longer than an agent's patience.
@@ -125,6 +167,10 @@ const waitTool = "magpie_wait"
 type mcpToolResult struct {
 	Content []map[string]any `json:"content"`
 	IsError bool             `json:"is_error,omitempty"`
+	// Tools, when set, is the run's tools from now on: the MCP helper tells
+	// Claude Code its list changed, and answers the call once Claude Code
+	// has listed them again
+	Tools []bridgeTool `json:"tools,omitempty"`
 }
 
 type bridgeTool struct {
@@ -221,7 +267,7 @@ func callbackBaseURL() string {
 	return "http://" + host + ":" + port
 }
 
-func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, oauth, owner string) (*subscriptionRun, <-chan Event, error) {
+func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, configDir, owner string) (*subscriptionRun, <-chan Event, error) {
 	binary, err := claudeBinary()
 	if err != nil {
 		return nil, nil, err
@@ -254,10 +300,7 @@ func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, oau
 	cmd := proc.CommandContext(context.Background(), binary, args...)
 	cmd.Dir = tmp
 	cmd.Env = netproxy.EnvWith(claudeProxy(ctx), cleanClaudeEnv(os.Environ()))
-	if oauth != "" {
-		// a saved account in use beside the one Claude Code is signed in to
-		cmd.Env = append(cmd.Env, "CLAUDE_CODE_OAUTH_TOKEN="+oauth)
-	}
+	cmd.Env = inClaudeDir(cmd.Env, configDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cleanup()
@@ -274,7 +317,7 @@ func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, oau
 		return nil, nil, err
 	}
 
-	run := &subscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp, pending: map[string]chan mcpToolResult{}, stdin: stdin, owner: owner}
+	run := &subscriptionRun{bridge: b, token: token, model: model, cmd: cmd, tmp: tmp, pending: map[string]chan mcpToolResult{}, stdin: stdin, owner: owner, effort: req.Effort}
 	// A caller may abandon a turn after receiving tool_use. Do not leave the
 	// parked Claude process and MCP request alive forever.
 	run.timer = time.AfterFunc(30*time.Minute, run.abort)
@@ -344,11 +387,35 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	run.segment = ch
 	run.mu.Unlock()
 	run.timer.Reset(30 * time.Minute)
+	// a turn the router picked another effort for (#502) goes on in the
+	// same Claude Code, told the level first: it asks the next turn at it
+	// in output_config alone, the conversation it wrote to the cache
+	// untouched, where a run started anew is told it in one message, a
+	// prefix the cache has never seen
+	if req.Effort != run.effort {
+		if err := run.setEffort(req.Effort); err != nil {
+			run.abort()
+			return nil, nil
+		}
+	}
 	if _, err := run.stdin.Write(append(line, '\n')); err != nil {
 		run.abort()
 		return nil, nil
 	}
 	return run, ch
+}
+
+// setEffort tells the run's Claude Code to think at effort from its next
+// turn, as its SDK's applyFlagSettings does: a control request, answered
+// with a control_response its output is read past.
+func (r *subscriptionRun) setEffort(effort string) error {
+	line, _ := json.Marshal(map[string]any{"type": "control_request", "request_id": "effort-" + randomToken()[:12],
+		"request": map[string]any{"subtype": "apply_flag_settings", "settings": map[string]any{"effortLevel": effort}}})
+	if _, err := r.stdin.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	r.effort = effort
+	return nil
 }
 
 // retire lets go of the runs left waiting at an earlier point of this
@@ -382,9 +449,7 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 		r.abort()
 		return
 	case stop == "tool":
-		if r.stdin == nil && r.timer != nil {
-			r.timer.Reset(parkLongest)
-		}
+		r.park()
 		return // it waits on its tool calls
 	case r.stdin == nil:
 		return // it ends by itself
@@ -431,15 +496,67 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	}
 }
 
+// park leaves the run waiting on its reply's tool calls: parkLongest for
+// a run started anew for each turn, finalGrace when they end the caller's
+// turn, and among the parkedMost longest waiting otherwise.
+func (r *subscriptionRun) park() {
+	r.mu.Lock()
+	final := len(r.asked) > 0
+	for _, name := range r.asked {
+		final = final && finalTools[name]
+	}
+	now := time.Now()
+	r.parkedAt = now
+	r.mu.Unlock()
+	switch {
+	case r.timer == nil:
+		return
+	case final:
+		r.timer.Reset(finalGrace)
+		return
+	case r.stdin == nil:
+		r.timer.Reset(parkLongest)
+		return
+	}
+	b := r.bridge
+	if b == nil {
+		return
+	}
+	type waiting struct {
+		run *subscriptionRun
+		at  time.Time
+	}
+	var parked []waiting
+	b.mu.Lock()
+	for _, run := range b.runs {
+		run.mu.Lock()
+		at, closed := run.parkedAt, run.closed
+		run.mu.Unlock()
+		if !closed && !at.IsZero() && now.Sub(at) >= parkLongest {
+			parked = append(parked, waiting{run, at})
+		}
+	}
+	b.mu.Unlock()
+	if len(parked) <= parkedMost {
+		return
+	}
+	slices.SortFunc(parked, func(a, b waiting) int { return a.at.Compare(b.at) })
+	for _, w := range parked[:len(parked)-parkedMost] {
+		w.run.abort()
+	}
+}
+
 // turnKey is what a conversation has been so far, for the run that had it
 // to be found again: whom it runs as, the model, its settings and tools,
 // and the messages' words, tool calls and results. Whitespace, thinking and
 // how a reply is split into messages are left out, as clients keep those
-// differently.
+// differently. Its effort is not in it, only whether it asked for one: a
+// run is told another level as its turn starts (setEffort), where one
+// started anew would write the whole conversation to the cache again (#502).
 func turnKey(owner string, req *Request, msgs []Message) string {
 	h := sha256.New()
 	tools, _ := json.Marshal(req.Tools)
-	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%t", owner, req.Model, req.Effort, req.ToolChoice, req.System, tools, req.WebSearch)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%s\x00%s\x00%s\x00%t", owner, req.Model, req.Effort != "", req.ToolChoice, req.System, tools, req.WebSearch)
 	hashMessages(h, msgs, nil)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -458,6 +575,40 @@ func conversationKeys(owner string, msgs []Message) []string {
 		}
 	})
 	return keys
+}
+
+// historyKey is a conversation's messages, as hashMessages reads them.
+func historyKey(msgs []Message) string {
+	h := sha256.New()
+	hashMessages(h, msgs, nil)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// heard keeps the conversation of the request the run now answers.
+func (r *subscriptionRun) heard(msgs []Message) {
+	key := historyKey(msgs)
+	r.mu.Lock()
+	r.told = key
+	r.mu.Unlock()
+}
+
+// follows says msgs go on from the conversation the run last heard: that
+// one whole, then the reply and what came since. A client that rewrote it
+// meanwhile — Pi compacting between a tool call and its result, a rewind —
+// sends another, while the run's agent still holds the one it was told.
+func (r *subscriptionRun) follows(msgs []Message) bool {
+	r.mu.Lock()
+	told := r.told
+	r.mu.Unlock()
+	if told == "" {
+		return true // a run made in a test may have heard none
+	}
+	h := sha256.New()
+	found := false
+	hashMessages(h, msgs, func(int) {
+		found = found || hex.EncodeToString(h.Sum(nil)) == told
+	})
+	return found
 }
 
 // hashMessages writes the messages' words, tool calls and results to h,
@@ -511,12 +662,30 @@ func claudeCLIArgs(model, mcpConfig, effort string, web bool) []string {
 		"--no-session-persistence",
 	}
 	if effort != "" {
-		if effort == "xhigh" {
-			effort = "max"
-		}
+		// Claude Code takes xhigh as its own level, below max (#385)
 		args = append(args, "--effort", effort, "--thinking-display", "summarized")
 	}
 	return args
+}
+
+// inClaudeDir is env for a Claude Code run on a saved account in use beside
+// the one it is signed in to: in the account's config directory
+// (provider's claude_dirs.go), where Claude Code keeps the sign-in fresh
+// itself. configDir "" is the account Claude Code is signed in to, and env
+// is kept as it is.
+func inClaudeDir(env []string, configDir string) []string {
+	if configDir == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		switch k, _, _ := strings.Cut(e, "="); k {
+		case "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR":
+			continue
+		}
+		out = append(out, e)
+	}
+	return append(out, "CLAUDE_CONFIG_DIR="+configDir)
 }
 
 func cleanClaudeEnv(env []string) []string {
@@ -590,6 +759,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	// what the messages before cost, as each message's usage counts only
 	// itself and the client keeps the last it is told
 	var before, this Usage
+	var reqID, errKind string // the last request's id, and how it failed
 	usage := func(u cliUsage) Usage {
 		v := u.gateway()
 		this.add(v)
@@ -601,6 +771,12 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			Subtype string `json:"subtype"`
 			IsError bool   `json:"is_error"`
 			Result  string `json:"result"`
+			// Anthropic's id for the request, on the messages it answered,
+			// and on a failure the HTTP status Claude Code got and its
+			// name for the kind of error (rate_limit, server_error…)
+			RequestID      string          `json:"request_id"`
+			APIErrorStatus int             `json:"api_error_status"`
+			ErrorKind      json.RawMessage `json:"error"`
 			// what Claude Code's WebSearch found, on the message that
 			// answers its call
 			ToolUseResult json.RawMessage `json:"tool_use_result"`
@@ -645,9 +821,20 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			// this and no message_stop, the CLI waiting on its next input:
 			// the reply ends here, or it would wait with it (#177)
 			if envelope.IsError {
-				r.emit(Event{Kind: KError, Text: envelope.Result})
+				r.emit(Event{Kind: KError, Text: envelope.Result, Status: envelope.APIErrorStatus, Code: errKind, RequestID: reqID})
 				r.endSegment()
 			}
+			continue
+		}
+		if envelope.Type == "assistant" {
+			// the whole message, whose id its stream's later events go
+			// out under; a failure says how it failed here, before its result
+			if envelope.RequestID != "" {
+				reqID = envelope.RequestID
+			}
+			var kind string
+			_ = json.Unmarshal(envelope.ErrorKind, &kind)
+			errKind = kind
 			continue
 		}
 		var searched struct {
@@ -681,6 +868,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				continue
 			}
 			before, this = Usage{}, Usage{}
+			r.mu.Lock()
+			r.asked = nil
+			r.mu.Unlock()
 			r.emit(Event{Kind: KStart, MsgID: e.Message.ID, Model: e.Message.Model, Usage: usage(e.Message.Usage)})
 		case "content_block_start":
 			switch e.ContentBlock.Type {
@@ -696,6 +886,9 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					continue
 				}
 				theirs = true
+				r.mu.Lock()
+				r.asked = append(r.asked, name)
+				r.mu.Unlock()
 				r.emit(Event{Kind: KToolStart, ID: e.ContentBlock.ID, Name: name})
 			case "text":
 				if e.ContentBlock.Text != "" {
@@ -716,7 +909,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				}
 			}
 		case "message_delta":
-			r.emit(Event{Kind: KUsage, Usage: usage(e.Usage)})
+			r.emit(Event{Kind: KUsage, Usage: usage(e.Usage), RequestID: reqID})
 			if e.Delta.StopReason == "tool_use" && len(own) > 0 && !theirs {
 				inside = true
 			} else if e.Delta.StopReason != "" {
@@ -844,18 +1037,27 @@ func renderParts(blocks []map[string]any, text *strings.Builder, parts []Part) [
 			fmt.Fprintf(text, "\n[tool call %s id=%s args=%s]", p.Name, p.ID, argsString(p))
 		case ToolResult:
 			fmt.Fprintf(text, "\n[tool result id=%s%s]\n%s", p.CallID, map[bool]string{true: " error"}[p.IsError], p.Text)
+			// the images the tool returned follow its text
+			for _, im := range p.Images {
+				blocks = imageBlocks(blocks, text, im)
+			}
 		case Image:
-			if text.Len() > 0 {
-				blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
-				text.Reset()
-			}
-			switch {
-			case p.Data != "":
-				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": p.MediaType, "data": p.Data}})
-			case p.URL != "":
-				blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": p.URL}})
-			}
+			blocks = imageBlocks(blocks, text, p)
 		}
+	}
+	return blocks
+}
+
+func imageBlocks(blocks []map[string]any, text *strings.Builder, p Part) []map[string]any {
+	if text.Len() > 0 {
+		blocks = append(blocks, map[string]any{"type": "text", "text": text.String()})
+		text.Reset()
+	}
+	switch {
+	case p.Data != "":
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "base64", "media_type": p.MediaType, "data": p.Data}})
+	case p.URL != "":
+		blocks = append(blocks, map[string]any{"type": "image", "source": map[string]any{"type": "url", "url": p.URL}})
 	}
 	return blocks
 }
@@ -873,20 +1075,32 @@ func closeBlocks(blocks []map[string]any, text *strings.Builder) []map[string]an
 // findRun is the run the request's new tool results are for, and those
 // results: the ones sent since the last assistant message. They are the
 // run's when one of them is a call it made; the rest it hasn't made yet.
+// An image sent beside the results, as a client whose tool messages hold
+// text only sends a tool's (Chat), goes with the result before it.
 func (b *subscriptionBridge) findRun(req *Request) (*subscriptionRun, []Part) {
-	var fresh []Part
-	for i := len(req.Messages) - 1; i >= 0 && req.Messages[i].Role != "assistant"; i-- {
-		var parts []Part
-		for _, p := range req.Messages[i].Parts {
-			if p.Kind == ToolResult {
-				parts = append(parts, p)
+	i := len(req.Messages)
+	for i > 0 && req.Messages[i-1].Role != "assistant" {
+		i--
+	}
+	var fresh, loose []Part
+	for _, m := range req.Messages[i:] {
+		for _, p := range m.Parts {
+			switch {
+			case p.Kind == ToolResult:
+				p.Images = slices.Clone(p.Images)
+				fresh = append(fresh, p)
+			case p.Kind == Image && len(fresh) > 0:
+				last := &fresh[len(fresh)-1]
+				last.Images = append(last.Images, p)
+			case p.Kind == Image:
+				loose = append(loose, p)
 			}
 		}
-		fresh = append(parts, fresh...)
 	}
 	if len(fresh) == 0 {
 		return nil, nil
 	}
+	fresh[0].Images = append(loose, fresh[0].Images...)
 	// Claude emits message_stop just before its MCP calls are all scheduled.
 	// A very fast client can return a result while the callback is still being
 	// registered; give that tiny race a bounded grace period.
@@ -915,6 +1129,8 @@ func (b *subscriptionBridge) findRun(req *Request) (*subscriptionRun, []Part) {
 
 // offers says the run's agent was told every one of tools.
 func (r *subscriptionRun) offers(tools []Tool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.tools == nil {
 		return true
 	}
@@ -927,18 +1143,23 @@ func (r *subscriptionRun) offers(tools []Tool) bool {
 }
 
 // continueWith hands the agent its tool results: at once for the calls it
-// is waiting on, the others kept until it makes them.
-func (r *subscriptionRun) continueWith(results []Part) (<-chan Event, error) {
+// is waiting on, the others kept until it makes them. tools, when set, are
+// the agent's tools from now on, handed over with the results.
+func (r *subscriptionRun) continueWith(results []Part, tools []bridgeTool) (<-chan Event, error) {
 	if r.timer != nil {
 		r.timer.Reset(30 * time.Minute)
 	}
+	r.mu.Lock()
+	r.parkedAt = time.Time{}
+	r.mu.Unlock()
 	ch := r.attach()
 	if r.begin != nil {
 		r.emit(r.begin())
 	}
 	delivered := 0
 	for _, p := range results {
-		result := mcpToolResult{Content: []map[string]any{{"type": "text", "text": p.Text}}, IsError: p.IsError}
+		result := mcpResult(p)
+		result.Tools = tools
 		r.mu.Lock()
 		waiter := r.pending[p.CallID]
 		delete(r.pending, p.CallID)
@@ -967,6 +1188,34 @@ func (r *subscriptionRun) continueWith(results []Part) (<-chan Event, error) {
 		r.resume()
 	}
 	return ch, nil
+}
+
+// mcpResult is a tool result as an MCP tools/call answers: its text, then
+// the images the tool returned as MCP image content, which Claude Code hands
+// its model as image blocks. MCP carries an image's bytes only, so one known
+// by its URL alone is named in text.
+func mcpResult(p Part) mcpToolResult {
+	content := []map[string]any{{"type": "text", "text": p.Text}}
+	for _, im := range p.Images {
+		switch {
+		case im.Data != "":
+			content = append(content, map[string]any{"type": "image", "data": im.Data, "mimeType": imageMediaType(im)})
+		case im.URL != "":
+			content = append(content, map[string]any{"type": "text", "text": "[image: " + im.URL + "]"})
+		}
+	}
+	return mcpToolResult{Content: content, IsError: p.IsError}
+}
+
+// imageMediaType is an inline image's type, read from its bytes when the
+// client did not say.
+func imageMediaType(p Part) string {
+	if p.MediaType != "" {
+		return p.MediaType
+	}
+	head := p.Data[:min(len(p.Data), 64)]
+	b, _ := base64.StdEncoding.DecodeString(head[:len(head)/4*4])
+	return http.DetectContentType(b)
 }
 
 func callIDs(parts []Part) string {
@@ -1194,11 +1443,11 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 			// effort can think past that (#250)
 			req.Effort = "low"
 		}
-		token, _, err := p.Account.Token(ctx)
+		dir, _, err := p.Account.Token(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		return s.subscription.start(ctx, req, model, token, owner)
+		return s.subscription.start(ctx, req, model, dir, owner)
 	}
 	return s.serveSubscription(w, r, from, "Claude Code", model, body, usage, start)
 }
@@ -1216,26 +1465,43 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	// its model searches the web with magpie's tool, which magpie answers
 	var search Tool
 	if req.WebSearch && !searching(r.Context()) {
-		if _, _, ok := searcher(); ok {
+		if canSearch() {
 			search = searchTool(req.Tools)
 			req.Tools = append(slices.Clone(req.Tools), search)
 		}
 	}
 
 	run, results := s.subscription.findRun(req)
-	if run != nil && !run.offers(req.Tools) {
-		// the client offers a tool the run's agent was never told of, as
-		// Claude Code's ToolSearch loads a deferred one (WebSearch) mid-turn:
-		// a run started now has it, the conversation told over
+	// the client rewrote the conversation since the run's last reply, as Pi
+	// does compacting it mid-turn: the run's agent holds the one from before,
+	// would answer from it, and tell the client a context as large as ever,
+	// so the client compacts again at each tool call. It is let go, and a
+	// run started anew is told the conversation as the client now has it.
+	if run != nil && !run.follows(req.Messages) {
 		run.abort()
 		run = nil
 	}
+	// the client offers a tool the run's agent was never told of, as Claude
+	// Code's ToolSearch loads a deferred one mid-turn: the run is handed it
+	// with the results, as its MCP server's tools changed. A run started
+	// anew would be told the conversation in one message, its tool calls as
+	// text, and its model went on to write its own calls as text.
+	var more []bridgeTool
+	if run != nil && !run.offers(req.Tools) {
+		more = bridgeTools(req)
+	}
 	var events <-chan Event
 	if run != nil {
-		if events, err = run.continueWith(results); err != nil {
+		if events, err = run.continueWith(results, more); err != nil {
 			// it ended while it waited: a new one is told the whole
 			// conversation
 			run = nil
+		} else if more != nil {
+			run.mu.Lock()
+			for _, t := range req.Tools {
+				run.tools[t.Name] = true
+			}
+			run.mu.Unlock()
 		}
 	}
 	if run == nil {
@@ -1255,6 +1521,7 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	if err != nil {
 		return writeError(w, from, 502, name+": "+err.Error()), err.Error()
 	}
+	run.heard(req.Messages)
 	// a caller gone before the reply is whole won't carry it on: its agent
 	// is stopped at once, not left to answer no one and wait on tool calls
 	// it never handed over
@@ -1289,12 +1556,19 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 			}
 			abort()
 			code := 502
-			if quotaWords.MatchString(msg) {
-				code = 429
+			if n > 0 {
+				usage.add(Usage{ErrType: head[n-1].Code, RequestID: head[n-1].RequestID})
+				// the status Claude Code got, else a guess from the words
+				if head[n-1].Status >= 400 {
+					code = head[n-1].Status
+				} else if quotaWords.MatchString(msg) {
+					code = 429
+				}
 			}
 			return writeError(w, from, code, name+": "+msg), msg
 		}
-		enc := encoder(from, newSSEWriter(w), req)
+		sw := newSSEWriter(w)
+		enc := encoder(from, sw, req)
 		var failed, said, stop string
 		see := func(ev Event) {
 			switch ev.Kind {
@@ -1302,7 +1576,7 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 				failed = ev.Text
 			case KStart, KUsage:
 				usage.add(ev.Usage)
-				usage.add(Usage{Served: ev.Model})
+				usage.add(Usage{Served: ev.Model, RequestID: ev.RequestID})
 			case KText:
 				said += ev.Text
 			case KStop:
@@ -1313,9 +1587,12 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 		for _, ev := range head {
 			see(ev)
 		}
-		for ev := range events {
+		// a client waiting on a reply that goes on is kept from its idle
+		// timeout while none of it comes (#436)
+		relayEvents(events, sw, enc, func(ev Event) bool {
 			see(ev)
-		}
+			return true
+		})
 		// before the reply's last event, which the agent may answer at once
 		ended(said, stop, failed == "" && r.Context().Err() == nil)
 		// an error event already ended the reply in the client's protocol
@@ -1339,7 +1616,10 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 		abort()
 		// a status, as in a stream, so another account can take over
 		code := 502
-		if quotaWords.MatchString(col.err) {
+		usage.add(Usage{ErrType: col.errCode})
+		if col.errStatus >= 400 {
+			code = col.errStatus
+		} else if quotaWords.MatchString(col.err) {
 			code = 429
 		}
 		return writeError(w, from, code, name+": "+col.err), col.err

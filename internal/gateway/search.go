@@ -23,7 +23,8 @@ import (
 // web_search_options, Gemini's googleSearch. A provider that searches by
 // itself is asked to; any other model is given a web_search tool of
 // magpie's, which a model that can search — the Claude subscription, a
-// Codex account, OpenAI, Anthropic's API, OpenRouter — answers for it.
+// Codex account, OpenAI, Anthropic's API, OpenRouter — answers for it, or,
+// with none of them, a search API the user gave a key to (search_api.go).
 
 // searchRounds is how many times a reply may go back to its model with
 // what a search found.
@@ -40,11 +41,35 @@ func searching(ctx context.Context) bool {
 	return v
 }
 
+// searchForKey holds the request magpie's searches are run for, which the
+// Routing view names by a search's row: magpie's own call, on the model it
+// searches with, not the conversation's (#314).
+type searchForKey struct{}
+
+// CallFor is the request a call magpie made on its own was made for: its
+// agent, and the model that agent asked for.
+type CallFor struct {
+	Agent string `json:"agent"`
+	Model string `json:"model"`
+}
+
+func searchFor(ctx context.Context) *CallFor {
+	f, _ := ctx.Value(searchForKey{}).(*CallFor)
+	return f
+}
+
 // searchesItself says whether the provider searches the web by itself when
 // asked on this API.
 func searchesItself(p provider.Provider, proto provider.Protocol) bool {
 	if p.Account != nil {
-		return (p.Account.Agent == "codex" || p.Account.Agent == "grok") && proto == provider.Responses
+		// Grok by its id: moved to its plugin, its account is the plugin's;
+		// its plugin beside the built-in (grok-plugin) by the plugin's id
+		return (p.Account.Agent == "codex" || p.ID == "grok" || p.PluginProvider() == "grok") && proto == provider.Responses
+	}
+	// a relay said to search (#359), on an API it has an address for: one
+	// with only a Chat address would be sent no search tool at all
+	if p.Searches && (proto == provider.Anthropic || proto == provider.Responses) && p.Base(proto) != "" {
+		return true
 	}
 	return slices.Contains(searchHosts[proto], provider.HostOf(p.Base(proto)))
 }
@@ -71,9 +96,12 @@ func searchAsked(proto provider.Protocol, body []byte) bool {
 
 // searcher is the model magpie searches with: the first of the providers
 // that search by themselves, with a small model of theirs, as searching
-// needs no more.
+// needs no more. A relay said to search is left out: it would spend the
+// relay's quota on other models' searches, and one that serves only Claude
+// Code refuses magpie's own request, which has no metadata.user_id (#359).
 func searcher() (provider.Provider, string, bool) {
 	rank := func(p provider.Provider) int {
+		p.Searches = false
 		switch {
 		case p.Account != nil && p.Account.Agent == "claude":
 			return 0
@@ -163,12 +191,31 @@ func searchTool(tools []Tool) Tool {
 
 const searchSystem = "You are a web search tool. Search the web for what is asked and report what the results say: the facts that answer it, as specifically as they are given (numbers, dates, versions, names), each with the title and URL of its page. Report only what the pages say; don't answer from memory, don't add advice. Be concise."
 
-// webSearch searches the web with the searcher's model and says what it
-// found, and on which pages.
+// webSearch searches the web and says what it found, and on which pages:
+// with the searcher's model, or, without one or when it fails, with the
+// search APIs the user set up (#419).
 func (s *Server) webSearch(ctx context.Context, query string) (string, []Hit, error) {
+	said, hits, err := s.modelSearch(ctx, query)
+	if err == nil || len(provider.SearchAPIs()) == 0 {
+		return said, hits, err
+	}
+	said, hits, apiErr := s.apiSearch(ctx, query)
+	if apiErr != nil {
+		if errors.Is(err, errNoSearcher) {
+			return "", nil, apiErr
+		}
+		return "", nil, errors.Join(err, apiErr)
+	}
+	return said, hits, nil
+}
+
+var errNoSearcher = errors.New("no provider that can search the web, nor a search API, is set up in magpie")
+
+// modelSearch searches the web with the searcher's model.
+func (s *Server) modelSearch(ctx context.Context, query string) (string, []Hit, error) {
 	p, model, ok := searcher()
 	if !ok {
-		return "", nil, errors.New("no provider that can search the web is set up in magpie")
+		return "", nil, errNoSearcher
 	}
 	ctx, cancel := context.WithTimeout(context.WithValue(ctx, searchingKey{}, true), searchTimeout)
 	defer cancel()
@@ -245,7 +292,7 @@ type round func(ctx context.Context, req *Request) (<-chan Event, int, string)
 // reply. The first round's failure is a status, as another provider may
 // take over.
 func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, usage *Usage, ask round) (int, string) {
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, Model: unprefixed(req.Model)}))
 	defer cancel()
 	q := *req
 	q.WebSearch = false

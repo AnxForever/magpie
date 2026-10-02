@@ -149,13 +149,17 @@ var featured = []MarketServer{
 // command, which InstallServer puts in when it is added.
 const magpieCommand = "magpie"
 
+// selfServerName is the name magpie's own image generation server is written
+// under, in every agent's config.
+const selfServerName = "magpie-image"
+
 // selfServer is magpie's own image generation server: generate_image makes
 // an image with the model Settings → Images → Image generation names, saved
 // in the project. It costs what the model does, so it is given only to the
 // agents picked for it.
 func selfServer() MarketServer {
-	m := localServer("magpie-image", "Magpie Image", "Magpie", "https://usemagpie.ai/favicon.png", "https://usemagpie.ai",
-		"Generate and edit images with the image model set in Magpie (Settings → Images), saved in the project.", magpieCommand, []string{"mcp", "image"})
+	m := localServer(selfServerName, "Magpie Image", "Magpie", "https://usemagpie.ai/favicon.png", "https://usemagpie.ai",
+		"Generate and edit images with the image model set in Magpie (Settings → Images), and make short videos with a Grok subscription, saved in the project.", magpieCommand, []string{"mcp", "image"})
 	m.OptIn = true
 	return m
 }
@@ -821,6 +825,14 @@ func (l *Library) haveSkill(source, id, name string) string {
 	for _, s := range l.Skills {
 		if s.Source != nil && s.Source.Kind == "github" && strings.EqualFold(s.Source.Repo, source) &&
 			(s.Name == id || s.Name == name || lastPart(s.Source.Path) == id) {
+			return s.Name
+		}
+	}
+	// one taken in from an agent's folder (npx skills puts them in
+	// ~/.agents/skills) has no source to match, and adding is turned away
+	// by name all the same (InstallMarketSkill): it's had by its name
+	for _, n := range []string{id, name} {
+		if s := l.skill(n); s != nil {
 			return s.Name
 		}
 	}

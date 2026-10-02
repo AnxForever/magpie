@@ -153,8 +153,13 @@ func Allowances(agent string) map[string]Allowance {
 		}
 	}
 	c.Lock()
-	defer c.Unlock()
-	return c.m[agent]
+	m, known := c.m[agent]
+	c.Unlock()
+	if !known {
+		// the first reading is still out: what each account said last
+		return lastAllowances(agent)
+	}
+	return m
 }
 
 // OnRenewed has f told when an account's usage windows were started again
@@ -187,6 +192,8 @@ func StaleAllowance(agent, user string) {
 	loginUsageCache.Lock()
 	delete(loginUsageCache.m, agent+"/"+strings.ToLower(user))
 	loginUsageCache.Unlock()
+	// the built-in keeps Grok's usage by home; a Grok moved to its plugin
+	// keeps it as "plugin:grok"'s, the line above
 	if agent == "grok" {
 		gs := grokLogins()
 		grokHomeUsage.Lock()

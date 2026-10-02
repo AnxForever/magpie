@@ -39,6 +39,10 @@ type PresetDef struct {
 	// Models are the plan's, for when the list has none of them.
 	Only   string   `json:"only,omitempty"`
 	Models []string `json:"models,omitempty"`
+	// FreeTag, with Only, is what the ids of the vendor's free models end
+	// in: they are kept beside the plan's, marked Free and priced at
+	// nothing (Cline's ":free" models, which its key is served at no cost).
+	FreeTag string `json:"freeTag,omitempty"`
 	// NoList: the vendor has no list of models to ask for (Bedrock's
 	// runtime serves no /models), so Models are its list
 	NoList bool `json:"noList,omitempty"`
@@ -48,6 +52,8 @@ type PresetDef struct {
 	// EndpointHint under it.
 	Endpoint     string `json:"endpoint,omitempty"`
 	EndpointHint string `json:"endpointHint,omitempty"`
+	// EndpointNeeded is what the editor says when no endpoint was given.
+	EndpointNeeded string `json:"endpointNeeded,omitempty"`
 	// Hosts: a vendor serving other makers' models as well as its own
 	// (Groq, Ollama Cloud), whose list is no maker's word on theirs
 	Hosts bool `json:"-"`
@@ -109,17 +115,19 @@ var presets = []PresetDef{
 		Chat: "https://open.bigmodel.cn/api/paas/v4", Anthropic: "https://open.bigmodel.cn/api/anthropic",
 		Website: "https://open.bigmodel.cn", KeysURL: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys",
 		// a GLM Coding Plan is served at its own OpenAI endpoint: a plan's key
-		// sent to the pay-as-you-go one is told it has no balance
+		// sent to the pay-as-you-go one is told it has no balance. The plan
+		// serves the Responses API at /api/v1 as well: its tool pages give
+		// it for Codex, wire_api = "responses" (#306)
 		RegionLabel: "Plan", Regions: []Region{
 			{ID: "api", Name: "Pay as you go", Chat: "https://open.bigmodel.cn/api/paas/v4", Anthropic: "https://open.bigmodel.cn/api/anthropic"},
-			{ID: "coding", Name: "Coding Plan", Chat: "https://open.bigmodel.cn/api/coding/paas/v4", Anthropic: "https://open.bigmodel.cn/api/anthropic"},
+			{ID: "coding", Name: "Coding Plan", Chat: "https://open.bigmodel.cn/api/coding/paas/v4", Responses: "https://open.bigmodel.cn/api/v1", Anthropic: "https://open.bigmodel.cn/api/anthropic"},
 		}},
 	{ID: "zai", Name: "Z.ai", Icon: "zai", Kind: KindVendor, Catalog: "zhipuai",
 		Chat: "https://api.z.ai/api/paas/v4", Anthropic: "https://api.z.ai/api/anthropic",
 		Website: "https://z.ai", KeysURL: "https://z.ai/manage-apikey/apikey-list",
 		RegionLabel: "Plan", Regions: []Region{
 			{ID: "api", Name: "Pay as you go", Chat: "https://api.z.ai/api/paas/v4", Anthropic: "https://api.z.ai/api/anthropic"},
-			{ID: "coding", Name: "Coding Plan", Chat: "https://api.z.ai/api/coding/paas/v4", Anthropic: "https://api.z.ai/api/anthropic"},
+			{ID: "coding", Name: "Coding Plan", Chat: "https://api.z.ai/api/coding/paas/v4", Responses: "https://api.z.ai/api/v1", Anthropic: "https://api.z.ai/api/anthropic"},
 		}},
 	{ID: "minimax", Name: "MiniMax", Icon: "minimax-color", Kind: KindVendor, Catalog: "minimax",
 		Chat: "https://api.minimax.io/v1", Anthropic: "https://api.minimax.io/anthropic",
@@ -281,17 +289,20 @@ var presets = []PresetDef{
 		Note:    "open coding models, $10/month",
 		Website: "https://opencode.ai/docs/go", KeysURL: "https://opencode.ai/auth"},
 	// Cline's plan for open models, at the Cline API with a Cline key: the
-	// API lists only its paid models, not the plan's
+	// API lists only its paid models, not the plan's, and its free ones
+	// (":free"), which the key is served too
 	{ID: "clinepass", Name: "ClinePass", Icon: "cline", Kind: KindRelay,
 		Chat:    "https://api.cline.bot/api/v1",
 		Note:    "open coding models, $9.99/month",
 		Website: "https://docs.cline.bot/getting-started/clinepass", KeysURL: "https://app.cline.bot",
-		Only: "cline-pass/",
+		Only: "cline-pass/", FreeTag: ":free",
 		Models: []string{"cline-pass/glm-5.3", "cline-pass/glm-5.3-flash", "cline-pass/kimi-k3", "cline-pass/deepseek-v4-pro",
 			"cline-pass/deepseek-v4.1-flash", "cline-pass/mimo-v2.5", "cline-pass/mimo-v2.5-pro", "cline-pass/minimax-m3",
 			"cline-pass/muse-spark-1.3-contributor", "cline-pass/qwen3.8-max", "cline-pass/qwen3.7-max", "cline-pass/qwen3.7-plus"}},
 	{ID: "opencode-zen", Name: "OpenCode Zen", Icon: "opencode", Kind: KindRelay, Catalog: "opencode",
 		Chat: "https://opencode.ai/zen/v1", Responses: "https://opencode.ai/zen/v1", Anthropic: "https://opencode.ai/zen",
+		// its free models (-free) are served to OpenCode alone, which
+		// magpie asks them as (OpenCodeFree)
 		Website: "https://opencode.ai/docs/zen", KeysURL: "https://opencode.ai/auth"},
 	// Command Code's Provider API: its Claude models on /messages alone, the
 	// rest on chat and Responses, as its model list says (#93)
@@ -321,6 +332,13 @@ var presets = []PresetDef{
 	{ID: "aihubmix", Name: "AiHubMix", Icon: "aihubmix-color", Kind: KindRelay,
 		Chat: "https://aihubmix.com/v1", Anthropic: "https://aihubmix.com",
 		Website: "https://aihubmix.com", KeysURL: "https://console.aihubmix.com/token"},
+	// one key for every vendor's models: Chat on its converter, which
+	// takes any of them; GPT on its own Responses API and Claude on its
+	// own Messages API, each of which serves its family alone (the
+	// model list's type_target says which is which)
+	{ID: "pipellm", Name: "PipeLLM", Icon: "pipellm-color", Kind: KindRelay,
+		Chat: "https://api.pipellm.ai/openai/v1", Responses: "https://api.pipellm.ai/v1", Anthropic: "https://api.pipellm.ai",
+		Website: "https://www.pipellm.ai", KeysURL: "https://console.pipellm.ai"},
 	{ID: "302ai", Name: "302.AI", Icon: "ai302-color", Kind: KindRelay,
 		Chat: "https://api.302.ai/v1", Anthropic: "https://api.302.ai",
 		Website: "https://302.ai", KeysURL: "https://302.ai/api-keys/list"},
@@ -335,6 +353,15 @@ var presets = []PresetDef{
 			{ID: "global", Name: "Global", Chat: "https://global.yylx.io/v1", Anthropic: "https://global.yylx.io"},
 			{ID: "cn", Name: "China Mainland", Chat: "https://cn.yylx.io/v1", Anthropic: "https://cn.yylx.io"},
 		}},
+
+	// another computer's magpie, shared on its network (remote_magpie.go):
+	// its providers, routing groups and usage stay there, each request
+	// goes on in the API the agent spoke
+	{ID: RemoteMagpiePreset, Name: "Remote magpie", Icon: "magpie", Kind: KindRelay,
+		Note:           "another computer's magpie, shared on its network",
+		Endpoint:       "http://192.168.1.20:3425",
+		EndpointHint:   "The address and API key the other computer's magpie shows in Settings, under Share on local network. Its models and routing groups are listed here; each request goes on in the API the agent spoke.",
+		EndpointNeeded: "The other magpie's address is needed"},
 
 	// Jev answers no conversation: it decides which of a routing group's
 	// models takes a turn, and how hard it thinks

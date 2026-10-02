@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -29,6 +30,7 @@ type zcodeStartUpstream struct {
 	balance map[string]any
 	jwt     string
 	model   *http.Request // the last request to the Start Plan's endpoint
+	body    []byte        // and its body
 }
 
 func newZCodeStartUpstream(t *testing.T, jwt string) *zcodeStartUpstream {
@@ -54,6 +56,11 @@ func newZCodeStartUpstream(t *testing.T, jwt string) *zcodeStartUpstream {
 			}
 			ok(u.plans)
 		case r.URL.Path == "/api/v1/zcode-plan/billing/balance":
+			if r.Header.Get("X-Device-Mid") == "" { // as zcode.z.ai does (#282)
+				w.WriteHeader(400)
+				w.Write([]byte(`{"code":3001,"msg":"parameter error"}`))
+				return
+			}
 			if auth != "Bearer "+u.jwt || r.URL.Query().Get("app_version") == "" {
 				w.WriteHeader(401)
 				return
@@ -61,6 +68,7 @@ func newZCodeStartUpstream(t *testing.T, jwt string) *zcodeStartUpstream {
 			ok(u.balance)
 		case strings.HasPrefix(r.URL.Path, "/api/v1/zcode-plan/anthropic/"):
 			u.model = r
+			u.body, _ = io.ReadAll(r.Body)
 			w.Write([]byte(`{}`))
 		default:
 			w.WriteHeader(404)

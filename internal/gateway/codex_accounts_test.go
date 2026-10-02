@@ -22,6 +22,7 @@ func codexSignedIn(t *testing.T, spares ...string) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows finds the home there
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	restingUntil.Lock()
@@ -46,6 +47,10 @@ func codexSignedIn(t *testing.T, spares ...string) {
 	}
 	os.MkdirAll(filepath.Dir(provider.Path()), 0o755)
 	os.WriteFile(filepath.Join(filepath.Dir(provider.Path()), "logins.json"), mustJSON(saved), 0o600)
+	// signed in behind magpie's back: an earlier test's look at its own
+	// home within 30s would otherwise keep Codex's sign-in off the list
+	provider.ForgetAccounts()
+	t.Cleanup(provider.ForgetAccounts)
 }
 
 // usedUp stands in for the ChatGPT backend with acct-1 out of its
@@ -132,6 +137,55 @@ func TestCodexOwnModelOneAccountRelayed(t *testing.T) {
 	code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
 	if code != 429 || !strings.Contains(body, "usage_limit_reached") || strings.Join(tried, ",") != "acct-1" {
 		t.Fatalf("%d %s tried %v", code, body, tried)
+	}
+}
+
+// The account Codex is signed in to, paused in magpie while another is on
+// (#263: the user's own Plus kept for Codex's remote control, a shared Pro
+// doing the work): no request goes to it, Codex staying signed in to it,
+// until it is resumed or the other is turned off.
+func TestCodexPausedOwnAccountPassedOver(t *testing.T) {
+	codexSignedIn(t, "spare@example.com")
+	var tried, models []string
+	usedUp(t, &tried, &models)
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range provider.Logins("codex") {
+		if l.User == "me@example.com" && (!l.Active || !l.Paused) {
+			t.Fatalf("own account %+v", l)
+		}
+	}
+	code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if code != 200 || strings.Join(tried, ",") != "acct-2" {
+		t.Fatalf("%d %s tried %v", code, body, tried)
+	}
+	// the other off: the paused one is all there is, and is used
+	if err := provider.SetLoginOn("codex", "spare@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	tried = nil
+	codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if strings.Join(tried, ",") != "acct-1" {
+		t.Fatalf("with the other off, tried %v", tried)
+	}
+	if err := provider.SetLoginOn("codex", "me@example.com", false); err == nil {
+		t.Fatal("the only account in use paused")
+	}
+	// back on beside it, and resumed: it is first again
+	if err := provider.SetLoginOn("codex", "spare@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetLoginOn("codex", "me@example.com", true); err != nil {
+		t.Fatal(err)
+	}
+	restingUntil.Lock()
+	restingUntil.m = map[string]time.Time{}
+	restingUntil.Unlock()
+	tried = nil
+	codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"ping"}`)
+	if len(tried) == 0 || tried[0] != "acct-1" {
+		t.Fatalf("resumed, tried %v", tried)
 	}
 }
 
