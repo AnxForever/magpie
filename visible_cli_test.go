@@ -13,6 +13,7 @@ import (
 // A WSL id keeps the distro's case, but visibility is read by a lowercase
 // key: saving it must narrow the catalog, and "all" must open it again.
 func TestVisibleWSLAgentID(t *testing.T) {
+	const id = "claude@wsl:Ubuntu"
 	groupsHome(t)
 	was := catalog.Changed
 	catalog.Changed = nil // no real agent's files are rewritten
@@ -26,14 +27,13 @@ func TestVisibleWSLAgentID(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := settings.Load()
-	s.Visible = map[string][]string{"codex": {"b"}}
+	s.Visible = map[string][]string{"codex": {"b"}, id: {"b"}}
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
 	changed := 0
 	catalog.Changed = func() { changed++ }
 
-	const id = "claude@wsl:Ubuntu"
 	if err := setVisible(id, []string{"relay"}); err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,19 @@ func TestVisibleWSLAgentID(t *testing.T) {
 			t.Fatalf("CatalogFor(%q) did not narrow to relay: shown %v, hidden %v", q, shown, hidden)
 		}
 	}
+	// "all" also clears a key left by the version that saved the distro's case,
+	// without requiring a narrowed visibility to be saved with the fixed code first.
+	s = settings.Load()
+	delete(s.Visible, strings.ToLower(id))
+	s.Visible[id] = []string{"b"}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
 	if err := setVisible(id, []string{"ALL"}); err != nil {
 		t.Fatal(err)
+	}
+	if got := settings.Load().Visible; len(got) != 1 || !slices.Equal(got["codex"], []string{"b"}) {
+		t.Fatalf("all left stale keys or changed another agent: %v", got)
 	}
 	if _, ok := provider.VisibleTo(id); ok {
 		t.Fatal("all left the WSL visibility in place")

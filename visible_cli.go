@@ -101,6 +101,12 @@ func setVisible(id string, list []string) error {
 		}
 		s.Visible[id] = list
 	}
+	// Drop keys saved with the distro's case before writes were normalized.
+	for key := range s.Visible {
+		if key != id && strings.EqualFold(key, id) {
+			delete(s.Visible, key)
+		}
+	}
 	if err := settings.Save(s); err != nil {
 		return err
 	}
