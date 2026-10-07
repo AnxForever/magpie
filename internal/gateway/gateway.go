@@ -1326,14 +1326,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	// a Codex subagent's task its lead sealed — the lead answered by a
 	// ChatGPT account, the group's own or Codex's — goes only to a ChatGPT
-	// account, the lead's first (#619); with none, it is turned away
-	// before anyone is asked
+	// account, the lead's first (#619), or back to the Responses provider
+	// that answered the lead, a relay of the ChatGPT backend (#1109); with
+	// none, it is turned away before anyone is asked
 	sealedTask := from == provider.Responses && hasSealedAgentMessage(body)
-	if sealedTask && !(isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool { return sealedReader(m.Provider) }) || !isGroup && sealedReader(p)) {
-		call.Status, call.Error = 400, "sealed subagent task"
-		writeError(w, from, 400, sealedTaskError(call.Model))
-		turnedAway()
-		return
+	sealedLead := ""
+	if sealedTask {
+		parent := metadata.Parent
+		if parent == "" {
+			parent = r.Header.Get("x-codex-parent-thread-id")
+		}
+		scope := p.ID + "/" + model
+		if isGroup {
+			scope = provider.GroupPrefix + g.ID
+		}
+		sealedLead = leadProvider(scope, parent)
+		if !(isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool { return s.sealedReader(m.Provider, m.Model, sealedLead) }) || !isGroup && s.sealedReader(p, model, sealedLead)) {
+			call.Status, call.Error = 400, "sealed subagent task"
+			writeError(w, from, 400, sealedTaskError(call.Model, sealedLead))
+			turnedAway()
+			return
+		}
 	}
 	var hit *RuleHit
 	var ruleAt, words string
@@ -1448,7 +1461,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	agentPick := provider.AgentEffort(agent)
 	if sealedTask {
-		cands, pl = sealedReaders(cands, pl)
+		cands, pl = s.sealedReaders(cands, pl, sealedLead)
 	}
 	var accountHeld bool // every candidate was an account or key the calling key may not use
 	if keyHeld || accHeld {
@@ -2463,7 +2476,9 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	// on every turn, and on a provider serving Responses each went out as
 	// Chat (#997, Xiaomi MiMo)
 	ownAPI := false
-	if relay && searchAsked(from, body) && (from == provider.Chat && !p.IsRemoteMagpie() || !searchesModel(p, from, model)) {
+	// except a subagent's task its lead sealed (#1109): only the server
+	// that sealed it reads it, and a translation would drop it
+	if relay && searchAsked(from, body) && (from == provider.Chat && !p.IsRemoteMagpie() || !searchesModel(p, from, model)) && !(from == provider.Responses && hasSealedAgentMessage(body)) {
 		relay, ownAPI = false, true
 	}
 	// Zen's free models are asked as OpenCode asks them (zenfree.go)
