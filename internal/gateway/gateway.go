@@ -2793,8 +2793,11 @@ func codexClientHeader(k string) bool {
 // written, when the provider serves the model on another of its endpoints
 // but not this one.
 func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.Provider, proto provider.Protocol, model string, body []byte, u *Usage) (status int, msg string, done bool) {
-	body = rewriteModel(body, provider.UpstreamNameIn(wiresOf(r.Context()), p.ID, model))
+	upstream := provider.UpstreamNameIn(wiresOf(r.Context()), p.ID, model)
+	body = rewriteModel(body, upstream)
 	searchFn := false // Codex's tool search sent as a function
+	// a model that wants its reasoning text back (#388, #1104)
+	replay := proto == provider.Responses && (replaysReasoning(model, p.Host()) || replaysReasoning(upstream, p.Host()))
 	switch proto {
 	case provider.Responses:
 		// Responses Lite's tools, as an input item, go as OpenAI takes them
@@ -2807,7 +2810,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			body, searchFn = searchAsFunction(body)
 		}
 		body = forVendor(p, body)
-		if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() || !s.fits(p.ID, bareReasoningRefused(model), proto) {
+		if replay {
+			// its reasoning goes back as text, never left out: DeepSeek
+			// refuses a request without it (#1104)
+			body = withReasoningText(body)
+		} else if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() || !s.fits(p.ID, bareReasoningRefused(model), proto) {
 			// reasoning magpie gave Codex, an id with nothing sealed in
 			// it, which they'd look up and not find (#1008), nor does an
 			// upstream that has turned it away before (#1044)
@@ -2919,8 +2926,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// front of OpenAI turns away as OpenAI does, naming only the
 			// input (#1044): asked once more without it. A DeepSeek
 			// model wants its reasoning back (#388), so it goes to every
-			// other upstream until one refuses it.
-			if nb := withoutBareReasoning(body); !bytes.Equal(nb, body) {
+			// other upstream until one refuses it, and is never asked
+			// without it: that refusal is over something else, and the
+			// mark would leave its reasoning out of every later request
+			// (#1104).
+			if nb := withoutBareReasoning(body); !replay && !bytes.Equal(nb, body) {
 				refused = append(refused, bareReasoningRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
