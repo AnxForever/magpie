@@ -595,6 +595,15 @@ cny (#212): the Usage page's total converts, the row's tooltip carries the
 rate, picking it with the settings list scrolled well down moves nothing,
 and the choice survives a reload — in English and Chinese.
 
+`context-window.test.cjs` opens Usage's Context tab: each agent's score, its
+grade and tags, its sessions counted one or many, the score bars toned by how
+much of them there is; a refresh with the same answer keeps the pane; a
+session opened draws its latest request's window in 400 cells without moving
+the page, a cell hovered names its part and what is largest in it, and the
+Tools tab of the contents lists only tools; nothing scrolls sideways — in
+Chromium and WebKit, in English, Chinese, Japanese and German, at 1100px and
+420px.
+
 `tray-usages.test.cjs` picks several of the Usage page's cards for the menu
 bar in Settings: the menu keeps open as Codex and Claude Code are ticked
 beside Copilot, posts nothing till it closes and then the three once, in the

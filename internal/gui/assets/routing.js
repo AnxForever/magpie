@@ -70,7 +70,9 @@
   const log = el("div", "rt-log");
   const logHead = el("div", "rt-log-head");
   const steps = el("ol", "rt-steps");
-  log.append(logHead, steps);
+  // what the request's prompt held: its context window (context.js)
+  const ctxBox = el("div", "rt-ctx");
+  log.append(logHead, steps, ctxBox);
   const off = el("div", "none rt-off");
   // over the stage while a replay plays: the time it is replaying, which
   // requests are in flight then, and where it is among them
@@ -1273,6 +1275,37 @@
       }
     }
     renderSteps(r);
+    renderCtx(r);
+  }
+  // renderCtx draws the request's context window under its story, with
+  // its session's prompts request by request; drawn again only when what
+  // it shows changes, and its cells come in only for a request newly shown
+  let ctxKey = "", ctxShown = 0, ctxTab = "all";
+  function renderCtx(r) {
+    if (!r.prompt || !window.ctxCard) {
+      if (ctxKey) { ctxKey = ""; ctxBox.replaceChildren(); }
+      return;
+    }
+    const sk = sessionKey(r);
+    const same = (x) => x.prompt && x.agent === r.agent && !x.kind && (sk ? sessionKey(x) === sk : r.conv && x.conv === r.conv);
+    const series = (sk || r.conv) && !r.kind ? listed().filter(same).sort((a, b) => a.id - b.id)
+      .map((x) => ({ id: x.id, tokens: x.prompt.tokens, time: x.time })) : null;
+    if (series && !series.some((x) => x.id === r.id)) series.push({ id: r.id, tokens: r.prompt.tokens, time: r.time });
+    const key = JSON.stringify([document.documentElement.lang, r.id, r.done, r.prompt.tokens, r.prompt.counted, r.prompt.window, r.usage?.length, series?.map((x) => x.id + ":" + x.tokens).join()]);
+    if (key === ctxKey) return;
+    ctxKey = key;
+    const still = ctxShown === r.id;
+    ctxShown = r.id;
+    const sess = groupSession(r) || r.conv || "";
+    ctxBox.replaceChildren(window.ctxCard(r, {
+      still, series, tab: ctxTab,
+      onTab: (id) => { ctxTab = id; },
+      crumbs: [agentName(r.agent), sess && (sess.length > 14 ? sess.slice(0, 12) + "…" : sess), "#" + r.id],
+      onPoint: (pt) => {
+        const x = routes.get(pt.id) || listed().find((y) => y.id === pt.id);
+        if (x) pick(x);
+      },
+    }));
   }
   // logoed puts the provider's logo before the first account, key or
   // provider a line of the story names, so who it is about reads at a

@@ -1634,10 +1634,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		shown = nil // nobody else to stay away from
 	}
 	link := s.titlePrompts.observe(r, body, metadata, call.Kind, start)
-	tr := s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Affinity: shown, Order: pl.order, Left: pl.left})
+	tr := s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Affinity: shown, Order: pl.order, Left: pl.left})
 	if telemetry != nil {
 		telemetry.routeID = tr.ID
 	}
+	promptRead := s.inspectPrompt(tr, from, body)
+	var lastTried provider.Provider // the last try's, for its model's context window
 	var skipped []string
 	sent := ""       // the reasoning the last try's model was asked for
 	where := ""      // the last try's provider.Where, for the usage
@@ -1690,6 +1692,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		call.Provider, call.To, call.Usage = c.p.ID, "", Usage{}
 		model = c.model
+		lastTried = c.p
 		where = c.p.Where()
 		providerKeyID, providerKeyName = "", ""
 		if c.p.Account == nil && c.p.Key != "" {
@@ -2343,6 +2346,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if link != nil && isTitleKind(call.Kind) && call.Status < 400 && call.Error == "" && !call.ResponseTruncated {
 		replyDigest = titleReplyDigest([]byte(call.ResponseBody), replyTitleShape(r.Context()))
 	}
+	prompt, window := promptRead(), 0
+	if prompt != nil && lastTried.ID != "" {
+		window = windowOf(lastTried, model)
+	}
 	s.trace.update(tr, func(t *Route) {
 		t.Done, t.Status, t.Error, t.Millis = true, call.Status, call.Error, call.Millis
 		if t.TitleLink != nil && isTitleKind(t.Kind) && call.Status < 400 && call.Error == "" && !call.ResponseTruncated {
@@ -2355,6 +2362,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		t.Tokens = call.Usage.Input + call.Usage.Output + call.Usage.CacheRead + call.Usage.CacheWrite
 		t.Output, t.Reasoning, t.TTFT, t.FirstText = call.Usage.Output, call.Usage.Reasoning, call.TTFT, call.FirstText
+		if prompt != nil {
+			t.Prompt = prompt.calibrated(promptCounted(t.Usage), window)
+		}
 		if n := len(t.Tries); n > 0 && call.Status < 400 {
 			t.Served, t.Swapped, t.Routed = t.Tries[n-1].Served, t.Tries[n-1].Swapped, t.Tries[n-1].Routed
 			t.Upstream = t.Tries[n-1].Upstream

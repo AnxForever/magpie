@@ -12356,6 +12356,7 @@ async function loadUsage(asked) {
   if (asked) loadQuotas(true);
   if (usageTab === "sessions") return loadSessions();
   if (usageTab === "requests") return loadLedger();
+  if (usageTab === "context") return window.loadContext();
   renderUsageLoading();
   if (!asked) loadQuotas();
   const p = period, read = ++usageRead;
@@ -15751,7 +15752,7 @@ function renderLedger() {
 // The agents' own sessions, read from their session files: what each cost,
 // and the command that picks it up again. A segment of the Usage page.
 
-const USAGE_TABS = [["usage", "Overview"], ["requests", "Requests"], ["sessions", "Sessions"]];
+const USAGE_TABS = [["usage", "Overview"], ["requests", "Requests"], ["sessions", "Sessions"], ["context", "Context"]];
 let usageTab = "usage";
 let quotaFocus = ""; // pending provider/account card requested by the menu bar
 let quotaFocusUntil = 0; // expire before a late quota response can move the reader
@@ -15821,11 +15822,13 @@ function renderUsageTab() {
   }
   slide(seg, "usageTab");
   const on = usageTab === "sessions";
-  $("#period").hidden = on;
+  // the Context tab has its own range, in its pane
+  $("#period").hidden = on || usageTab === "context";
   $("#sessRange").hidden = !on;
   $("#usagePane").hidden = usageTab !== "usage";
   $("#ledgerPane").hidden = usageTab !== "requests";
   $("#sessionsPane").hidden = !on;
+  $("#contextPane").hidden = usageTab !== "context";
 }
 
 const sessDays = () => SESS_RANGES.find(([id]) => id === sessRange)[2];
@@ -20090,6 +20093,8 @@ function refreshUsage(now = false) {
       } else if (usageTab === "requests") {
         // the newest page takes the requests as they come; an older one stays put
         if (ledger && (want || !ledOffset)) await loadLedger(true);
+      } else if (usageTab === "context") {
+        await window.loadContext();
       } else {
         // the reader asking reads the allowances afresh, a Claude account's by
         // running Claude Code's own /usage (the backend runs it at most once in 30s)

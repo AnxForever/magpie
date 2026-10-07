@@ -19,6 +19,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
@@ -429,8 +430,9 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 		seat := Weighed{ID: "codex", Provider: "openai", Name: "OpenAI", Icon: "openai", Who: who, Kind: "account", Agent: "codex", Model: model}
 		link := s.titlePrompts.observe(r, body, metadata, kind, start)
 		captureTitle = link != nil && isTitleKind(kind)
-		tr = s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Provider: "openai",
+		tr = s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Provider: "openai",
 			Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Effort: effort, Start: start}}})
+		promptRead := s.inspectPrompt(tr, provider.Responses, body)
 		end = func(status int, msg string, tokens, out int) {
 			ms := time.Since(start).Milliseconds()
 			ttft, text := first.ms()
@@ -438,6 +440,7 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 			if captureTitle && status < 400 && msg == "" && !titleReply.truncated {
 				replyDigest = titleReplyDigest(titleReply.buf.Bytes(), nil)
 			}
+			prompt := promptRead() // outside the trace's lock, which reading it takes
 			s.trace.update(tr, func(t *Route) {
 				t.Tries[0].Done, t.Tries[0].Status, t.Tries[0].Millis, t.Tries[0].Error = true, status, ms, msg
 				t.Tries[0].TTFT, t.Tries[0].FirstText = ttft, text
@@ -449,6 +452,9 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 				}
 				t.Output, t.Reasoning, t.TTFT, t.FirstText = out, uu.Reasoning, ttft, text
 				t.Usage = routeUsage("openai", model, uu)
+				if prompt != nil {
+					t.Prompt = prompt.calibrated(promptCounted(t.Usage), catalog.ContextOf(model))
+				}
 				t.Tries[0].Served, t.Tries[0].Swapped = served, swapped(model, served)
 				t.Served, t.Swapped = t.Tries[0].Served, t.Tries[0].Swapped
 			})
