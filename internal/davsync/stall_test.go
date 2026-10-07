@@ -115,7 +115,7 @@ func narrowLine(t *testing.T, h http.Handler) (*httptest.Server, *http.Client) {
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c, err := dial(ctx, network, addr)
 		if err == nil {
-			err = c.(*net.TCPConn).SetWriteBuffer(buffer)
+			err = narrow(c, buffer)
 		}
 		return c, err
 	}
@@ -131,9 +131,21 @@ type narrowListener struct {
 func (l narrowListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err == nil {
-		err = c.(*net.TCPConn).SetReadBuffer(l.buffer)
+		err = narrow(c, l.buffer)
 	}
 	return c, err
+}
+
+// narrow keeps both ways of a connection small: the PUT goes up through the
+// client's send buffer and the server's receive buffer, the GET comes down
+// through the other two, and on macOS a download through the tuned-up pair
+// burst as the upload had (run 37693090857: "took nothing for 300ms (GET)").
+func narrow(c net.Conn, buffer int) error {
+	tc := c.(*net.TCPConn)
+	if err := tc.SetReadBuffer(buffer); err != nil {
+		return err
+	}
+	return tc.SetWriteBuffer(buffer)
 }
 
 // A backup that takes far longer than the watchdog to go up and come back
