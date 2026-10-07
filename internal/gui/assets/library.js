@@ -1851,7 +1851,9 @@
     src.append(a);
     who.append(src);
     const have = el("div", "lib-have");
-    for (const id of n.agents) { const ag = agentOf(id); if (ag) { const i = agentIcon(ag.icon); i.title = ag.name; have.append(i); } }
+    // one find without its list of agents doesn't take the page down (#1217)
+    const agents = n.agents || [];
+    for (const id of agents) { const ag = agentOf(id); if (ag) { const i = agentIcon(ag.icon); i.title = ag.name; have.append(i); } }
     const ign = button(t("Ignore"), "", () => change("skills/ignore-new", { names: [n.id] }, t("{name} set aside", { name: n.name })));
     ign.title = t("A check for updates won't offer it again");
     const add = button(t("Add"), "action", async (e, b) => {
@@ -1859,7 +1861,7 @@
       await change("skills/add-new", { names: [n.id] }, t("{name} is in the library now", { name: n.name }));
       b.classList.remove("busy");
     });
-    const names = n.agents.map(nameOf).join(", ");
+    const names = agents.map(nameOf).join(", ");
     add.title = names ? t("Adds it to the library for {agents}, which have its repository's other skills", { agents: names }) : t("Adds it to the library");
     row.append(glyph(GLYPH.skill), who, have, ign, add);
     return row;
@@ -3194,7 +3196,9 @@
       status(e.message, "err", 6000);
     }
     checking = false;
-    render();
+    // drawn after the await, a page that can't be drawn says why, as one
+    // loaded does, not left blank without a word (#1217)
+    try { render(); } catch (e) { status(e.message, "err"); }
   }
 
   // why a skill couldn't be checked: GitHub's rate limit used up said in
