@@ -3767,10 +3767,14 @@
     const d = el("p", "mk-desc" + (x.description ? "" : " wait"), x.description || "");
     d.title = x.description || "";
     const foot = el("div", "mk-foot");
-    const n = el("span", "mk-installs");
-    n.append(svg(GLYPH.down, 11, 1.5), el("span", "", compact(x.installs)));
-    n.title = t("{n} installs", { n: x.installs.toLocaleString() });
-    foot.append(n, el("span", "grow"), addButton(x, () => addSkill(x)));
+    // magpie's own skill has no count until skills.sh lists it
+    if (!x.featured || x.installs) {
+      const n = el("span", "mk-installs");
+      n.append(svg(GLYPH.down, 11, 1.5), el("span", "", compact(x.installs)));
+      n.title = t("{n} installs", { n: x.installs.toLocaleString() });
+      foot.append(n);
+    }
+    foot.append(el("span", "grow"), addButton(x, () => addSkill(x)));
     c.append(top, d, foot);
     c.onclick = () => skillSheet(x);
     c.title = t("About {name}", { name: x.name });
@@ -3793,10 +3797,12 @@
     const who = el("div", "mk-who");
     who.append(el("div", "mk-name big", x.name));
     const meta = el("div", "mk-meta");
-    meta.append(el("span", "mk-pub", x.source), el("span", "mk-badge", t("{n} installs", { n: compact(x.installs) })));
+    meta.append(el("span", "mk-pub", x.source));
+    if (!x.featured || x.installs) meta.append(el("span", "mk-badge", t("{n} installs", { n: compact(x.installs) })));
     if (x.official) meta.append(el("span", "mk-badge", t("Official")));
     who.append(meta);
-    head.append(logo(x.icon, x.source), who, extLink("https://skills.sh/" + x.source + "/" + x.skillId, "skills.sh"));
+    head.append(logo(x.icon, x.source), who);
+    if (!x.featured) head.append(extLink("https://skills.sh/" + x.source + "/" + x.skillId, "skills.sh"));
     ed.append(head);
     const about = el("p", "mk-about", x.description || "…");
     ed.append(about);
