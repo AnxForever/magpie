@@ -2699,7 +2699,7 @@ func (b *subscriptionBridge) mcpCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown or expired Claude run", http.StatusNotFound)
 		return
 	}
-	body, status, err := readBoundedRequestBody(w, r, requestLimits{body: 16 << 20}, nil)
+	body, status, err := readBoundedRequestBody(w, r, requestLimits{body: 16 << 20})
 	if err != nil {
 		http.Error(w, err.Error(), status)
 		return

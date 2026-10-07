@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"cmp"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
@@ -68,7 +66,7 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 	// newer: the backend serves a model only to a client that knows it
 	provider.SawCodexClient(r.Header)
 	rest := strings.TrimPrefix(r.URL.Path, CodexPath)
-	body, ok := s.readRequestBody(w, r, provider.Responses, codexReader, 0)
+	body, ok := s.readRequestBody(w, r, provider.Responses, 0)
 	if !ok {
 		return
 	}
@@ -271,29 +269,6 @@ func hasSealedAgentMessage(body []byte) bool {
 		}
 	}
 	return false
-}
-
-func codexReader(r *http.Request) (io.ReadCloser, error) {
-	var rd io.ReadCloser = io.NopCloser(r.Body)
-	switch enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); enc {
-	case "", "identity":
-	case "zstd":
-		d, err := zstd.NewReader(r.Body, zstd.WithDecoderMaxMemory(defaultBodyLimit))
-		if err != nil {
-			return nil, err
-		}
-		rd = d.IOReadCloser()
-	case "gzip":
-		g, err := gzip.NewReader(r.Body)
-		if err != nil {
-			return nil, err
-		}
-		rd = g
-	default:
-		return nil, fmt.Errorf("magpie can't read a %s body", enc)
-	}
-	r.Header.Del("Content-Encoding")
-	return rd, nil
 }
 
 // compactSigninHeld is the calling key when its accounts (#905) hold a

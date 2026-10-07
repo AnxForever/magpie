@@ -42,7 +42,7 @@ func TestLiveCodexSealedAgentGuidance(t *testing.T) {
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isChild := false
 		if r.Method == http.MethodPost && r.URL.Path == CodexPath+"/responses" {
-			body, ok := s.readRequestBody(w, r, provider.Responses, codexReader, 0)
+			body, ok := s.readRequestBody(w, r, provider.Responses, 0)
 			if !ok {
 				return
 			}

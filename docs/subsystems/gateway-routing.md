@@ -28,7 +28,7 @@ served by a plugin are in [Provider and plugin ownership](provider-plugins.md).
 
 ## Runtime path
 
-1. `handle(proto)` reads the body and the model (`requestBody`, `requestModel`), then calls `serveAgent`. `serveAgent` runs the [middleware](gateway-middleware.md) chain, then `serve`.
+1. `handle(proto)` reads the body and the model (`requestBody`, `requestModel`), then calls `serveAgent`. Every route that reads an agent's body (each API, count_tokens, Gemini's, embeddings, images, videos, System One, the Codex backend path) reads it through `readBoundedRequestBody` in [`request_bounds.go`](../../internal/gateway/request_bounds.go). It decodes a `Content-Encoding` of `gzip` or `zstd` (`decodedBody`; Codex sends zstd to a custom provider's `/v1/responses` too, #1223) and drops the header, so the provider is sent plain JSON. The size limit holds for the decoded bytes (413), and any other encoding is refused 415. `keyLimited` reads a limited key's compressed body the same way, so its reservation is the decoded size. `serveAgent` runs the [middleware](gateway-middleware.md) chain, then `serve`.
 2. `serve` redacts secrets in the request (`redacted`), resolves the model to a provider or a group, and refuses what can't be served. A request whose provider and fallbacks, or whose group's models, all skip redaction (`unredactedRoute`, `provider.SkipsRedaction`: set *Send requests unmasked*, `Unredacted`, with every address on this machine or the local network) goes to them as the agent wrote it; the log and recent calls keep the masked body. count_tokens and embeddings follow the same rule.
    - `DecidesModel` gives a 400.
    - A gateway key held to some models (`keyHolds`, #882) gets a 403 for any other model.
