@@ -303,10 +303,10 @@ func AddNewSkills(ids []string) (*Result, error) {
 		}
 		g.paths = append(g.paths, n.Path)
 	}
-	return change(func(l *Library) error {
+	return installChange(func(l *Library, in *installed) error {
 		for _, from := range order {
 			g := groups[from]
-			if err := installFrom(l, g.p, g.paths, g.agents, false); err != nil {
+			if err := installFrom(l, g.p, g.paths, g.agents, false, in); err != nil {
 				return err
 			}
 		}

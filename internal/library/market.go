@@ -1050,9 +1050,6 @@ func InstallMarketSkill(source, id string, agents []string) (*Result, error) {
 	if i < 0 {
 		return nil, fmt.Errorf("%s has no skill %s any more", source, id)
 	}
-	if p.Candidates[i].Have {
-		return nil, fmt.Errorf("the library already has a skill called %s", p.Candidates[i].Name)
-	}
 	if agents == nil {
 		for _, t := range Targets() {
 			if t.Skills != "" {
@@ -1063,7 +1060,7 @@ func InstallMarketSkill(source, id string, agents []string) (*Result, error) {
 	// the market showed this one skill: the repository's others are
 	// offered as new by a check, beside it
 	path := p.Candidates[i].Path
-	return change(func(l *Library) error { return installFrom(l, p, []string{path}, agents, false) })
+	return installChange(func(l *Library, in *installed) error { return installFrom(l, p, []string{path}, agents, false, in) })
 }
 
 // ---- icons ------------------------------------------------------------------

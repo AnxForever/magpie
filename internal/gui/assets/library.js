@@ -453,6 +453,18 @@
   // agent written that isn't one of them had it taken out (#332).
   function report(res, done, given) {
     if (!res) return;
+    // skills installed together (lc on Discord): those the library had
+    // already, and those left out because another by that name is in the
+    // way, are named, beside how many were installed
+    const had = res.had || [], skipped = res.skipped || [];
+    if (had.length || skipped.length) {
+      const n = res.installed?.length || 0, parts = [];
+      if (n) parts.push(n === 1 ? t("1 skill installed") : t("{n} skills installed", { n }));
+      if (had.length) parts.push(t("already in the library: {names}", { names: had.join(", ") }));
+      for (const p of skipped) parts.push(t("{name} skipped: {error}", { name: p.what.replace(/^skill:/, ""), error: p.error }));
+      status(parts.join(" · "), skipped.length ? "warn" : "ok", skipped.length ? 12000 : 6000);
+      return;
+    }
     if (res.problems?.length) {
       const p = res.problems[0];
       status(t("{agent}: {error}", { agent: tilde(nameOf(p.agent)), error: p.error }) + (res.problems.length > 1 ? " " + t("(and {n} more)", { n: res.problems.length - 1 }) : ""), "warn", 8000);
