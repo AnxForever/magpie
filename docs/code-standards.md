@@ -53,9 +53,9 @@ listed as not run, never left out.
 4. **GUI tests in both engines.** A change to `internal/gui/assets` runs the
    Playwright tests it touches in Chromium and WebKit (`make test-ui`, or
    `BROWSER=webkit node --test …`). The suite must also pass in Chinese,
-   English, and `gui-ja`/`gui-de` (every string has its Japanese and German,
-   with the same placeholders). CI doesn't run this suite, so it is run
-   locally. Run the whole suite, not only the touched page's tests, when a
+   English, and `gui-zh-tw`/`gui-ja`/`gui-de` (every string has its
+   Traditional Chinese, Japanese and German, with the same placeholders).
+   CI doesn't run this suite, so it is run locally. Run the whole suite, not only the touched page's tests, when a
    change adds an API the GUI calls, a selector or class other pages share,
    a CSS feature older WebKit lacks (`:has()`), or a layout breakpoint. On
    10-07, 479865bc, 134d388b, 61838f7c and 51626258 cleared four tests left
