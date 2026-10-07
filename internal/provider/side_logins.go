@@ -42,7 +42,12 @@ func sideLogins(agent, ownUser string, usable func(savedLogin) bool) []sideLogin
 		for i := range ls {
 			if ls[i].Agent == agent && ls[i].own() {
 				found = true
-				changed := false
+				changed, renamed := false, false
+				if agent == "copilot" && copilotRenamed(ls[i].User, ownUser) {
+					// the same account, its host now in its name (#1220):
+					// kept as it was, hidden or not
+					ls[i].User, renamed = ownUser, true
+				}
 				if !strings.EqualFold(ls[i].User, ownUser) {
 					ls[i].User, ls[i].Seen = ownUser, time.Now().UTC().Truncate(time.Second)
 					if agent == "copilot" {
@@ -59,7 +64,7 @@ func sideLogins(agent, ownUser string, usable func(savedLogin) bool) []sideLogin
 						changed = true
 					}
 				}
-				if changed {
+				if changed || renamed {
 					_ = writeLogins(ls)
 				}
 			}

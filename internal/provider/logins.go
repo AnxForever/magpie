@@ -420,11 +420,15 @@ func codexName(ls []savedLogin, l savedLogin) string {
 
 // nameAlike gives each Codex account in ls a name of its own (codexName),
 // the first by a name keeping it: two saved by one name before are told
-// apart from the next write on.
+// apart from the next write on. A Copilot account on an enterprise's host
+// is named with it (copilotSavedName, #1220).
 func nameAlike(ls []savedLogin) []savedLogin {
 	for i := range ls {
 		if ls[i].Agent == "codex" {
 			ls[i].User = codexName(ls[:i], ls[i])
+		}
+		if ls[i].Agent == "copilot" {
+			ls[i].User = copilotSavedName(ls[i])
 		}
 	}
 	return ls

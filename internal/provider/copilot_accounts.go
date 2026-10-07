@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yetone/magpie/internal/appdir"
 )
@@ -26,6 +27,47 @@ func copilotConfigDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config")
+}
+
+// CopilotAccountName is how a Copilot account is known in magpie: its
+// GitHub login on github.com (host ""), "<login>@<name>.ghe.com" on an
+// enterprise's (#1220). One login on two hosts is two accounts, each with
+// its own token, plan and usage, so the name every list, switch, card and
+// routing setting goes by carries the host. A GitHub login never has an @.
+func CopilotAccountName(login, host string) string {
+	if host == "" || login == "" {
+		return login
+	}
+	return login + "@" + host
+}
+
+// copilotSavedName is a saved Copilot account's name as CopilotAccountName
+// gives it. One magpie signed in on an enterprise's host before #1220 was
+// saved under its login alone, its host only in its auth: read, it takes
+// the host into its name, kept under it from its next write. The agent's
+// own (no auth) and one on github.com are as they were.
+func copilotSavedName(l savedLogin) string {
+	if l.own() || strings.Contains(l.User, "@") {
+		return l.User
+	}
+	var a struct {
+		Host string `json:"host"`
+	}
+	if json.Unmarshal(l.Auth, &a) != nil || a.Host == "" {
+		return l.User
+	}
+	if h, err := CopilotHost(a.Host); err != nil || h != a.Host {
+		return l.User // copilotSaved leaves it out anyway
+	}
+	return CopilotAccountName(l.User, a.Host)
+}
+
+// copilotRenamed says the agent's own account, remembered by its login
+// alone before #1220, is the one now named with its enterprise's host:
+// the same account, not a new sign-in.
+func copilotRenamed(was, now string) bool {
+	login, _, ok := strings.Cut(now, "@")
+	return ok && !strings.Contains(was, "@") && strings.EqualFold(login, was)
 }
 
 // copilotSaved is the sign-in of an account magpie keeps.
@@ -73,7 +115,7 @@ func copilotOwnUser(cfg string) string {
 	if !ok {
 		return ""
 	}
-	return firstNonEmpty(own.User, "GitHub")
+	return CopilotAccountName(firstNonEmpty(own.User, "GitHub"), own.Host)
 }
 
 func copilotSide() []sideLogin {
@@ -99,14 +141,16 @@ func forgetCopilotLogin(user string) error {
 }
 
 // addCopilotLogin keeps an account magpie just signed in, on host ("" for
-// github.com).
+// github.com), under its login and host: a same-named account on another
+// host is another account, neither written over nor dropped as the
+// agent's own (#1220).
 func addCopilotLogin(user, plan, token, host string) error {
 	a := map[string]string{"oauth_token": token}
 	if host != "" {
 		a["host"] = host
 	}
 	auth, _ := json.Marshal(a)
-	return addSideLogin(savedLogin{Agent: "copilot", User: user, Plan: plan, Auth: auth}, copilotOwnUser(copilotConfigDir()), func(savedLogin) {})
+	return addSideLogin(savedLogin{Agent: "copilot", User: CopilotAccountName(user, host), Plan: plan, Auth: auth}, copilotOwnUser(copilotConfigDir()), func(savedLogin) {})
 }
 
 // copilotAccount is the Copilot account in use first.
