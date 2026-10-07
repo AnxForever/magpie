@@ -261,3 +261,163 @@ func TestCopilotOwnGHERenamed(t *testing.T) {
 		}
 	}
 }
+
+// oldGHEFiles writes logins.json as magpie kept it before #1220 — mona
+// on a.ghe.com saved under her login alone — and providers.json with
+// settings, data, under that login.
+func oldGHEFiles(t *testing.T, providers string) {
+	t.Helper()
+	home := signIn(t)
+	os.Remove(filepath.Join(home, ".config", "github-copilot", "apps.json"))
+	t.Setenv("COPILOT_HOME", filepath.Join(home, "copilot-home"))
+	renameFailedAt = time.Time{}
+	old := `[
+  {"id": "1111111111111111", "agent": "copilot", "user": "mona", "plan": "Enterprise", "seen": "2026-10-05T10:00:00Z", "on": true,
+   "auth": {"host": "a.ghe.com", "oauth_token": "gho_a"}},
+  {"agent": "copilot", "user": "hubot", "plan": "Pro", "seen": "2026-10-05T10:00:00Z", "on": true,
+   "auth": {"oauth_token": "gho_h"}}
+]`
+	if err := os.MkdirAll(filepath.Dir(loginsPath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loginsPath(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(providers), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func savedCopilotUsers(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(loginsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ls []savedLogin
+	if err := json.Unmarshal(b, &ls); err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, l := range ls {
+		out = append(out, l.User)
+	}
+	return strings.Join(out, " ")
+}
+
+// An enterprise account's proxy, cap, models and concurrency, saved under
+// its login alone before #1220, are its own still once it is named with
+// its host; a github.com account of that login added after has none of
+// them (#1220).
+func TestCopilotRenameKeepsSettings(t *testing.T) {
+	oldGHEFiles(t, `{"providers": [{"id": "copilot",
+  "accountProxies": {"mona": "http://127.0.0.1:9"},
+  "accountCaps": {"mona": 70},
+  "accountModels": {"mona": ["gpt-5"]},
+  "accountConcurrency": {"mona": 2, "hubot": 3}}]}`)
+	hubotID := LoginID("copilot", "hubot")
+	if got := copilotNames(); got != "mona@a.ghe.com* hubot" {
+		t.Fatalf("listed: %s", got)
+	}
+	if got := savedCopilotUsers(t); got != "hubot mona@a.ghe.com" {
+		t.Fatalf("logins.json: %s", got)
+	}
+	if got := ProxyOfLogin("copilot", "mona@a.ghe.com"); got != "http://127.0.0.1:9" {
+		t.Fatalf("proxy: %q", got)
+	}
+	if got := AccountCapOf("copilot", "mona@a.ghe.com"); got != 70 {
+		t.Fatalf("cap: %d", got)
+	}
+	p, _ := storedPicks("copilot")
+	if got := p.AccountModels["mona@a.ghe.com"]; len(got) != 1 || got[0] != "gpt-5" {
+		t.Fatalf("models: %v", p.AccountModels)
+	}
+	if p.AccountConcurrency["mona@a.ghe.com"] != 2 || p.AccountConcurrency["hubot"] != 3 {
+		t.Fatalf("concurrency: %v", p.AccountConcurrency)
+	}
+	if LoginID("copilot", "mona@a.ghe.com") != "1111111111111111" || LoginID("copilot", "hubot") != hubotID {
+		t.Fatal("an account's id changed")
+	}
+	if err := addCopilotLogin("mona", "Pro", "gho_m", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProxyOfLogin("copilot", "mona"); got != "" {
+		t.Fatalf("github.com's mona took the enterprise one's proxy: %q", got)
+	}
+	if got := AccountCapOf("copilot", "mona"); got != 0 {
+		t.Fatalf("github.com's mona took the enterprise one's cap: %d", got)
+	}
+	if got := AccountCapOf("copilot", "mona@a.ghe.com"); got != 70 {
+		t.Fatalf("cap after adding github.com's mona: %d", got)
+	}
+}
+
+// The editors' own enterprise account, renamed with its host, keeps its
+// cap too.
+func TestCopilotOwnGHERenameKeepsSettings(t *testing.T) {
+	home := signIn(t)
+	t.Setenv("COPILOT_HOME", filepath.Join(home, "copilot-home"))
+	renameFailedAt = time.Time{}
+	writeFile(t, filepath.Join(home, ".config", "github-copilot", "apps.json"), map[string]any{
+		"a.ghe.com:Iv1.x": map[string]any{"user": "mona", "oauth_token": "gho_own"},
+	})
+	os.MkdirAll(filepath.Dir(loginsPath()), 0o700)
+	if err := os.WriteFile(loginsPath(), []byte(`[{"id": "3333333333333333", "agent": "copilot", "user": "mona", "seen": "2026-10-05T10:00:00Z", "auth": null}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte(`{"providers": [{"id": "copilot", "accountCaps": {"mona": 60}, "accountProxies": {"mona": "direct"}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := copilotNames(); got != "mona@a.ghe.com*" {
+		t.Fatalf("listed: %s", got)
+	}
+	if AccountCapOf("copilot", "mona@a.ghe.com") != 60 || ProxyOfLogin("copilot", "mona@a.ghe.com") != "direct" {
+		t.Fatalf("settings: cap %d proxy %q", AccountCapOf("copilot", "mona@a.ghe.com"), ProxyOfLogin("copilot", "mona@a.ghe.com"))
+	}
+	if got := savedCopilotUsers(t); got != "mona@a.ghe.com" {
+		t.Fatalf("logins.json: %s", got)
+	}
+}
+
+// A providers.json that can't be read is not one without settings: the
+// account isn't written under its new name, its settings stranded under
+// the old, until they can be moved.
+func TestCopilotRenameWaitsForSettings(t *testing.T) {
+	oldGHEFiles(t, `{"providers": [`)
+	if got := copilotNames(); got != "mona@a.ghe.com* hubot" {
+		t.Fatalf("listed: %s", got)
+	}
+	if got := savedCopilotUsers(t); got != "hubot mona" {
+		t.Fatalf("logins.json renamed without its settings: %s", got)
+	}
+	// an account written meanwhile keeps the old name on disk too
+	if err := addCopilotLogin("octocat", "Pro", "gho_o", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := savedCopilotUsers(t); !strings.Contains(got, "mona ") && !strings.HasSuffix(got, "mona") {
+		t.Fatalf("logins.json renamed without its settings: %s", got)
+	}
+	if b, _ := os.ReadFile(Path()); string(b) != `{"providers": [` {
+		t.Fatalf("providers.json written over: %s", b)
+	}
+	if err := os.WriteFile(Path(), []byte(`{"providers": [{"id": "copilot", "accountProxies": {"mona": "http://127.0.0.1:9"}, "accountCaps": {"mona": 70}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	renameFailedAt = time.Time{}
+	copilotNames()
+	if ProxyOfLogin("copilot", "mona@a.ghe.com") != "http://127.0.0.1:9" || AccountCapOf("copilot", "mona@a.ghe.com") != 70 {
+		t.Fatalf("settings not moved once readable: %+v", load().Providers)
+	}
+	if got := savedCopilotUsers(t); !strings.Contains(got, "mona@a.ghe.com") {
+		t.Fatalf("logins.json: %s", got)
+	}
+}
+
+// A setting the new name has already is the one kept.
+func TestCopilotRenameKeepsNewNamesSetting(t *testing.T) {
+	oldGHEFiles(t, `{"providers": [{"id": "copilot", "accountCaps": {"mona": 70, "mona@a.ghe.com": 40}, "accountProxies": {"mona": "direct"}}]}`)
+	copilotNames()
+	if AccountCapOf("copilot", "mona@a.ghe.com") != 40 || ProxyOfLogin("copilot", "mona@a.ghe.com") != "direct" {
+		t.Fatalf("settings: %+v", load().Providers)
+	}
+}

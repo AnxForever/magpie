@@ -12,10 +12,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
 )
@@ -68,6 +72,119 @@ func copilotSavedName(l savedLogin) string {
 func copilotRenamed(was, now string) bool {
 	login, _, ok := strings.Cut(now, "@")
 	return ok && !strings.Contains(was, "@") && strings.EqualFold(login, was)
+}
+
+// renameTo names l now, remembering the name it was read under (was) so
+// its settings can follow it (renameSettled). Its stable id is pinned
+// first: a stand-in made of the new name would be another account's.
+func (l *savedLogin) renameTo(now string) {
+	if l.ID == "" {
+		l.ID = loginID(*l)
+	}
+	if l.was == "" {
+		l.was = l.User
+	}
+	l.User = now
+}
+
+// renameFailedAt is when the settings of a renamed account last couldn't
+// be moved; renames wait a while after it rather than write logins.json
+// at every listing while providers.json can't be read or written.
+var (
+	renameMu       sync.Mutex
+	renameFailedAt time.Time
+)
+
+func renameDue() bool {
+	renameMu.Lock()
+	defer renameMu.Unlock()
+	return time.Since(renameFailedAt) > time.Minute
+}
+
+// renameSettled is ls as it is written: each account renamed on read
+// (renameTo) under its new name once the per-account settings kept by
+// its old one — proxy, models, cap, concurrency, in providers.json — are
+// moved to the new one (moveAccountSettings), and under its old name
+// still, its settings where they were, when they can't be: a
+// providers.json that can't be read is not one without settings. Before
+// #1220 a bare Copilot login named one account (another of that name
+// wrote over it), so what it kept is that account's. One whose old name
+// another account still bears leaves those settings to it.
+func renameSettled(ls []savedLogin) []savedLogin {
+	moves := map[string]string{}
+	for _, l := range ls {
+		if l.was == "" || slices.ContainsFunc(ls, func(o savedLogin) bool {
+			return o.Agent == l.Agent && o.was == "" && accountKey(o.User) == accountKey(l.was)
+		}) {
+			continue
+		}
+		moves[l.was] = l.User
+	}
+	err := moveAccountSettings("copilot", moves)
+	if err != nil {
+		log.Printf("copilot accounts renamed with their host (#1220): their settings couldn't be moved (%v); kept under their old names for now", err)
+		renameMu.Lock()
+		renameFailedAt = time.Now()
+		renameMu.Unlock()
+	}
+	disk := slices.Clone(ls)
+	for i := range ls {
+		if ls[i].was == "" {
+			continue
+		}
+		if err != nil {
+			disk[i].User = ls[i].was
+			continue
+		}
+		ls[i].was, disk[i].was = "", ""
+	}
+	return disk
+}
+
+// moveAccountSettings moves the per-account settings of the subscription
+// id from each old name in moves to its new one: a setting the new name
+// has already stays, and the old one with it. providers.json is read for
+// the edit, so one that can't be read stops it, and written only when a
+// setting moved.
+func moveAccountSettings(id string, moves map[string]string) error {
+	if len(moves) == 0 {
+		return nil
+	}
+	f, err := read()
+	if err != nil {
+		return err
+	}
+	moved := false
+	for i := range f.Providers {
+		p := &f.Providers[i]
+		if p.ID != id {
+			continue
+		}
+		for was, now := range moves {
+			from, to := accountKey(was), accountKey(now)
+			moved = moveKey(p.AccountProxies, from, to) || moved
+			moved = moveKey(p.AccountModels, from, to) || moved
+			moved = moveKey(p.AccountCaps, from, to) || moved
+			moved = moveKey(p.AccountConcurrency, from, to) || moved
+		}
+	}
+	if !moved {
+		return nil
+	}
+	return store(f)
+}
+
+func moveKey[V any](m map[string]V, from, to string) bool {
+	v, ok := m[from]
+	if !ok || from == to {
+		return false
+	}
+	if _, taken := m[to]; taken {
+		return false
+	}
+	m[to] = v
+	delete(m, from)
+	return true
 }
 
 // copilotSaved is the sign-in of an account magpie keeps.

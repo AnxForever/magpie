@@ -45,8 +45,9 @@ func sideLogins(agent, ownUser string, usable func(savedLogin) bool) []sideLogin
 				changed, renamed := false, false
 				if agent == "copilot" && copilotRenamed(ls[i].User, ownUser) {
 					// the same account, its host now in its name (#1220):
-					// kept as it was, hidden or not
-					ls[i].User, renamed = ownUser, true
+					// kept as it was, hidden or not, its settings with it
+					ls[i].renameTo(ownUser)
+					renamed = renameDue()
 				}
 				if !strings.EqualFold(ls[i].User, ownUser) {
 					ls[i].User, ls[i].Seen = ownUser, time.Now().UTC().Truncate(time.Second)
@@ -75,6 +76,11 @@ func sideLogins(agent, ownUser string, usable func(savedLogin) bool) []sideLogin
 			ls = append(ls, savedLogin{Agent: agent, User: ownUser, Seen: time.Now().UTC().Truncate(time.Second)})
 			_ = writeLogins(ls)
 		}
+	}
+	// a saved account renamed as it was read (nameAlike) is written under
+	// its new name, its settings moved to it, the first time it is listed
+	if agent == "copilot" && renameDue() && slices.ContainsFunc(ls, func(l savedLogin) bool { return l.was != "" }) {
+		_ = writeLogins(slices.Clone(ls)) // sorted there: listed here as added
 	}
 	var out []sideLogin
 	first := -1
