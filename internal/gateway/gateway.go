@@ -3025,6 +3025,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 				u.RequestID = "" // another endpoint answers, with its own id
 				return res.StatusCode, msg, false
 			}
+			msg += wrongAPINote(p, model, res)
 		}
 		if p.Preset == "openrouter" && openRouterSharedPool(b) {
 			markOpenRouterSharedPool(w)
@@ -3728,6 +3729,39 @@ func wrongEndpoint(status int, body []byte) bool {
 	return false
 }
 
+// wrongAPINote goes after an upstream's word that the model isn't served
+// on the API it was asked on (wrongEndpoint), when no other API is left to
+// ask: the URL asked, and the APIs the vendor's list serves the model on
+// that the provider has no URL for, so "Model does not support this
+// protocol" says which protocol, and what to set (#1215).
+func wrongAPINote(p provider.Provider, model string, res *http.Response) string {
+	note := ""
+	if res != nil && res.Request != nil && res.Request.URL != nil {
+		u := *res.Request.URL
+		u.RawQuery, u.User = "", nil
+		note = " (asked at " + u.String()
+	}
+	paths := map[provider.Protocol]string{provider.Chat: "/v1/chat/completions", provider.Responses: "/v1/responses", provider.Anthropic: "/v1/messages"}
+	var missing []string
+	for _, a := range p.APIs(model) {
+		if paths[a] != "" && p.Base(a) == "" {
+			missing = append(missing, paths[a])
+		}
+	}
+	if len(missing) > 0 {
+		if note == "" {
+			note = " ("
+		} else {
+			note += "; "
+		}
+		note += model + " is served on " + strings.Join(missing, " or ") + ", which " + p.Name + " has no URL for"
+	}
+	if note != "" {
+		note += ")"
+	}
+	return note
+}
+
 // translate serves a client API the provider lacks by speaking another
 // one to it. The provider is always streamed; the client gets whichever
 // it asked for.
@@ -3785,6 +3819,9 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	if res.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		msg := p.Explain(p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b)
+		if wrongEndpoint(res.StatusCode, b) {
+			msg += wrongAPINote(p, model, res)
+		}
 		if res.StatusCode == http.StatusTooManyRequests && accountAgent(p) == "antigravity" && antigravityTurnsAway(request.System) {
 			msg += " — " + antigravityTurnedAwayHint
 			markAntigravityTurnsAway(w)

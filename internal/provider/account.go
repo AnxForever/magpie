@@ -160,9 +160,10 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 	}
 	// OpenCode serves some models on OpenAI's Responses API only (Grok,
 	// GPT) or Anthropic's (Claude, MiniMax), and turns the others away:
-	// models.dev says which
+	// models.dev says which, in the list of the gateway its URL is at,
+	// whatever catalog the provider was saved with (#1215)
 	if p.IsOpenCode() {
-		for _, c := range p.Catalogs() {
+		for _, c := range p.openCodeCatalogs() {
 			if a := catalog.APIOf(c, model); a != "" {
 				return []Protocol{Protocol(a)}
 			}
