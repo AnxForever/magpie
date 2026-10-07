@@ -3617,6 +3617,10 @@ const I18N = {
     "credits": "积分",
   },
   "zh-TW": {
+    "Route by what it asks for": "按意圖分流",
+    "It can pick the model too: add a rule with an intent": "它也能挑模型：新增一條帶意圖的規則",
+    "already in the library: {names}": "資源庫裡已有：{names}",
+    "{name} skipped: {error}": "已略過 {name}：{error}",
     "No installed fonts found": "未找到已安裝字型",
     "Interface font": "介面字型",
     "Code font": "程式碼字型",
