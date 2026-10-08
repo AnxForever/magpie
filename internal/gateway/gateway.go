@@ -501,10 +501,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /responses", s.handle(provider.Responses))
 	mux.HandleFunc("GET /v1/responses", responsesOverHTTP)
 	mux.HandleFunc("GET /responses", responsesOverHTTP)
-	mux.HandleFunc("POST /v1/messages", s.handle(provider.Anthropic))
-	mux.HandleFunc("POST /messages", s.handle(provider.Anthropic))
+	mux.HandleFunc("POST /v1/messages", keepsSignIn(s.handle(provider.Anthropic)))
+	mux.HandleFunc("POST /messages", keepsSignIn(s.handle(provider.Anthropic)))
 	mux.HandleFunc("POST /v1/systemone", s.serveSystemOne)
-	mux.HandleFunc("POST /v1/messages/count_tokens", s.countTokens)
+	mux.HandleFunc("POST /v1/messages/count_tokens", keepsSignIn(s.countTokens))
 	mux.HandleFunc("POST /v1/images/generations", s.images(false))
 	mux.HandleFunc("POST /images/generations", s.images(false))
 	mux.HandleFunc("POST /v1/images/edits", s.images(true))
@@ -2682,7 +2682,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 				}
 			}
 		}
-		asked := in.Values("anthropic-beta")
+		asked := askedBetas(in)
 		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
 			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
 		}
