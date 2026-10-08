@@ -1017,6 +1017,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.CodexAgentsV1 = cur.CodexAgentsV1
 		in.FullContext = cur.FullContext // set on its own (full-context below)
 		in.CompactAt = cur.CompactAt     // and so is the threshold
+		// Claude Desktop's list, set in its row on the Agents page
+		in.DesktopLongest = cur.DesktopLongest
 
 		in.CodexTitles = cur.CodexTitles // set on its own (codex-titles below)
 		// and so is the model Codex's auto-review runs on (codex-auto-review)
@@ -1163,6 +1165,22 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		if err := provider.SetCodexAgentsV1(in.On); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// whether Claude Desktop lists a model of 1M or more once, by its 1M id
+	// (settings.DesktopLongest, #1272): it reads the list as it starts
+	mux.HandleFunc("POST /api/settings/desktop-longest", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ On bool }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		s.DesktopLongest = in.On
+		if err := settings.Save(s); err != nil {
 			fail(rw, err)
 			return
 		}
