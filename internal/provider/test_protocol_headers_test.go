@@ -45,6 +45,7 @@ func TestProviderProbesUseProtocolHeaders(t *testing.T) {
 				results = p.TestModels(ctx, []string{"gpt-6-sol"})
 				want = 1
 			case "detect":
+				want = len(detectProtocols) // Gemini's too, without anthropic-version
 				detected, err := p.Detect(ctx, srv.URL, "gpt-6-sol")
 				if err != nil {
 					t.Fatal(err)
@@ -53,6 +54,7 @@ func TestProviderProbesUseProtocolHeaders(t *testing.T) {
 					results = append(results, d.Result)
 				}
 			case "detect-models":
+				want = len(detectProtocols)
 				models, _, err := p.DetectModels(ctx, srv.URL, []string{"gpt-6-sol"})
 				if err != nil {
 					t.Fatal(err)

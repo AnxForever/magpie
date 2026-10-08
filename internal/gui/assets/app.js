@@ -7821,7 +7821,6 @@ function drawEditor(p, presetID) {
   // the Redaction row, shown while every address is on this computer or
   // the local network
   let showLocal = () => {};
-  let showDetect = () => {};
   if (custom) {
     name = input(draft.name, t("e.g. My Relay"));
     name.oninput = () => { draft.name = name.value; if (isNew) draft.id = slug(name.value); };
@@ -7865,7 +7864,6 @@ function drawEditor(p, presetID) {
       slide(seg, "api");
       url.placeholder = urlHint(v);
       fillEndpoints();
-      showDetect();
       showSearch();
       showLocal();
     };
@@ -7892,12 +7890,8 @@ function drawEditor(p, presetID) {
       showApi(v || draft.api);
       draft.onModelPrefs?.(); // the APIs a model can be given follow the URLs
     };
-    // Detect asks the three OpenAI and Anthropic APIs, which a Gemini
-    // API's URL has none of
-    const detect = detectAPIs(p, () => url.value, useDetected);
-    urlWrap.append(detect);
-    showDetect = () => { detect.hidden = draft.api === "gemini"; };
-    showDetect();
+    // Detect asks OpenAI's, Anthropic's and Gemini's APIs (#1346)
+    urlWrap.append(detectAPIs(p, () => url.value, useDetected));
     ed.append(...field("Base URL", urlWrap));
   }
 
@@ -9037,7 +9031,7 @@ function detectAPIs(p, base, use) {
   const box = el("div", "detect");
   const row = el("div", "detect-row");
   const go = el("button", "text action", t("Detect APIs"));
-  go.title = t("Send the smallest request to each API (OpenAI chat completions, Responses, Anthropic messages) at this URL, to see which answer");
+  go.title = t("Send the smallest request to each API (OpenAI chat completions, Responses, Anthropic messages, Gemini generateContent) at this URL, to see which answer");
   const each = el("button", "text action detect-each", t("Each picked model"));
   each.title = t("Ask every model picked below on each API, to see which API serves which model (up to {n}, a few at a time)", { n: DETECT_MAX });
   const model = input(draft.detectModel || "", t("model to try · empty picks one from the vendor's list"));
@@ -9067,7 +9061,7 @@ function detectAPIs(p, base, use) {
   };
   const ask = async (btn, extra) => {
     const typedBase = (base() || "").trim();
-    if (!typedBase && !(draft.chat || draft.responses || draft.anthropic || "").trim()) { status(t("Type the base URL first"), "warn"); return null; }
+    if (!typedBase && !(draft.chat || draft.responses || draft.anthropic || draft.gemini || "").trim()) { status(t("Type the base URL first"), "warn"); return null; }
     btn.classList.add("busy");
     out.hidden = false;
     out.replaceChildren(el("span", "hint", t("Asking each API…")));
@@ -9075,7 +9069,7 @@ function detectAPIs(p, base, use) {
       // the URL typed is asked as each API takes it, not as the field
       // holding it would send it; URLs given under More endpoints as they are
       const body = { ...asTyped(), id: p?.id, base: typedBase, ...extra };
-      for (const k of ["chat", "responses", "anthropic"]) if (body[k] === typedBase) body[k] = "";
+      for (const k of ["chat", "responses", "anthropic", "gemini"]) if (body[k] === typedBase) body[k] = "";
       const r = await api("provider/detect", body);
       out.replaceChildren();
       return r;
