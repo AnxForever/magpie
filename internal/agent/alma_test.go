@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -421,6 +422,65 @@ func TestAlmaLook(t *testing.T) {
 	almaSettingsSeen()
 	if gets != 3 {
 		t.Fatalf("a look after a change must ask Alma again: %d", gets)
+	}
+}
+
+// alma-server, Alma without a desktop, keeps its data in
+// ~/.local/share/alma on Linux (its README; $XDG_DATA_HOME/alma, or
+// ALMA_DATA_DIR) and answers on Alma's port: magpie finds it there, and its
+// magpie provider gets Alma's key on the next Sync, so its requests read as
+// Alma's rather than the AI SDK's (Lutra.x on Discord). A Mac's Alma is
+// looked for where it was.
+func TestAlmaServerKeyed(t *testing.T) {
+	home := syncHome(t)
+	t.Setenv("ALMA_DATA_DIR", "")
+	t.Setenv("XDG_DATA_HOME", "")
+	old := almaOS
+	t.Cleanup(func() { almaOS = old })
+	almaOS = "linux"
+	data := filepath.Join(home, ".local", "share", "alma")
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := startAlma(t)
+	f.providers = append(f.providers, map[string]any{"id": "mg", "name": "magpie", "type": "openai", "baseURL": gatewayV1(),
+		"enabled": true, "apiKey": "magpie", "models": []any{}, "availableModels": []any{}})
+	a := alma()
+	if a.Dir != data {
+		t.Fatalf("Alma's folder: %q, want alma-server's %q", a.Dir, data)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.provider("mg"); p["apiKey"] != "magpie-alma" {
+		t.Fatalf("alma-server's magpie provider after Sync: %v", p)
+	}
+
+	// $XDG_DATA_HOME and ALMA_DATA_DIR, as alma-server reads them
+	xdg := filepath.Join(home, "xdg")
+	os.MkdirAll(filepath.Join(xdg, "alma"), 0o755)
+	t.Setenv("XDG_DATA_HOME", xdg)
+	if d := almaDir("linux"); d != filepath.Join(xdg, "alma") {
+		t.Fatalf("with XDG_DATA_HOME: %q", d)
+	}
+	own := filepath.Join(home, "alma-data")
+	os.MkdirAll(own, 0o755)
+	t.Setenv("ALMA_DATA_DIR", own)
+	if d := almaDir("linux"); d != own {
+		t.Fatalf("with ALMA_DATA_DIR: %q", d)
+	}
+	// the desktop's folder first, and only it on a Mac or Windows
+	cfg, _ := os.UserConfigDir()
+	desk := filepath.Join(cfg, "alma")
+	os.MkdirAll(desk, 0o755)
+	if d := almaDir("linux"); d != desk {
+		t.Fatalf("with the desktop's folder too: %q", d)
+	}
+	os.RemoveAll(desk)
+	for _, goos := range []string{"darwin", "windows"} {
+		if d := almaDir(goos); d != desk {
+			t.Fatalf("%s: %q, want only the desktop's %q", goos, d, desk)
+		}
 	}
 }
 

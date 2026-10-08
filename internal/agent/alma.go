@@ -25,12 +25,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
 )
@@ -557,13 +559,45 @@ func almaOwn() []Option {
 	return out
 }
 
-func alma() *Agent {
-	// where Alma keeps its data (~/Library/Application Support/alma on a
-	// Mac): there once Alma was installed and opened
-	dir := ""
+// almaDir is where Alma keeps its data, there once Alma was installed and
+// opened: ~/Library/Application Support/alma on a Mac, the user config
+// folder elsewhere. On Linux alma-server, Alma without a desktop, keeps it
+// in ALMA_DATA_DIR, else $XDG_DATA_HOME/alma (~/.local/share/alma), and
+// answers on the same port: with only the desktop's folder looked for it
+// was never found, so its magpie provider never got Alma's key and its
+// requests read as the AI SDK's (Lutra.x on Discord). The desktop's folder
+// comes first; "" when neither is there.
+func almaDir(goos string) string {
+	var dirs []string
 	if d, err := os.UserConfigDir(); err == nil {
-		dir = filepath.Join(d, "alma")
+		dirs = append(dirs, filepath.Join(d, "alma"))
 	}
+	if goos != "darwin" && goos != "windows" {
+		if d := appdir.Getenv("ALMA_DATA_DIR"); d != "" {
+			dirs = append(dirs, d)
+		}
+		if d := appdir.Getenv("XDG_DATA_HOME"); d != "" {
+			dirs = append(dirs, filepath.Join(d, "alma"))
+		} else if h, err := os.UserHomeDir(); err == nil {
+			dirs = append(dirs, filepath.Join(h, ".local", "share", "alma"))
+		}
+	}
+	for _, d := range dirs {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			return d
+		}
+	}
+	if len(dirs) > 0 {
+		return dirs[0]
+	}
+	return ""
+}
+
+// almaOS is the system almaDir looks for Alma's data on; a test sets it.
+var almaOS = runtime.GOOS
+
+func alma() *Agent {
+	dir := almaDir(almaOS)
 	return &Agent{
 		ID: "alma", Name: "Alma", Icon: "alma",
 		UA:  []string{"alma"},
