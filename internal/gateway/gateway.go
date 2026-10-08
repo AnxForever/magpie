@@ -2942,6 +2942,11 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if dropImage && !s.fits(p.ID, imageToolRefused, proto) {
 		body, _ = withoutImageTool(body)
 	}
+	// a tool with a union at its parameters' root, to an upstream that
+	// takes none (object_root.go, #1271)
+	if s.foldsRoots(p, model, proto) {
+		body, _ = objectRootsBody(proto, body)
+	}
 	// a Grok subscription is given Codex's namespaced functions flat
 	// (grokBody), and Zed's plugin likewise (ZedBody); a call to one goes
 	// back under its namespace (#404)
@@ -2967,6 +2972,18 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		var ms []string
 		if proto == provider.Chat {
 			ms = refusedInMessages(res.StatusCode, b, body)
+		}
+		if len(fs) == 0 && len(ms) == 0 && rootUnionRefusal.Match(b) {
+			// a tool's parameters refused for a union at their root
+			// (#1271): asked once more with them folded to an object
+			if nb, changed := objectRootsBody(proto, body); changed {
+				refused = append(refused, rootUnionRefused(model))
+				body = nb
+				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+				}
+				continue
+			}
 		}
 		if len(fs) == 0 && len(ms) == 0 && proto == provider.Responses && refusesInput(res.StatusCode, b) {
 			// and reasoning with nothing sealed in it, which a relay in
@@ -3350,6 +3367,10 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		if mayDropImageTool(p) && !s.fits(p.ID, imageToolRefused, to) {
 			req, _ = withoutImageToolReq(req)
 		}
+		// Anthropic's Messages are folded as they're built (objectSchema)
+		if to != provider.Anthropic && s.foldsRoots(p, model, to) {
+			req, _ = objectRootsReq(req)
+		}
 		// only a provider that searches by itself is asked to
 		if want := web && searchesFor(p, to, model, req); want != req.WebSearch {
 			r := *req
@@ -3442,6 +3463,15 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			// before, with reasoning_effort, and not sent them again
 			s.markUnfit(p.ID, thinkingConfigField, to)
 			continue
+		}
+		if badRequest(res.StatusCode) && rootUnionRefusal.Match(b) && s.fits(p.ID, rootUnionRefused(model), to) {
+			if _, changed := objectRootsReq(req); changed {
+				// a tool's parameters refused for a union at their root
+				// (#1271): asked again with them folded to an object, and
+				// so from then on
+				s.markUnfit(p.ID, rootUnionRefused(model), to)
+				continue
+			}
 		}
 		if req.Format != nil && refusesFormat(res.StatusCode, b) {
 			// structured output turned away by the model or the relay in
