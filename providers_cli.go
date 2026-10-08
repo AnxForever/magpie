@@ -261,8 +261,48 @@ func models(args []string) error {
 	if agentID != "" {
 		explainHidden(agentID, hidden)
 	}
+	// the models a provider's list has that it doesn't expose, which a
+	// group naming one finds "not served" (MOMO on Discord: 35 of 37)
+	for _, p := range provider.All() {
+		if !p.On() || p.Unlisted {
+			continue
+		}
+		if ids, why := notExposed(p); len(ids) > 0 {
+			fmt.Println(faint.Render("  "+p.Name+": "+plural(len(ids), "more model")+" in its list, not exposed ("+why+"): ") + muted.Render(listSome(ids, 6)))
+			fmt.Println(faint.Render("    magpie provider models " + p.ID + " +<model> exposes one"))
+		}
+	}
 	fmt.Println(faint.Render("  " + advertisedURL() + "/v1"))
 	return bad
+}
+
+// notExposed are the models p's list has that it doesn't expose, and why:
+// the user picked others, or no picks and the list is longer than magpie
+// exposes by default.
+func notExposed(p provider.Provider) ([]string, string) {
+	shown := map[string]bool{}
+	for _, m := range p.Exposed() {
+		shown[m.ID] = true
+	}
+	var out []string
+	for _, m := range p.Available() {
+		if !shown[m.ID] {
+			out = append(out, m.ID)
+		}
+	}
+	why := "not picked"
+	if len(p.Models) == 0 {
+		why = fmt.Sprintf("none picked, so only the first %d", len(shown))
+	}
+	return out, why
+}
+
+// listSome is ids joined, the first n of them and how many more.
+func listSome(ids []string, n int) string {
+	if len(ids) > n {
+		return strings.Join(ids[:n], ", ") + fmt.Sprintf(" … %d more", len(ids)-n)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // providerCmd: `magpie provider <verb> …`
@@ -678,6 +718,9 @@ func showProvider(p provider.Provider) error {
 		src = fetchedFrom(p) + " · fetched " + ago(t)
 	}
 	kv("models", fmt.Sprintf("%d exposed of %d %s", len(ms), len(p.Available()), muted.Render("from "+src)))
+	if ids, why := notExposed(p); len(ids) > 0 {
+		kv("not shown", fmt.Sprintf("%s %s", listSome(ids, 8), muted.Render("· "+why+" · magpie provider models "+p.ID+" +<model> exposes one")))
+	}
 	names := p.ModelNames()
 	for i, m := range ms {
 		if i == 12 {

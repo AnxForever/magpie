@@ -81,3 +81,76 @@ func TestProviderModelsAddsRemovesAndSaysWhatItReplaced(t *testing.T) {
 		t.Fatalf("all left %v, %v", picks(), err)
 	}
 }
+
+// magpie models and magpie provider <id> name the models a provider's list
+// has that it doesn't expose, and why, so a group naming one ("no member
+// ready (not served)") can be put right (MOMO on Discord: 35 exposed of 37,
+// opencode-go/deepseek-flash not in magpie models).
+func TestModelsSayWhatIsNotExposed(t *testing.T) {
+	groupsHome(t)
+	catalog.Changed = nil
+	if err := provider.Save(provider.Provider{ID: "og", Name: "OG", Key: "k", Chat: "http://127.0.0.1:1/v1",
+		Models: []string{"m1", "m2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(catalog.LivePath("og")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.LivePath("og"), []byte(`{"models":[{"id":"m1"},{"id":"m2"},{"id":"deepseek-flash"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	for name, f := range map[string]func() error{
+		"models":   func() error { return models(nil) },
+		"provider": func() error { return providerCmd([]string{"provider", "og"}) },
+	} {
+		out, err := stdoutOf(t, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "deepseek-flash") || !strings.Contains(out, "not picked") || !strings.Contains(out, "magpie provider models og +<model>") {
+			t.Errorf("%s said %q; want deepseek-flash named as not picked, and how to expose it", name, out)
+		}
+	}
+	// with nothing left out, nothing is said
+	if err := provider.Save(provider.Provider{ID: "og", Name: "OG", Key: "k", Chat: "http://127.0.0.1:1/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := stdoutOf(t, func() error { return models(nil) }); strings.Contains(out, "not exposed") {
+		t.Errorf("with every model exposed, models said %q", out)
+	}
+}
+
+// A group's member its provider lists but doesn't expose says so, and how
+// to expose it, in magpie groups and magpie group show <id>.
+func TestGroupMemberNotExposedSaysHow(t *testing.T) {
+	groupsHome(t)
+	catalog.Changed = nil
+	if err := provider.Save(provider.Provider{ID: "og", Name: "OG", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"m1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(catalog.LivePath("og")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.LivePath("og"), []byte(`{"models":[{"id":"m1"},{"id":"deepseek-flash"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	if err := provider.SaveGroup(provider.Group{ID: "flash", Name: "Flash", Members: []string{"og/deepseek-flash"}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, f := range map[string]func() error{
+		"groups":      groups,
+		"group flash": func() error { return groupCmd([]string{"group", "show", "flash"}) },
+	} {
+		out, err := stdoutOf(t, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "not exposed · magpie provider models og +deepseek-flash") {
+			t.Errorf("%s said %q; want how to expose og/deepseek-flash", name, out)
+		}
+	}
+}
