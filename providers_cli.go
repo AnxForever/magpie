@@ -34,7 +34,8 @@ const providerUsage = `usage:
   magpie provider key <id> <key>          change the API key
   magpie provider icon <id> <file|name>   give a custom provider a picture (PNG, JPEG, SVG…) or a built-in icon
   magpie provider fallback <id> <provider/model>…   where requests go when it's out of quota or down (none clears)
-  magpie provider models <id> [ids…]      fetch the vendor's model list, or choose which models to expose
+  magpie provider models <id> [ids…]      fetch the vendor's model list, or choose which models to expose:
+                                          ids… replace the list, +id adds one, -id takes one out, all: the default
   magpie provider refresh <id>            fetch the vendor's model list again (as the app's Refresh)
   magpie provider account-models <id> [account|key [ids…|all]]
                                           the models one account or key alone serves; all: every model the provider has
@@ -285,6 +286,7 @@ func providerCmd(args []string) error {
 		// id= renames it: the rest is saved under the id it has, then the
 		// groups and agents on its models move to the new one
 		from := p.ID
+		before := *p
 		if err := applyPairs(p, rest[1:]); err != nil {
 			return err
 		}
@@ -304,6 +306,10 @@ func providerCmd(args []string) error {
 			}
 		}
 		fmt.Println(green.Render("✓"), "saved", p.Name, muted.Render("("+p.ID+")"))
+		if !slices.Equal(before.Models, p.Models) {
+			// models= replaces the picks, as provider models does
+			printPicksChange(before, *p, nil)
+		}
 		return nil
 	case "key":
 		if len(rest) != 2 {
@@ -487,13 +493,16 @@ func providerCmd(args []string) error {
 			return fmt.Errorf("magpie provider %s <id> fetches its list · magpie provider models <id> <ids…> picks from it", verb)
 		}
 		if len(rest) > 1 {
-			p.Models = rest[1:]
-			if len(rest) == 2 && (rest[1] == "-" || rest[1] == "all") {
-				p.Models = nil
+			before := *p
+			picks, err := editPicks(*p, rest[1:])
+			if err != nil {
+				return err
 			}
+			p.Models = picks
 			if err := provider.Save(*p); err != nil {
 				return err
 			}
+			printPicksChange(before, *p, rest[1:])
 			return showProvider(*p)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1230,5 +1239,111 @@ func printMoved(moved []agent.Move) {
 			continue
 		}
 		fmt.Println(green.Render("✓"), "moved", m.String())
+	}
+}
+
+// editPicks works out a provider's picks from `magpie provider models <id>
+// args…`: plain ids replace them, all (or -) gives the default back, and
+// +id / -id add one to or take one out of the models exposed now, so a
+// user adding a model keeps the rest (MOMO on Discord: 35 exposed → 8).
+func editPicks(p provider.Provider, args []string) ([]string, error) {
+	if len(args) == 1 && (args[0] == "-" || args[0] == "all") {
+		return nil, nil
+	}
+	edits := 0
+	for _, a := range args {
+		if len(a) > 1 && (a[0] == '+' || a[0] == '-') {
+			edits++
+		}
+	}
+	if edits == 0 {
+		return slices.Clone(args), nil
+	}
+	if edits != len(args) {
+		return nil, fmt.Errorf("give either the whole list (magpie provider models %s a b c) or only changes (+a -b), not both", p.ID)
+	}
+	picks := slices.Clone(p.Models)
+	if len(picks) == 0 {
+		// no picks yet: the change is to the models exposed by default
+		for _, m := range p.Exposed() {
+			picks = append(picks, m.ID)
+		}
+	}
+	for _, a := range args {
+		id := strings.TrimPrefix(a[1:], p.ID+"/")
+		if a[0] == '+' {
+			if !slices.Contains(picks, id) {
+				picks = append(picks, id)
+			}
+			continue
+		}
+		i := slices.Index(picks, id)
+		if i < 0 {
+			return nil, fmt.Errorf("%s/%s isn't exposed, so there is nothing to take out", p.ID, id)
+		}
+		picks = slices.Delete(picks, i, i+1)
+	}
+	if len(picks) == 0 {
+		// no picks means the default list, not none
+		return nil, fmt.Errorf("that leaves no model exposed · to keep %s's models out of the list: magpie provider listed %s no", p.Name, p.ID)
+	}
+	return picks, nil
+}
+
+// printPicksChange says what a change to a provider's picks did: how many
+// models were exposed before and after, and which went or came. A list
+// that replaced the old one says so, and how to add one instead.
+func printPicksChange(before, after provider.Provider, args []string) {
+	ids := func(p provider.Provider) []string {
+		var out []string
+		for _, m := range p.Exposed() {
+			out = append(out, m.ID)
+		}
+		return out
+	}
+	was, now := ids(before), ids(after)
+	var gone, added []string
+	for _, id := range was {
+		if !slices.Contains(now, id) {
+			gone = append(gone, id)
+		}
+	}
+	for _, id := range now {
+		if !slices.Contains(was, id) {
+			added = append(added, id)
+		}
+	}
+	replaced := len(args) > 0 && !strings.HasPrefix(args[0], "+") && !(len(args[0]) > 1 && args[0][0] == '-')
+	if len(args) == 0 {
+		replaced = true // provider set models=
+	}
+	what := "exposed models"
+	if replaced && len(after.Models) > 0 {
+		what = "exposed models replaced"
+	}
+	fmt.Println(green.Render("✓"), what+":", len(was), "→", len(now))
+	list := func(ms []string) string {
+		if len(ms) > 8 {
+			return strings.Join(ms[:8], ", ") + fmt.Sprintf(" … %d more", len(ms)-8)
+		}
+		return strings.Join(ms, ", ")
+	}
+	if len(added) > 0 {
+		fmt.Println(" ", green.Render("+"), list(added))
+	}
+	if len(gone) > 0 {
+		fmt.Println(" ", amber.Render("-"), list(gone))
+	}
+	if replaced && len(gone) > 0 && len(after.Models) > 0 {
+		fmt.Println(muted.Render("  the ids given are now the whole list · to add one and keep the rest: magpie provider models " + after.ID + " +<model>"))
+	}
+	avail := map[string]bool{}
+	for _, m := range after.Available() {
+		avail[m.ID] = true
+	}
+	for _, id := range added {
+		if len(avail) > 0 && !avail[id] {
+			fmt.Println(" ", amber.Render("!"), after.ID+"/"+id, muted.Render("isn't in "+after.Name+"'s list; exposed as given"))
+		}
 	}
 }
