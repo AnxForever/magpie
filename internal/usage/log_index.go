@@ -5,7 +5,11 @@ package usage
 // Readers decode only blocks which can overlap their time window.
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding"
 	"encoding/json"
+	"fmt"
+	"hash"
 	"io"
 	"maps"
 	"os"
@@ -29,7 +33,8 @@ type logSnapshot struct {
 	path         string
 	info         os.FileInfo
 	off          int64
-	hash         string
+	hash         string // SHA-256 of the log's first off bytes, the ones parsed
+	digest       []byte // the hash's running state, which the next parse continues
 	version      uint64
 	blocks       []*rowChunk
 	first        time.Time
@@ -67,7 +72,7 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	unchanged := old != nil && old.path == path && (err != nil && old.info == nil || err == nil && sameLogInfo(old.info, info))
 	if unchanged && info != nil {
 		if logChangeStamp(info) == "" || !old.settled {
-			unchanged = old.hash != "" && logRecordHash(path, info.Size()) == old.hash
+			unchanged = old.hash != "" && logRecordHash(path, old.off) == old.hash
 			if unchanged && settled {
 				promoted := *old
 				promoted.info, promoted.settled = info, true
@@ -94,8 +99,11 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	notePath, noteBase, noteLast := logAppends.path, logAppends.base, logAppends.last
 	logAppends.Unlock()
 	trusted := old != nil && old.settled && logChangeStamp(info) != "" && notePath == path && sameLogInfo(oldInfo(old), noteBase) && sameLogInfo(info, noteLast)
-	continued := old != nil && old.path == path && old.info != nil && sameLogFile(old.info, info) && info.Size() > old.info.Size() && (trusted || old.hash != "" && logRecordHash(path, old.info.Size()) == old.hash)
-	if continued && !old.uncached {
+	continued := old != nil && old.path == path && old.info != nil && sameLogFile(old.info, info) && info.Size() > old.info.Size() && (trusted || old.hash != "" && logRecordHash(path, old.off) == old.hash)
+	// The parse is the fingerprint: it hashes the lines it reads, continuing
+	// the old snapshot's hash when it continues its blocks.
+	sum := sha256.New()
+	if continued && !old.uncached && resumeLogHash(sum, old.digest) {
 		next.off, next.first = old.off, old.first
 		next.blocks = slices.Clone(old.blocks)
 		next.keyProviders = maps.Clone(old.keyProviders)
@@ -107,9 +115,6 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	defer f.Close()
 	if _, err = f.Seek(next.off, 0); err != nil {
 		return next
-	}
-	if !trusted || !settled {
-		next.hash = logRecordHash(path, info.Size())
 	}
 	var tail *rowChunk
 	if n := len(next.blocks); n > 0 && next.blocks[n-1].Count < logBlockRows {
@@ -123,6 +128,7 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 			break
 		} // a partial final line is read again after it completes
 		next.off += int64(len(b))
+		sum.Write(b)
 		var r Record
 		if json.Unmarshal(b, &r) != nil {
 			continue
@@ -145,9 +151,10 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	if tail != nil {
 		next.blocks = append(next.blocks, tail.freeze())
 	}
+	next.hash, next.digest = fmt.Sprintf("%x", sum.Sum(nil)), marshalLogHash(sum)
 	// A rewrite during the read must not give old blocks the new content's hash.
-	if (!trusted || !settled) && next.hash != logRecordHash(path, info.Size()) {
-		next.hash = ""
+	if (!trusted || !settled) && next.hash != logRecordHash(path, next.off) {
+		next.hash, next.digest = "", nil
 		next.settled = false
 	}
 	logAppends.Lock()
@@ -210,6 +217,27 @@ func (c *rowChunk) freeze() *rowChunk {
 		c.Bytes -= int64(32 * len(c.Strings))
 	}
 	return c.pack()
+}
+
+func resumeLogHash(h hash.Hash, state []byte) bool {
+	u, ok := h.(encoding.BinaryUnmarshaler)
+	if !ok || state == nil || u.UnmarshalBinary(state) != nil {
+		h.Reset()
+		return false
+	}
+	return true
+}
+
+func marshalLogHash(h hash.Hash) []byte {
+	m, ok := h.(encoding.BinaryMarshaler)
+	if !ok {
+		return nil
+	}
+	state, err := m.MarshalBinary()
+	if err != nil {
+		return nil
+	}
+	return state
 }
 
 func oldInfo(s *logSnapshot) os.FileInfo {

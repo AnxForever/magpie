@@ -125,9 +125,12 @@ func holdLogTick(t *testing.T, tick time.Time) {
 	t.Cleanup(func() { logChangeTime, logIndexNow = changeTime, now })
 }
 
+// The parse is the fingerprint (#1357), so a rewrite can land before the read
+// (after the stat that decided to read) or between the read and the
+// after-read fingerprint check. Neither may leave the old bytes cached.
 func TestUsageRewriteBeforeFingerprintIsNotCached(t *testing.T) {
-	for _, rewriteAt := range []int{1, 2} {
-		t.Run(fmt.Sprint("hash=", rewriteAt), func(t *testing.T) {
+	for _, rewriteAt := range []string{"before-read", "after-read"} {
+		t.Run(rewriteAt, func(t *testing.T) {
 			pageHome(t)
 			now := holdClock(t, time.Now())
 			tick := time.Now().Truncate(time.Second)
@@ -146,23 +149,34 @@ func TestUsageRewriteBeforeFingerprintIsNotCached(t *testing.T) {
 			if bytes.Equal(edited, data) || len(edited) != len(data) {
 				t.Fatal("fixture must change at the same size")
 			}
-			hash := logRecordHash
-			hashCalls := 0
 			rewritten := false
-			logRecordHash = func(path string, n int64) string {
-				hashCalls++
-				if hashCalls == rewriteAt {
-					rewritten = true
-					if err := os.WriteFile(path, edited, 0600); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
-						t.Fatal(err)
-					}
+			rewrite := func(path string) {
+				if rewritten {
+					return
 				}
-				return hash(path, n)
+				rewritten = true
+				if err := os.WriteFile(path, edited, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+					t.Fatal(err)
+				}
 			}
-			t.Cleanup(func() { logRecordHash = hash })
+			hash, changeTime := logRecordHash, logChangeTime
+			if rewriteAt == "before-read" {
+				// The build's first look at the change time follows its stat
+				// and precedes the open that reads and hashes the lines.
+				logChangeTime = func(i os.FileInfo) time.Time {
+					rewrite(Path())
+					return changeTime(i)
+				}
+			} else {
+				logRecordHash = func(path string, n int64) string {
+					rewrite(path)
+					return hash(path, n)
+				}
+			}
+			t.Cleanup(func() { logRecordHash, logChangeTime = hash, changeTime })
 			Summarize(All)
 			if !rewritten {
 				t.Fatal("fixture did not rewrite at the read boundary")
