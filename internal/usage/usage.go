@@ -352,11 +352,29 @@ func DecodeWindow(out int, ms, ttft int64) int64 {
 // hold, and counting them read a 2,000-token think and a 200-token answer
 // in 1.5 s as 1,467 tok/s. Its time goes to the wait before the answer.
 // One with reasoning and no text (all tool calls) tells no speed. The
-// window is DecodeWindow's: 0 for a reply that tells none. flow, when
-// known (Record.Flow), is how long its content took to come, and the
-// window is no longer than it: a reply whose first words came at once
-// and the rest held back and sent in a burst at its end wrote nothing
-// in between, and its tokens over the wait read an impossible speed.
+// window is DecodeWindow's: 0 for a reply that tells none.
+//
+// A reply its vendor held back and let go in a burst at its end tells
+// none either (John on Discord: Kimi Code answering OpenCode read 1,367,
+// then 2,237 and 2,012 tok/s). The burst is told two ways, as the reply's
+// text came before it or with it:
+//
+//   - flow, when known (Record.Flow), is how long its content took to come
+//     from where its window starts. A window HeldShare times longer had
+//     its content come in a small part of it: the rest was a wait while
+//     the vendor wrote and held it. The time it took to come is not the
+//     time it took to write (a burst let go over 236 ms read 528 tokens at
+//     2,237 tok/s), and that time is not seen, so it tells no speed. A
+//     stream that came as it was written has a flow about its window.
+//   - a reply that reasoned is timed from its first text, its reasoning
+//     written before. When the answer would have been written over
+//     ThinkPace times faster than its reasoning came before it, from the
+//     first content to the first text, its first text came with the burst
+//     and the wait before it was the answer being written and held (22
+//     reasoning tokens over 10.5 s, then 528 answer tokens in 236 ms). A
+//     reasoning hidden from the stream (OpenAI's, Claude's omitted) comes
+//     before the first content and leaves this time short; one that
+//     streams comes at the pace its answer does.
 func DecodeOf(out, reasoning int, ms, ttft, firstText, flow int64) (tokens int, w int64) {
 	start := ttft
 	if reasoning > 0 {
@@ -365,14 +383,26 @@ func DecodeOf(out, reasoning int, ms, ttft, firstText, flow int64) (tokens int, 
 	if ttft <= 0 {
 		return 0, 0
 	}
-	if flow > 0 && start > 0 && start+flow < ms {
-		ms = start + flow
-	}
 	if w = DecodeWindow(out, ms, start); w == 0 {
+		return 0, 0
+	}
+	if flow > 0 && flow*HeldShare < w {
+		return 0, 0
+	}
+	if reasoning > 0 && int64(out)*(firstText-ttft) > ThinkPace*int64(reasoning)*w {
 		return 0, 0
 	}
 	return out, w
 }
+
+// HeldShare and ThinkPace tell a reply held back and let go in a burst
+// (DecodeOf): its content came in under a quarter of its window, or its
+// answer at over 20 times the pace its reasoning came. routing.js's
+// decodeOf and app.js's ledDecode have the same.
+const (
+	HeldShare = 4
+	ThinkPace = 20
+)
 
 // Decode is the record's DecodeOf.
 func (r Record) Decode() (tokens int, w int64) {
