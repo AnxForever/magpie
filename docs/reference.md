@@ -992,8 +992,15 @@ never waits for a reading, except the first one after magpie starts (3
 seconds at most). A reading over a minute old is read again in the
 background as a request is routed, and an account that fails for its
 quota is read again at once; if a reading was already under way as it
-failed, the account is read again as soon as that reading is back. Codex and most other subscriptions read every
-account from the vendor this way. Claude is different: magpie never asks
+failed, the account is read again as soon as that reading is back. A
+reading the Usage page made counts as one, its age from when it was made.
+Codex and most other subscriptions read every
+account from the vendor this way. A Codex account is also known from each
+reply ChatGPT sends magpie for it, which says what the account has used:
+an account near its usage cap is held from the next turn on (#1295). A
+usage cap is still a stop on what magpie has read, not a guarantee: a turn
+already under way can take an account past it, so a 99% cap doesn't
+promise 1% is left. Claude is different: magpie never asks
 Anthropic itself. It reads only the account Claude Code is signed in to,
 by running Claude Code's `/usage`:
 

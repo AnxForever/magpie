@@ -2790,7 +2790,10 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	}
 	// Cline's whole replies come in {success, data}; a web page or
 	// nothing at all, served 200, is the 502 it stands for (#1012)
-	return notAnAPIReply(clineUnwrapped(p, res), ""), nil
+	res = notAnAPIReply(clineUnwrapped(p, res), "")
+	// what a Codex account's reply says it has used, for its cap (#1295)
+	heardCodexLimits(p, res)
+	return res, nil
 }
 
 // fromClaudeCode is a request Claude Code sent, by the User-Agent it gives
