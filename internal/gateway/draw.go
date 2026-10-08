@@ -52,13 +52,19 @@ func drawer() (string, bool) {
 		return "", false
 	case "":
 	default:
-		if _, _, ok := provider.Resolve(v); ok {
+		if pickedMissing(v) == "" {
 			return v, true
 		}
 	}
 	m := AutoDrawer()
 	return m, m != ""
 }
+
+// DrawerMissing is the model Settings › Models › Image generation names
+// when magpie can't find it any more, so that AutoDrawer's draws in its
+// place, as VisionMissing is Image recognition's. "" when none is named,
+// it is off, or it resolves.
+func DrawerMissing() string { return pickedMissing(settings.Load().ImageGen) }
 
 func resolveDrawing(id string) (provider.Provider, string, bool) {
 	if strings.Contains(id, "/") {
@@ -274,6 +280,10 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		if d.Model == "" {
 			m, ok := drawer()
 			if !ok {
+				if v := DrawerMissing(); v != "" {
+					fail(400, fmt.Sprintf("no model to draw with: the Image generation model picked in magpie's Settings, %q, isn't set up any more: pick another in Settings → Models → Image generation, or name one", v))
+					return
+				}
 				fail(400, "no model to draw with: pick one in magpie's Settings → Images → Image generation, or name one")
 				return
 			}
