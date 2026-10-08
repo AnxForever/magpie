@@ -632,7 +632,14 @@ func add(p Provider, once bool) (string, error) {
 		}
 	}
 	p.ID, p.Name = freeID(p.ID), freeName(p.Name)
-	return p.ID, Save(p)
+	if err := Save(p); err != nil {
+		return p.ID, err
+	}
+	if p.Preset != "" {
+		// a provider added from a partner counts for it (partner_events.go)
+		CountPartner(PartnerAdded, p.Preset)
+	}
+	return p.ID, nil
 }
 
 // AddCopy adds p, a copy the user made of the provider from (#268), beside

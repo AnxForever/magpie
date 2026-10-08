@@ -37,6 +37,9 @@ let editing = null; // provider id being edited; { preset } or { custom: true } 
 let draft = null; // the editor's working copy
 let naming = null; // the provider whose models' names and levels are open in its editor
 let adding = false; // the preset sheet is open
+// the partners counted as shown since the sheet opened: once an opening,
+// however often it is drawn (countPartner)
+let partnersCounted = null;
 let importing = null; // a magpie://import link waiting for a yes: { provider, error, replaces }
 let importingApps = null; // the Import from other apps dialog: { sources, picks }
 let providerDiscovery = []; // only opaque fingerprints and app names, never credentials
@@ -6439,6 +6442,7 @@ function renderAdd() {
     setRoom(view, 0);
   }
   sheet.hidden = !adding;
+  if (!adding) partnersCounted = null;
   // Duplicate and Add another open a new provider's editor with no sheet
   if (!adding) return editing && typeof editing === "object" ? renderEditor(null, editing.preset) : null;
   const head = el("div", "row-head");
@@ -6497,6 +6501,10 @@ function renderAdd() {
       any = true;
       const grid = section("Partners", "magpie's sponsors");
       for (const pr of partners) grid.append(partnerTile(pr));
+      partnersCounted ??= new Set();
+      const fresh = partners.filter((p) => !partnersCounted.has(p.id));
+      for (const p of fresh) partnersCounted.add(p.id);
+      countPartner("shown", fresh.map((p) => p.id));
     }
     if (subs.length || inPlugins) {
       any = true;
@@ -6726,9 +6734,19 @@ function partnerNote(pr) {
   return n.en || "";
 }
 
+// countPartner counts what for partners (provider.CountPartner): magpie
+// counts them only when the stats are on, and nothing waits on it
+function countPartner(what, ids) {
+  if (ids.length) api("partner", { what, ids }).catch(() => {});
+}
+
 // a partner's row: its own section says it is sponsored, so no badge
 function partnerTile(pr) {
   const b = tile({ ...pr, sponsored: false, note: "" });
+  if (!pr.added) {
+    const open = b.onclick;
+    b.onclick = (e) => { countPartner("opened", [pr.id]); open(e); };
+  }
   if (!pr.added) b.title = pr.name + (partnerNote(pr) ? " · " + partnerNote(pr) : "") + "\n" + hostOf(pr.chat || pr.responses || pr.anthropic);
   return b;
 }
@@ -8007,7 +8025,14 @@ function drawEditor(p, presetID) {
   const keysUrl = p?.keysUrl || pr?.keysUrl;
   // the link follows the plan picked: a region's keysUrl goes with its
   // endpoints, and one without falls back to the preset's own page
-  if (keysUrl) { const b = el("button", "link", t("Get a key ↗")); b.onclick = () => api("open", { url: draft?.keysUrl || pr?.keysUrl || p?.keysUrl }); side.append(b); }
+  if (keysUrl) {
+    const b = el("button", "link", t("Get a key ↗"));
+    b.onclick = () => {
+      if (pr?.kind === "partner") countPartner("keys", [pr.id]);
+      api("open", { url: draft?.keysUrl || pr?.keysUrl || p?.keysUrl });
+    };
+    side.append(b);
+  }
   const keyWrap = el("div", "pair");
   keyWrap.append(key, side);
   if (p?.keyList?.length) ed.append(...field(t("Accounts"), renderKeyAccounts(p), p.routing ? t("Tick every key to use; Routing says how requests spread over them.") : t("Tick every key to use. Requests go to the first; when it runs out of quota or hits a rate limit, the next ticked key takes over.")));
@@ -19354,7 +19379,7 @@ function renderRedact(s, keep) {
   row(t("Count me as a user"), t("Once a day, a random id for this computer with magpie's version and system"),
     onOff(!s.noStats, (on) => savePrefs({ ...keep, noStats: !on })));
   // rides on that event: nothing goes without it
-  if (!s.noStats) row(t("Share the agents, providers and models I use"), t("Sent with that event, by magpie's own ids, with how many of each; a provider you added yourself is only “custom”. No names, addresses, accounts, keys or usage"),
+  if (!s.noStats) row(t("Share the agents, providers and models I use"), t("Sent with that event, by magpie's own ids, with how many of each, and how often each partner was shown, opened and added; a provider you added yourself is only “custom”. No names, addresses, accounts, keys or usage"),
     onOff(!s.noUsageStats, (on) => savePrefs({ ...keep, noUsageStats: !on })));
 }
 

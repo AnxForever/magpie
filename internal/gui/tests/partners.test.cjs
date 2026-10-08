@@ -28,10 +28,11 @@ const presets = [
 ];
 const providers = [{ id: "taken", name: "Taken", icon: "generic", preset: "taken", models: [], agents: [], key: { set: true, masked: "sk-…ab12" } }];
 
-function server(lang, list) {
+function server(lang, list, counted) {
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data) => route.fulfill({ json: data });
+    if (url.pathname === "/api/partner") { counted?.push(route.request().postDataJSON()); return route.fulfill({ status: 204, body: "" }); }
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" } });
@@ -112,6 +113,29 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.context().close();
       });
     }
+    // how often each partner is shown, opened and its key page opened is
+    // counted (provider.CountPartner): shown once per opening of the sheet,
+    // not again as it is redrawn or searched
+    await t.test("counted", async () => {
+      const page = await (await browser.newContext({ viewport: { width: 900, height: 800 } })).newPage();
+      const counted = [];
+      const list = partners.map((p) => (p.id === "acme" ? { ...p, keysUrl: "https://acme.example/keys" } : p));
+      await page.route("**/*", server("en", list, counted));
+      const sheet = await openSheet(page);
+      const input = page.locator("#addSheet input").first();
+      await input.fill("acme");
+      await sheet.locator(".kind").first().waitFor();
+      await input.fill("");
+      await sheet.locator(".tile", { hasText: "Taken" }).waitFor();
+      await page.waitForTimeout(100);
+      assert.deepEqual(counted, [{ what: "shown", ids: ["acme", "taken"] }]);
+
+      await sheet.locator(".tile", { hasText: "Acme AI" }).click();
+      await page.locator("#modal .editor").getByRole("button", { name: "Get a key ↗" }).click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(counted.slice(1), [{ what: "opened", ids: ["acme"] }, { what: "keys", ids: ["acme"] }]);
+      await page.context().close();
+    });
     await t.test("no partners, no heading", async () => {
       const page = await (await browser.newContext({ viewport: { width: 900, height: 800 } })).newPage();
       await page.route("**/*", server("en", []));

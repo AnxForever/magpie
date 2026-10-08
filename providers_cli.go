@@ -192,9 +192,12 @@ func presets() error {
 	kind := provider.Kind("")
 	// partners first, as the app lists them: their heading says they pay
 	all := []provider.PresetDef{}
+	var shown []string
 	for _, pa := range provider.PartnersNow(3 * time.Second) {
 		all = append(all, pa.PresetDef)
+		shown = append(shown, pa.ID)
 	}
+	provider.CountPartner(provider.PartnerShown, shown...)
 	for _, pr := range append(all, provider.Presets()...) {
 		if pr.Kind != kind {
 			kind = pr.Kind
