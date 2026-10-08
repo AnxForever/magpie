@@ -2884,6 +2884,14 @@ func (r *subscriptionRun) launch() error {
 // how it ended, or that magpie ended it, and the last it wrote to stderr —
 // the cause comes last, after any warnings before it.
 func (r *subscriptionRun) tell(line []byte) error {
+	// one magpie ended is not written to: until Wait has reaped it, its
+	// input still takes a write, which no one will read
+	r.mu.Lock()
+	killed := r.killed
+	r.mu.Unlock()
+	if killed {
+		return r.whyEnded()
+	}
 	_, err := r.stdin.Write(append(line, '\n'))
 	if err == nil {
 		return nil
@@ -2899,6 +2907,12 @@ func (r *subscriptionRun) tell(line []byte) error {
 	case <-time.After(outputDrain + time.Second):
 		return err
 	}
+	return r.whyEnded()
+}
+
+// whyEnded says how the run's Claude Code ended, or that magpie ended it,
+// and the last it wrote to stderr.
+func (r *subscriptionRun) whyEnded() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	why := "exited before it read its input"
