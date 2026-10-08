@@ -54,6 +54,12 @@ type searchForKey struct{}
 type CallFor struct {
 	Agent string `json:"agent"`
 	Model string `json:"model"`
+	// Unknown, on an image's description, is that the model was counted
+	// text-only because nothing magpie knows says whether it sees images
+	// (blindTo), not because its list or the user says it takes text only.
+	// The Routing view says which, so a user whose model does see knows
+	// to say so (#1287).
+	Unknown bool `json:"unknown,omitempty"`
 }
 
 func searchFor(ctx context.Context) *CallFor {
