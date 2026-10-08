@@ -40,7 +40,8 @@ func quietTo(pid, model string) bool {
 // Responses' reasoning (with reasoning_effort, which some relays take),
 // Anthropic's thinking when it asks to think — thinking disabled is no
 // ask and stays — and output_config's effort alone, the rest of
-// output_config kept. The body goes as it is when it asked for nothing.
+// output_config kept, and Gemini's generationConfig.thinkingConfig when it
+// asks to think. The body goes as it is when it asked for nothing.
 func withoutReasoningAsk(proto provider.Protocol, body []byte) []byte {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.UseNumber()
@@ -74,6 +75,23 @@ func withoutReasoningAsk(proto provider.Protocol, body []byte) []byte {
 				changed = true
 				if len(oc) == 0 {
 					drop("output_config")
+				}
+			}
+		}
+	case provider.Gemini:
+		// generationConfig's thinkingConfig when it asks to think (as
+		// parseGemini reads it), the rest of generationConfig kept; a
+		// budget of 0 is no ask and stays. The body was spelled in
+		// camelCase on its way in (geminiCamel).
+		if gc, ok := m["generationConfig"].(map[string]any); ok {
+			if raw, err := json.Marshal(gc["thinkingConfig"]); err == nil {
+				var tc gThinking
+				if json.Unmarshal(raw, &tc) == nil && tc.effort() != "" {
+					delete(gc, "thinkingConfig")
+					changed = true
+					if len(gc) == 0 {
+						drop("generationConfig")
+					}
 				}
 			}
 		}

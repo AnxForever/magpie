@@ -18,7 +18,8 @@ import (
 
 // quietUp is a Chat vendor that answers as its key, and keeps what it was
 // sent; fail makes it answer 500, so the group falls to the next member.
-// It speaks Responses too, for a request sent that way.
+// It speaks Responses too, for a request sent that way, and streams a
+// Chat request that asks to be.
 type quietUp struct {
 	key  string
 	mu   sync.Mutex
@@ -47,6 +48,16 @@ func (u *quietUp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
+	if strings.Contains(string(b), `"stream":true`) {
+		// a translated request (a Gemini client's) is streamed
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"from `+u.key+`"}}]}`,
+			`data: {"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+			`data: [DONE]`,
+		))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	io.WriteString(w, `{"id":"x","choices":[{"index":0,"message":{"role":"assistant","content":"from `+u.key+`"},"finish_reason":"stop"}],`+
 		`"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
@@ -60,14 +71,13 @@ func (u *quietUp) sent() map[string]any {
 	return v
 }
 
-// A group reasons when any member does, so an agent asks it for reasoning
-// a member may not take: a member known not to think is sent none of it
-// (#950). The one that thinks is sent the effort the agent asked for,
-// fitted as before; the quiet one is sent the request without it — some
-// vendors turn it away with a 400 on a model that can't think — and the
-// group routes to it as it did.
-func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
-	fresh(t)
+// quietGroup is the group Mix of a member that thinks (thinks/levelled)
+// and one models.dev lists as not thinking (quiet/plain), ordered, each a
+// quietUp. reset begins a scenario as if the last hadn't run — no member
+// resting, no conversation kept where it went (affinity, #63) — with the
+// thinking member answering fail (0: as asked).
+func quietGroup(t *testing.T) (thinks, quiet *quietUp, reset func(fail int)) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +94,7 @@ func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
 	}
 	catalog.Reset()
 	t.Cleanup(catalog.Reset)
-	thinks, quiet := &quietUp{key: "kt"}, &quietUp{key: "kq"}
+	thinks, quiet = &quietUp{key: "kt"}, &quietUp{key: "kq"}
 	for _, x := range []struct {
 		id    string
 		up    *quietUp
@@ -107,10 +117,7 @@ func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
 	if err := provider.SaveGroup(provider.Group{Name: "Mix", Members: []string{"thinks/levelled", "quiet/plain"}, Routing: provider.Ordered}); err != nil {
 		t.Fatal(err)
 	}
-	s := New()
-	// each scenario begins as if the last hadn't run: no member resting,
-	// no conversation kept where it went (affinity, #63)
-	reset := func(fail int) {
+	reset = func(fail int) {
 		t.Helper()
 		restingUntil.Lock()
 		restingUntil.m = map[string]time.Time{}
@@ -122,6 +129,19 @@ func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
 		thinks.fail = fail
 		thinks.mu.Unlock()
 	}
+	return thinks, quiet, reset
+}
+
+// A group reasons when any member does, so an agent asks it for reasoning
+// a member may not take: a member known not to think is sent none of it
+// (#950). The one that thinks is sent the effort the agent asked for,
+// fitted as before; the quiet one is sent the request without it — some
+// vendors turn it away with a 400 on a model that can't think — and the
+// group routes to it as it did.
+func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
+	fresh(t)
+	thinks, quiet, reset := quietGroup(t)
+	s := New()
 	ask := func(extra string) (string, Route) {
 		t.Helper()
 		code, out := postAs(t, s, "s1", `{"model":"group/mix"`+extra+`,"messages":[{"role":"user","content":"hi"}]}`)
@@ -211,10 +231,65 @@ func TestGroupNonThinkingMemberNoEffort(t *testing.T) {
 	}
 }
 
+// A Gemini client asks for reasoning in generationConfig.thinkingConfig,
+// which reaches a Chat member as reasoning_effort: a quiet member is sent
+// none of it, as the Anthropic and OpenAI asks aren't (#1253), through the
+// gateway as it serves requests (lanGuard). The member that thinks is
+// still sent it, and so is a quiet member the user fixed at an effort.
+func TestGroupQuietMemberGeminiThinking(t *testing.T) {
+	fresh(t)
+	thinks, quiet, reset := quietGroup(t)
+	h := lanGuard(New().Handler())
+	gemini := func(group, config string) string {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/v1beta/models/group/"+group+":generateContent",
+			strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"temperature":0.2,"thinkingConfig":`+config+`}}`))
+		r.RemoteAddr = "127.0.0.1:5000"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s", config, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	for _, config := range []string{`{"thinkingLevel":"high","includeThoughts":true}`, `{"thinkingBudget":8192}`, `{"thinkingBudget":-1}`} {
+		reset(0)
+		if out := gemini("mix", config); !strings.Contains(out, "from kt") {
+			t.Fatalf("%s: %s", config, out)
+		}
+		if sent := thinks.sent(); sent["reasoning_effort"] == nil {
+			t.Fatalf("%s: the thinking member was sent %v", config, sent)
+		}
+		reset(500)
+		if out := gemini("mix", config); !strings.Contains(out, "from kq") {
+			t.Fatalf("%s: %s", config, out)
+		}
+		sent := quiet.sent()
+		if sent["reasoning_effort"] != nil || sent["reasoning"] != nil {
+			t.Fatalf("%s: the quiet member was sent %v", config, sent)
+		}
+		if sent["model"] != "plain" || sent["temperature"] != 0.2 {
+			t.Fatalf("%s: the quiet member lost the rest of the request: %v", config, sent)
+		}
+	}
+	// a quiet member the user fixed at an effort keeps the ask
+	if err := provider.SaveGroup(provider.Group{Name: "Fix", Members: []string{"thinks/levelled", "quiet/plain:high"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	reset(500)
+	if out := gemini("fix", `{"thinkingLevel":"high"}`); !strings.Contains(out, "from kq") {
+		t.Fatalf("fixed: %s", out)
+	}
+	if sent := quiet.sent(); sent["reasoning_effort"] != "high" {
+		t.Fatalf("fixed: the fixed member was sent %v", sent)
+	}
+}
+
 // The request the quiet member is sent keeps every other field: only what
 // asks the model to think goes, in the agent's own protocol. Anthropic's
 // thinking turned off is no ask and stays; output_config keeps its other
-// keys.
+// keys. Gemini's thinkingConfig goes when it asks to think; a budget of 0
+// is no ask and stays.
 func TestWithoutReasoningAsk(t *testing.T) {
 	for _, c := range []struct {
 		name  string
@@ -229,6 +304,9 @@ func TestWithoutReasoningAsk(t *testing.T) {
 		{"anthropic on", provider.Anthropic, `{"model":"m","thinking":{"type":"enabled","budget_tokens":4096}}`, `{"model":"m"}`},
 		{"anthropic adaptive", provider.Anthropic, `{"model":"m","thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`, `{"model":"m"}`},
 		{"anthropic off", provider.Anthropic, `{"model":"m","thinking":{"type":"disabled"}}`, `{"model":"m","thinking":{"type":"disabled"}}`},
+		{"gemini level", provider.Gemini, `{"model":"m","generationConfig":{"temperature":0.2,"thinkingConfig":{"thinkingLevel":"high","includeThoughts":true}}}`, `{"generationConfig":{"temperature":0.2},"model":"m"}`},
+		{"gemini budget", provider.Gemini, `{"model":"m","generationConfig":{"thinkingConfig":{"thinkingBudget":-1}}}`, `{"model":"m"}`},
+		{"gemini off", provider.Gemini, `{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}},"model":"m"}`, `{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}},"model":"m"}`},
 		{"anthropic output", provider.Anthropic, `{"model":"m","output_config":{"effort":"high","format":{"type":"json"}}}`, `{"model":"m","output_config":{"format":{"type":"json"}}}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
