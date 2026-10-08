@@ -224,6 +224,12 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	// served (#388), as Command Code's plugin does for a Go key, as the
 	// built-in replayed it to /alpha/generate
 	replay := strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID
+	// MiniMax's own Chat API gives a model's thinking in the text, between
+	// <think> tags, and wants it back there on the turns after (its
+	// interleaved thinking): the decoder takes it out as thinking (#1267),
+	// so it goes back in where it came from. A relay serving MiniMax's
+	// models may give the thinking apart and take it back otherwise.
+	inlineThink := strings.HasSuffix(host, "minimax.io") || strings.HasSuffix(host, "minimaxi.com")
 	// Gemini wants each step's thought signature back on its first call
 	// (#687), and one it can't check for a step it didn't sign
 	gemini := geminiCompat(host, model)
@@ -292,6 +298,9 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 				}
 			}
 			t := text(m.Parts)
+			if think != "" && inlineThink && !(r.Resume && i == len(r.Messages)-1) {
+				t = "<think>" + think + "</think>\n\n" + t
+			}
 			if t != "" || len(calls) == 0 {
 				am["content"] = t
 			}
@@ -749,32 +758,47 @@ type chatDecoder struct {
 	toolID  string // id of the open tool call, as some relays repeat it on every fragment
 	choice  string // index of the first choice seen; an empty string means none yet
 	// Gemini's OpenAI-compatible API, asked for thoughts, may give them
-	// in the text as a leading <thought>…</thought>: lead holds the text
-	// while it could still be that tag's start, thought is being inside it
-	lead    string
-	thought bool
-	past    bool // the reply's text has begun; no tag is looked for now
+	// in the text as a leading <thought>…</thought>, and MiniMax's Chat
+	// API (#1267), like the open models served without a reasoning
+	// parser, as a leading <think>…</think>: lead holds the text while it
+	// could still be such a tag's start, thought is being inside one, and
+	// thoughtClose is the tag that ends it
+	lead         string
+	thought      bool
+	thoughtClose string
+	past         bool // the reply's text has begun; no tag is looked for now
 }
 
-const thoughtOpen, thoughtClose = "<thought>", "</thought>"
+// thoughtTags are the tags a leading block of thinking comes between in a
+// Chat reply's text, by its opening tag.
+var thoughtTags = map[string]string{"<thought>": "</thought>", "<think>": "</think>"}
 
-// text sends a piece of the reply's text, a leading <thought> block of it
-// as thinking.
+// text sends a piece of the reply's text, a leading <thought> or <think>
+// block of it as thinking.
 func (d *chatDecoder) text(s string, emit func(Event)) {
 	if !d.past && !d.thought {
 		d.lead += s
 		lead := strings.TrimLeft(d.lead, " \n")
-		if len(lead) < len(thoughtOpen) && strings.HasPrefix(thoughtOpen, lead) {
-			return
+		for open := range thoughtTags {
+			if len(lead) < len(open) && strings.HasPrefix(open, lead) {
+				return
+			}
 		}
-		if !strings.HasPrefix(lead, thoughtOpen) {
+		open := ""
+		for o := range thoughtTags {
+			if strings.HasPrefix(lead, o) {
+				open = o
+			}
+		}
+		if open == "" {
 			d.past = true
 			s, d.lead = d.lead, ""
 			emit(Event{Kind: KText, Text: s})
 			return
 		}
-		s, d.lead, d.thought = strings.TrimPrefix(lead, thoughtOpen), "", true
+		s, d.lead, d.thought, d.thoughtClose = strings.TrimPrefix(lead, open), "", true, thoughtTags[open]
 	}
+	thoughtClose := d.thoughtClose
 	if d.thought {
 		s = d.lead + s
 		d.lead = ""
