@@ -20,18 +20,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"math"
 	"net/http"
-	"regexp"
 	"runtime"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/provider"
 )
@@ -319,25 +316,9 @@ func inlineImages(ims []Part) []Part {
 // to Devin as it was, so its result still answers its call. An id that is
 // already safe goes out as it came, unless it begins "dv_". The Devin
 // plugin (packages/devin, outID and inID) maps the same way.
-var devinSafeID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+func devinOutID(id string) string { return safeCallID("dv_", id) }
 
-func devinOutID(id string) string {
-	if devinSafeID.MatchString(id) && !strings.HasPrefix(id, "dv_") {
-		return id
-	}
-	return "dv_" + base64.RawURLEncoding.EncodeToString([]byte(id))
-}
-
-func devinInID(id string) string {
-	if !strings.HasPrefix(id, "dv_") || !devinSafeID.MatchString(id) {
-		return id
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(id[3:])
-	if err != nil || len(raw) == 0 || !utf8.Valid(raw) || devinOutID(string(raw)) != id {
-		return id
-	}
-	return string(raw)
-}
+func devinInID(id string) string { return rawCallID("dv_", id) }
 
 // buildDevin is the GetChatMessage request for r, to the model uid.
 func buildDevin(r *Request, uid, key string) []byte {
