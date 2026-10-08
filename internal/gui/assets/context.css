@@ -117,7 +117,8 @@ i.dot.free { background: var(--k-free); box-shadow: inset 0 0 0 1px color-mix(in
 .ctx-card.shut .ctx-fold .tw svg { transform: rotate(-90deg); }
 .ctx-short { display: none; flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .ctx-card.shut .ctx-short { display: inline; }
-.ctx-card.shut { padding-block: 10px; }
+/* the padding is the open card's, so the title stays where it is when it
+   opens and the page doesn't follow it (it moved 4px with a 10px one) */
 .ctx-card.shut > :not(.ctx-head) { display: none; }
 :where(.ctx-card.shut.max420) .ctx-model { display: none; }
 

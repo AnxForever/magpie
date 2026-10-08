@@ -137,8 +137,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.waitForTimeout(500);
         assert.equal((await look(page)).shut, true, "it stays folded after the page comes back");
 
-        // opened again, it is all there
-        await fold(page);
+        // opened again, it is all there; its title stays where it was and
+        // the page doesn't follow it (a click never moves the page: with
+        // a folded padding of its own, it moved 4px)
+        const b = page.locator(".rt-ctx .ctx-fold");
+        await click(page, page.locator(".rt-ctx .ctx-short"));
+        const before = await b.evaluate((e) => [e.getBoundingClientRect().top, document.querySelector("#view-routing").scrollTop]);
+        await b.click();
+        await page.waitForTimeout(800);
+        const moved = await b.evaluate((e) => [e.getBoundingClientRect().top, document.querySelector("#view-routing").scrollTop]);
+        assert.equal(moved[1], before[1], `opening it doesn't scroll the page: ${before} -> ${moved}`);
+        assert(Math.abs(moved[0] - before[0]) <= 1, `its title stays under the pointer: ${before} -> ${moved}`);
         const again = await look(page);
         assert.equal(again.shut, false);
         assert.equal(again.expanded, "true");
