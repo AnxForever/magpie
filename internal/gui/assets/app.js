@@ -6961,17 +6961,28 @@ function proxyOfDraft() {
 const ACCOUNT_PROXY_HINT = "Each account can go through a proxy of its own; Provider's proxy is the one above";
 function accountProxyPicker(a) {
   const ls = [...(a?.logins || [])];
-  if (ls.length < 2) return null;
   ls.sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
+  return proxyLines(ls.map((l) => ({ k: l.user.toLowerCase(), name: l.user, user: l.user })), ACCOUNT_PROXY_HINT);
+}
+// keyProxyPicker is accountProxyPicker for a provider's keys (Beyfish_Wang
+// on X: 不同 key 走不同的代理), each by its fingerprint, named as the
+// Accounts list names it. null for a provider with one key.
+const KEY_PROXY_HINT = "Each key can go through a proxy of its own; Provider's proxy is the one above";
+function keyProxyPicker(p) {
+  return proxyLines((p?.keyList || []).map((k) => ({ k: k.id, name: k.name || k.masked, key: k.id })), KEY_PROXY_HINT);
+}
+function proxyLines(items, hint) {
+  if (items.length < 2) return null;
   draft.accountProxies = draft.accountProxies || {};
   const box = el("div", "acct-proxies");
-  for (const l of ls) {
-    const k = l.user.toLowerCase();
+  for (const it of items) {
+    const k = it.k;
     const cur = draft.accountProxies[k] || { mode: "", url: "" };
     const line = el("div", "acct-proxy");
-    line.dataset.user = l.user;
-    const who = el("span", "who", l.user);
-    who.title = l.user;
+    if (it.user) line.dataset.user = it.user;
+    if (it.key) line.dataset.key = it.key;
+    const who = el("span", "who", it.name);
+    who.title = it.name;
     const addr = input(cur.url || "", "http://127.0.0.1:7890");
     addr.className = "proxy-url";
     addr.classList.toggle("off", cur.mode !== "custom");
@@ -6986,7 +6997,7 @@ function accountProxyPicker(a) {
     line.append(who, row);
     box.append(line);
   }
-  box.append(el("div", "hint", t(ACCOUNT_PROXY_HINT)));
+  box.append(el("div", "hint", t(hint)));
   return box;
 }
 // accountProxiesOfDraft is each account's own proxy as it is saved — the
@@ -7897,7 +7908,11 @@ function drawEditor(p, presetID) {
   } else {
     ed.append(...field(t("Headers"), headerEditor(pr?.headerHints || []), t("Optional headers sent with every request to {p}, applied after auth.", { p: pr?.name || p?.name })));
   }
-  ed.append(...field(t("Proxy"), proxyPicker()));
+  const proxies = el("div", "stack");
+  proxies.append(proxyPicker());
+  const perKey = keyProxyPicker(p);
+  if (perKey) proxies.append(perKey);
+  ed.append(...field(t("Proxy"), proxies));
   ed.append(...concurrencyField(p));
   ed.append(...priceRateField());
 
@@ -8195,6 +8210,15 @@ function drawEditor(p, presetID) {
     }
     body.proxy = proxyOfDraft();
     if (body.proxy === null) { ed.querySelector(".proxy-url")?.focus(); return editorError(t("Proxy: type its address, like http://127.0.0.1:7890"), "warn"); }
+    if (perKey) {
+      const own = accountProxiesOfDraft();
+      if (own.missing) {
+        const line = ed.querySelector(`.acct-proxy[data-key="${own.missing}"]`);
+        line?.querySelector(".proxy-url")?.focus({ preventScroll: true });
+        return editorError(t("Proxy of {user}: type its address, like http://127.0.0.1:7890", { user: line?.querySelector(".who")?.textContent || own.missing }), "warn");
+      }
+      body.accountProxies = own.map;
+    }
     body.maxConcurrency = concurrencyOfDraft();
     if (body.maxConcurrency === undefined) return concurrencyError(ed);
     const queue = queueOfDraft();
