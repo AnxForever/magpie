@@ -317,8 +317,11 @@ func burstChunks(proto provider.Protocol, words, per, out int) [][]string {
 // A reply whose first word came at once and the rest only after a wait,
 // all in one burst, wrote nothing over the wait, and tells no speed (John
 // on Discord: a Kimi Code reply to OpenCode read 1,367 tok/s): before,
-// its 1,000 tokens over the 600 ms from its first word to its end read
-// about 1,600 tok/s. One that streamed steadily keeps its speed, over
+// its 5,000 tokens over the 600 ms from its first word to its end read
+// about 8,300 tok/s. The burst is 5,000 tokens so that the time magpie
+// takes to pass it on (138 ms on a busy macOS runner at 8db24fd6) reads
+// faster than any real stream (MaxDecodeSpeed), as a real burst does;
+// 1,000 read 7,246 tok/s. One that streamed steadily keeps its speed, over
 // nearly all of its time from its first word.
 func TestBurstTellsNoSpeed(t *testing.T) {
 	const gap = 600 * time.Millisecond
@@ -333,7 +336,7 @@ func TestBurstTellsNoSpeed(t *testing.T) {
 	} {
 		for _, steady := range []bool{false, true} {
 			name := c.name + " burst"
-			chunks, g := burstChunks(c.proto, 200, 199, 1000), gap
+			chunks, g := burstChunks(c.proto, 200, 199, 5000), gap
 			if steady {
 				name = c.name + " steady"
 				chunks, g = burstChunks(c.proto, 11, 1, 200), gap/10
@@ -383,7 +386,7 @@ func TestBurstTellsNoSpeed(t *testing.T) {
 // speed for a burst either.
 func TestCodexBackendBurstTellsNoSpeed(t *testing.T) {
 	setup(t, provider.Chat, &fake{t: t})
-	b := &bursty{chunks: burstChunks(provider.Responses, 200, 199, 1000), gap: 600 * time.Millisecond, header: true}
+	b := &bursty{chunks: burstChunks(provider.Responses, 200, 199, 5000), gap: 600 * time.Millisecond, header: true}
 	chatgpt(t, b.ServeHTTP)
 	if code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"hi"}`); code != 200 {
 		t.Fatalf("%d %s", code, body)
@@ -391,7 +394,7 @@ func TestCodexBackendBurstTellsNoSpeed(t *testing.T) {
 	u := lastUsage(t)
 	// the end after the wait, less the moment the first word took to
 	// reach magpie (599 ms of 600 on macOS CI at 58f45d05)
-	if u.Millis-u.TTFT < 540 || u.Output != 1000 {
+	if u.Millis-u.TTFT < 540 || u.Output != 5000 {
 		t.Fatalf("usage %+v", u)
 	}
 	if n, w := u.Decode(); n != 0 || w != 0 {
