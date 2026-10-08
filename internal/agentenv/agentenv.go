@@ -51,6 +51,8 @@ var Vars = []string{
 	"GROK_HOME", "GROK_BIN_DIR",
 	// Kimi Code and its shared folder
 	"KIMI_CODE_HOME", "KIMI_SHARE_DIR",
+	// Qwen Code's home, ~/.qwen without it
+	"QWEN_HOME",
 	// Ante
 	"ANTE_HOME",
 	// MiMo Code, MiniMax Code, OpenHanako, Hermes, dsh, WorkBuddy, CodeBuddy Code
