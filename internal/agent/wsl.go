@@ -392,6 +392,10 @@ var wslKinds = []wslKind{
 		}},
 	{id: "empryo", name: "Empryo", dir: ".empryo", bin: "empryo", in: empryoIn,
 		restart: "reads its config at start-up — restart open empryo sessions to use this."},
+	// Ante ships macOS and Linux builds alone, and suggests WSL on Windows,
+	// so a Windows machine's Ante is usually this one
+	{id: "ante", name: "Ante", dir: ".ante", bin: "ante", in: anteIn,
+		restart: "reads its catalog at start-up — restart open ante sessions to use this."},
 	{id: "muse", name: "Muse Code", dir: ".config/muse", bin: "muse", in: museIn,
 		restart: "reads its settings at start-up — restart open muse sessions to use this."},
 	{id: "qoder", name: "Qoder", dir: ".qoder", bin: "qodercli", in: qoderIn,
