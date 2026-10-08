@@ -1845,13 +1845,16 @@ and architecture.
 With it goes what magpie is used with, so we know which agents, providers
 and models to look after first, by magpie's own ids only:
 
-- the agents connected to magpie (`claude`, `codex`);
+- the agents connected to magpie (`claude`, `codex`); an omp profile is
+  only `omp`;
 - the providers that are on: a preset's id (`deepseek`), a subscription's
   (`codex`, `copilot`), a community plugin's (`plugin:kiro`); a provider you
   added yourself is only `custom`, another plugin only `plugin`;
 - the models the connected agents are set to, as the provider's id and the
-  vendor's model id (`deepseek/deepseek-v4`); one on a provider of your own
-  is only `custom`, a routing group only `group`;
+  vendor's model id (`deepseek/deepseek-v4`); on a key's provider, a model
+  id that [models.dev](https://models.dev) doesn't list (a local model, a
+  fine-tune) is only `<provider>/other`; one on a provider of your own is
+  only `custom`, a routing group only `group`;
 - how many of each, and how many routing groups you have.
 
 No names, base URLs, accounts, keys, prompts or usage go. Turn that part off

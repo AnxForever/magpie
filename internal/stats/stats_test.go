@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -99,6 +102,56 @@ func TestProviderLabel(t *testing.T) {
 	} {
 		if got := providerLabel(c.p); got != c.want {
 			t.Errorf("%s: %q, want %q", c.p.ID, got, c.want)
+		}
+	}
+}
+
+// Nothing the user named goes as an agent: an omp profile, a WSL distro.
+func TestAgentLabel(t *testing.T) {
+	for id, want := range map[string]string{
+		"claude":                   "claude",
+		"claude@wsl:Ubuntu":        "claude",
+		"omp#acme-secret":          "omp",
+		"omp#acme-secret@wsl:Work": "omp",
+	} {
+		if got := agentLabel(id); got != want {
+			t.Errorf("%s: %q, want %q", id, got, want)
+		}
+	}
+}
+
+// A model on a key's provider goes by its id only when models.dev knows
+// it: one the user named (an Ollama model, a fine-tune naming their
+// organisation) is "other".
+func TestModelLabelKeepsTheUsersOwnModelIDs(t *testing.T) {
+	cache := map[string]any{"deepseek": map[string]any{"id": "deepseek", "models": map[string]any{
+		"deepseek-v4": map[string]any{"id": "deepseek-v4", "limit": map[string]any{"context": 128000}},
+	}}}
+	b, _ := json.Marshal(cache)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog.CachePath(), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(func() { os.Remove(catalog.CachePath()); catalog.Reset() })
+	for _, p := range []provider.Provider{
+		{ID: "my-deepseek", Name: "DS", Preset: "deepseek", Chat: "https://api.deepseek.com/v1", Key: "sk-x", Models: []string{"deepseek-v4"}},
+		{ID: "my-openai", Name: "OA", Preset: "openai", Chat: "https://api.openai.com/v1", Key: "sk-y", Models: []string{"ft:gpt-4o:acme-corp::abc123"}},
+		{ID: "my-ollama", Name: "Local", Preset: "ollama", Chat: "http://127.0.0.1:11434/v1", Models: []string{"acme-internal-llm"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for ref, want := range map[string]string{
+		"my-deepseek/deepseek-v4":               "deepseek/deepseek-v4",
+		"my-openai/ft:gpt-4o:acme-corp::abc123": "openai/other",
+		"my-ollama/acme-internal-llm":           "ollama/other",
+	} {
+		if got := modelLabel(ref); got != want {
+			t.Errorf("%s: %q, want %q", ref, got, want)
 		}
 	}
 }
