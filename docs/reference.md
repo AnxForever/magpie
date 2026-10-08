@@ -377,8 +377,8 @@ openai/gpt-5 anthropic/*` (`all` takes the restriction off). A pattern is
 serves the call, so a bare model name is resolved first, or a routing group,
 `group/<id>` (`group/*` for every group). A key that names a group may use
 the group with every member in it, though not those members asked for by
-name. Such a key sees only its models in `/v1/models` and the Anthropic and
-Gemini lists, a routing group it doesn't name only when it may use every
+name. Such a key sees only its models in `/v1/models`, `/v1/codex/models`
+and the Anthropic and Gemini lists, a routing group it doesn't name only when it may use every
 member, and is refused any other model with a 403 in the API's error shape
 before a provider is asked; a fallback it may not use is skipped. A key with
 no models listed may use every model.
@@ -417,6 +417,35 @@ Sharing listens on every interface, unless `MAGPIE_ADDR` names a host of its
 own: `MAGPIE_ADDR=127.0.0.1:3425` behind Tailscale Serve, or one interface's
 address, stays where it is while shared, and what reaches it from elsewhere
 still needs an enabled gateway key (#1112).
+
+**Codex on another computer** (#1281) can name the shared magpie its model
+provider, with a gateway key, and read magpie's models in Codex's own
+catalog shape from `GET /v1/codex/models`. `/v1/models` is OpenAI's list,
+which Codex can't read, and `/backend-api/codex/models` is the ChatGPT
+backend's, for a Codex signed in to ChatGPT on the gateway's own computer;
+a gateway key gets a 401 there.
+
+```toml
+model_provider = "magpie"
+model = "provider/model"
+
+[model_providers.magpie]
+name = "magpie"
+base_url = "http://192.168.1.20:3425/v1"
+model_catalog_url = "http://192.168.1.20:3425/v1/codex/models"
+env_key = "MAGPIE_API_KEY"   # the gateway key
+wire_api = "responses"
+supports_websockets = false
+```
+
+The list is the models the shared magpie shows Codex (its Agents page
+picks), each as the `model_catalog_json` magpie writes for a Codex on its
+own computer describes it, and only the models the key may use. Codex 0.161
+reads it by default; 0.160 needs `[features] api_key_model_discovery = true`.
+Codex reads at most 1 MiB of a catalog, and every entry carries Codex's
+prompt, so past about 125 models the list keeps the first that fit and the
+answer's `X-Magpie-Left-Out` header says how many it left out: pick fewer
+for Codex, or hold the key to fewer.
 
 A request that reaches loopback through a proxy or tunnel on this computer
 (Cloudflare Tunnel's `cloudflared`, ngrok, Tailscale serve or funnel, frp's
@@ -1054,6 +1083,7 @@ It exposes:
 | `/v1/messages/count_tokens` | Anthropic token counting |
 | `/v1beta/models/{model}:generateContent` | Google Gemini (also `:streamGenerateContent`, `:countTokens`) |
 | `/v1/models`, `/v1beta/models` | the catalog            |
+| `/v1/codex/models`       | the catalog as Codex's `model_catalog_url` reads it ([Codex on another computer](#providers-and-the-gateway)) |
 
 Each `/v1/models` entry includes `reasoning` and `supported_reasoning_levels`
 (`[{"effort":"low"}, ...]`). A routing group is marked `reasoning` when any
