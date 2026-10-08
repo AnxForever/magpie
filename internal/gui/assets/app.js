@@ -7621,6 +7621,9 @@ function drawEditor(p, presetID) {
   };
   if (p && !p.account && !custom) idField();
   let fillEndpoints = () => {};
+  // a URL typed and not saved that a protocol switch carried to another
+  // protocol: the protocol it was typed for, and the URL as typed
+  let carried = null;
   // the Web search row, shown while there is an API it can search on
   const searchable = () => !!((draft.anthropic || "").trim() || (draft.responses || "").trim());
   let showSearch = () => {};
@@ -7646,8 +7649,13 @@ function drawEditor(p, presetID) {
         // saved moves to a protocol without one, spelled as that protocol
         // wants it: the kind was picked after the URL (#73). A saved URL
         // stays where it is, and one not given yet stays empty.
+        // A URL then typed for the protocol it was carried to is that
+        // protocol's own, and the carried one goes back where it was typed,
+        // so a URL can be typed for each protocol in turn (#1231).
         const from = apiField[draft.api], to = apiField[v];
+        carried = null;
         if (!draft[to] && draft[from] && draft[from] !== (p?.[from] || "")) {
+          carried = { from, value: draft[from] };
           draft[to] = respellURL(draft[from], v);
           draft[from] = p?.[from] || "";
         }
@@ -7671,13 +7679,18 @@ function drawEditor(p, presetID) {
     queueMicrotask(() => slide(seg, "api"));
     url = input(draft[apiField[draft.api]], draft.api === "anthropic" ? "https://…" : "https://…/v1", "url");
     url.classList.add("base-url");
-    url.oninput = () => { draft[apiField[draft.api]] = url.value; showSearch(); showLocal(); };
+    url.oninput = () => {
+      draft[apiField[draft.api]] = url.value;
+      if (carried) { draft[carried.from] = carried.value; carried = null; fillEndpoints(); }
+      showSearch(); showLocal();
+    };
     const urlWrap = el("div", "stack");
     urlWrap.append(seg, url);
     // the APIs that answered a detection, taken for the provider: their
     // URLs set, one that wasn't found there (404, 405) cleared, and the
     // base URL's protocol one of those that answered
     const useDetected = (rs) => {
+      carried = null;
       for (const x of rs) {
         if (x.ok) draft[x.protocol] = x.base;
         else if ((x.status === 404 || x.status === 405) && (draft[x.protocol] || "").trim().replace(/\/+$/, "") === x.base) draft[x.protocol] = "";
@@ -8037,7 +8050,7 @@ function drawEditor(p, presetID) {
       const add = (label, key, ph, hint) => {
         if (apiField[draft.api] === key) return;
         const i = input(draft[key], ph, "url");
-        i.oninput = () => { draft[key] = i.value; showSearch(); showLocal(); };
+        i.oninput = () => { draft[key] = i.value; if (carried?.from === key) carried = null; showSearch(); showLocal(); };
         eps.append(...field(t(label), i, t(hint)));
       };
       add("OpenAI URL", "chat", "https://…/v1", "if the vendor also serves chat completions");
