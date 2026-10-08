@@ -98,14 +98,12 @@ func (c candidate) isOpenRouterFree() bool {
 }
 
 // restID is the candidate's model's own rest key: a free OpenRouter
-// model's, whose rate limit is its free-tier limit, and a subscription's,
-// out of a pool of its allowance that counts some models only (pooled).
-// An account-level rest stays on restKey.
+// model's, whose rate limit is its free-tier limit, a subscription's, out
+// of a pool of its allowance that counts some models only (pooled), and
+// any key's or account's model its vendor said it doesn't serve it
+// (modelRefused). An account-level rest stays on restKey.
 func (c candidate) restID() string {
-	if c.isOpenRouterFree() || c.p.Account != nil {
-		return c.restKey() + "/" + c.model
-	}
-	return c.restKey()
+	return c.restKey() + "/" + c.model
 }
 
 // pooled says whether the candidate's subscription, refused for its
@@ -709,6 +707,22 @@ var quotaWords = regexp.MustCompile(`(?i)quota|insufficient|balance|credit|billi
 // unservedWords are how a vendor says the model isn't one it serves this
 // key, or this way — words another provider, or key, may not answer with.
 var unservedWords = regexp.MustCompile(`(?i)model.{0,80}(not (supported|accessible|available|found|enabled|allowed)|unsupported|does ?n[o']t exist|unknown|invalid)|(no such|unknown|invalid|unsupported) model|model_not_found|模型.{0,12}(不存在|不支持|无权|未开通)`)
+
+// modelRefused says the vendor turned the request away over its model
+// alone — not one this key's plan, or this key, may use: SenseNova's 403
+// "model is not available in the current token plan" for
+// deepseek-v4.1-flash, while the same key serves deepseek-v4-flash
+// (#1235). The key or account isn't at fault, so only its model rests,
+// and its other models are asked as before. A refusal that also says
+// quota, credit or a rate limit is about the account, and rests it.
+func modelRefused(status int, body []byte) bool {
+	switch status {
+	case 400, 403, 404, 422:
+	default:
+		return false
+	}
+	return unservedWords.Match(body) && !quotaWords.Match(body) && !refusedWords.Match(body)
+}
 
 // refusedWords are how a vendor says it won't take requests from this
 // client at all — WorkBuddy's "Illegal API invocation from an unapproved
