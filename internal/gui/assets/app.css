@@ -2369,6 +2369,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 :where(body:not(.mac)) :is(.segs.regions, .connect .segs, #sessAgent)::-webkit-scrollbar { height: 6px; }
 :where(body:not(.mac)) :is(.segs.regions, .connect .segs, #sessAgent)::-webkit-scrollbar-thumb { border-width: 1px; }
 .segs.regions .opt, .connect .segs .opt, #sessAgent .opt { flex: none; }
+/* a custom provider's five Base URL APIs wrap to a second row where the
+   editor is too narrow for them (#1346); the thumb follows the row */
+.segs.base-apis { max-width: 100%; flex-wrap: wrap; }
 /* an installed list's order (#481): small, beside the list's heading */
 .segs.sortby { align-self: center; flex: none; }
 .segs.sortby .opt { height: 20px; padding: 0 8px; font-size: 11px; }
