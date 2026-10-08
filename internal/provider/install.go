@@ -145,19 +145,18 @@ func runUntilInstalled(ctx context.Context, cmd *exec.Cmd, c agentCLI) ([]byte, 
 }
 
 // shellInstallerRuns is whether a vendor's `curl … | bash` can run here:
-// bash, and curl or wget for it to download with. magpie's Docker image
-// (distroless) has none of them, and the install failed there with "exec:
-// bash: not found". A var so tests can say there is none.
+// bash, and curl, which every one-liner (and the scripts behind them)
+// downloads with. magpie's Docker image had none of them, and the install
+// failed there with "exec: bash: not found". Since 7bfe3137 it has bash and
+// busybox's wget but still no curl, and the one-liner failed there too. A
+// var so tests can say there is none.
 var shellInstallerRuns = func() bool {
-	if _, err := exec.LookPath("bash"); err != nil {
-		return false
-	}
-	for _, d := range []string{"curl", "wget"} {
-		if _, err := exec.LookPath(d); err == nil {
-			return true
+	for _, p := range []string{"bash", "curl"} {
+		if _, err := exec.LookPath(p); err != nil {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 // installCLI installs c with its vendor's installer and makes sure magpie

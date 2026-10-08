@@ -186,3 +186,23 @@ func waitPast(t *testing.T, id, state string) SignInState {
 	t.Fatalf("still %s", state)
 	return SignInState{}
 }
+
+// magpie's Docker image has bash and busybox's wget but no curl, which every
+// vendor's one-liner downloads with: there the native installer is used
+func TestShellInstallerNeedsCurl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the shell installer is for macOS and Linux")
+	}
+	bin := t.TempDir()
+	for _, p := range []string{"bash", "wget"} {
+		testenv.Program(t, filepath.Join(bin, p), "#!/bin/sh\n")
+	}
+	t.Setenv("PATH", bin)
+	if shellInstallerRuns() {
+		t.Fatal("the shell installer runs with bash and wget, without curl")
+	}
+	testenv.Program(t, filepath.Join(bin, "curl"), "#!/bin/sh\n")
+	if !shellInstallerRuns() {
+		t.Fatal("the shell installer doesn't run with bash and curl")
+	}
+}
