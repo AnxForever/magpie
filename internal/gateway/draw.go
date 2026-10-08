@@ -693,7 +693,7 @@ func (s *Server) sendAs(ctx context.Context, p provider.Provider, method, url, c
 
 // sendWith is sendAs with headers of the vendor's own besides.
 func (s *Server) sendWith(ctx context.Context, p provider.Provider, method, url, contentType string, body []byte, sign bool, extra http.Header) ([]byte, int, error) {
-	ctx = p.Via(ctx)
+	ctx = s.metered(p.Via(ctx), p, "") // counted against its MaxRPM (rpm.go)
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 500, err

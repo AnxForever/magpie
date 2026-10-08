@@ -324,7 +324,10 @@ type Server struct {
 	sightOrder []string
 	// the requests out at each key or account with a MaxConcurrency, and
 	// those waiting their turn (concurrency.go)
-	lanes         lanes
+	lanes lanes
+	// the requests each key or account with a MaxRPM sent in the last
+	// minute, and those about to go (rpm.go)
+	rpms          rpms
 	requestLimits requestLimits
 	// what a restart would cut short (busy.go)
 	busyCounters
@@ -335,14 +338,15 @@ func New() *Server {
 	redact.SetKeyPath(filepath.Join(settings.Dir(), "redact.key"))
 	return &Server{
 		// a provider with a proxy of its own is sent through a transport
-		// kept for that proxy (#237)
-		client: &http.Client{Transport: netproxy.Dispatch(&http.Transport{
+		// kept for that proxy (#237); a request counted against a MaxRPM
+		// waits for room in its minute first (rpm.go)
+		client: &http.Client{Transport: rpmTransport{netproxy.Dispatch(&http.Transport{
 			Proxy:                 netproxy.Func,
 			ResponseHeaderTimeout: 10 * time.Minute,
 			MaxIdleConnsPerHost:   8,
 			IdleConnTimeout:       90 * time.Second,
 			ForceAttemptHTTP2:     true,
-		})},
+		})}},
 		unfit:        make(map[string]bool),
 		subscription: newSubscriptionBridge(),
 		debug:        os.Getenv("MAGPIE_DEBUG") != "",
@@ -969,12 +973,19 @@ func (s *Server) countOn(w http.ResponseWriter, r *http.Request, p provider.Prov
 		if who, held := accountHolds(r); held {
 			counts = slices.DeleteFunc(counts, func(c candidate) bool { return !accountAllowed(who, c) })
 		}
+		// a count doesn't wait for room in a MaxRPM's minute: one with
+		// none now is left out, and where none has room the estimate
+		// below says the count (rpm.go)
+		counts = slices.DeleteFunc(counts, func(c candidate) bool { return !s.rpms.free(c.who(), c.p.RPMLimit()) })
 	}
 	// the names in force, read at most once however many candidates are
 	// counted, and not at all where there are none
 	wires := sync.OnceValue(func() map[string]string { return settings.Load().ModelWires })
 	for i, c := range counts {
 		res, err := s.forward(r.Context(), c.p, provider.Anthropic, "/v1/messages/count_tokens", rewriteModel(body, provider.UpstreamNameIn(wires(), c.p.ID, model)), r.Header)
+		if tooMany := (*errRPM)(nil); errors.As(err, &tooMany) {
+			break // its minute filled since: nobody rests, the estimate answers
+		}
 		if err != nil {
 			if r.Context().Err() == nil {
 				s.restAfter(c, http.StatusBadGateway, nil, []byte(err.Error()))
@@ -1886,8 +1897,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// turned away below
 			waited := time.Now()
 			release, err := s.lanes.take(ctx, c.who(), c.p.LaneLimit(), c.p.QueueLimit, time.Duration(c.p.QueueWait)*time.Second)
+			if err == nil && c.p.RPMLimit() > 0 {
+				// with a MaxRPM, it then waits for room in the minute, and
+				// goes counted in it; the requests it makes on the way
+				// count too (rpm.go)
+				if _, err = s.rpms.wait(ctx, c.who(), c.p.RPMLimit(), rpmWait(c.p)); err != nil {
+					release()
+				} else {
+					ctx = s.paidFor(ctx, c.p, c.who())
+				}
+			}
 			queued = time.Since(waited).Milliseconds()
-			if errors.Is(err, errQueueFull) || errors.Is(err, errQueueWait) {
+			var tooMany *errRPM
+			if errors.Is(err, errQueueFull) || errors.Is(err, errQueueWait) || errors.As(err, &tooMany) {
 				laneErr = err
 			}
 			if err == nil {
@@ -1918,7 +1940,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 			if !kept.sent {
-				w.Header().Set("Retry-After", "1")
+				after := "1"
+				if e := (*errRPM)(nil); errors.As(laneErr, &e) {
+					after = e.retryAfter() // when the minute has room
+				}
+				w.Header().Set("Retry-After", after)
 			}
 			failTo(w, kept, from, call.Status, call.Error)
 			// nobody was asked, and the agent is told: the ledger gets
@@ -2706,7 +2732,7 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 
 // forwardOnce is one request to the provider, as forward makes it.
 func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provider.Protocol, path string, body []byte, in http.Header) (*http.Response, error) {
-	ctx = p.Via(ctx)
+	ctx = s.metered(p.Via(ctx), p, "")
 	body = deepseekToolPatterns(p, to, body)
 	body = toolOneOfAsAnyOf(p, to, body)
 	body = kimiToolEnumTypes(p, to, body)
