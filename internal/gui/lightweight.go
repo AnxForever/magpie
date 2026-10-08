@@ -148,6 +148,7 @@ func (h *host) madeAgain(w *application.WebviewWindow) {
 	}
 	if w.Name() == "panel" {
 		nameWindow(w, panelTitle)
+		ownFrame(w)
 	} else {
 		plainTitlebar(w)
 	}
