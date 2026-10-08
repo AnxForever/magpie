@@ -14592,6 +14592,26 @@ function familyQuota(sub) {
   return [box, b];
 }
 
+// holdsLine: a window's whole, reckoned from the calls magpie routed
+// through the account since it began over the share used (WindowHolds),
+// and in its tooltip how, and why it reads low if the account is used
+// elsewhere too.
+function holdsLine(h) {
+  const cost = (c) => fmtCost({ cost: c });
+  const line = el("span", "quota-holds");
+  line.append(el("span", "", t("Whole ≈ {n} tokens", { n: fmtN(h.tokens) }) + (h.priced ? " ·" : "")));
+  if (h.priced) line.append(" ", el("span", "", "≈ " + cost(h.cost)));
+  const r = h.routed || {};
+  line.title = [
+    h.priced ? t("The whole window ≈ {tokens} tokens of input and output, ≈ {cost} at API list prices", { tokens: fmtN(h.tokens), cost: cost(h.cost) })
+      : t("The whole window ≈ {tokens} tokens of input and output; some of its models have no API price", { tokens: fmtN(h.tokens) }),
+    t("Reckoned from what magpie routed through this account in this window: {tokens} tokens in {calls} calls, {cache} cache reads, over the {used} the vendor says is used", { tokens: fmtN(r.tokens || 0), calls: r.calls || 0, cache: fmtN(r.cacheRead || 0), used: Math.round(h.used) + "%" }),
+    t("Only magpie's calls are counted: if this account is also used elsewhere, this reads low"),
+    t("A heavier model fills a window sooner: this holds for the models used so far"),
+  ].join("\n");
+  return line;
+}
+
 // quotaWindows: one account's allowance as meters, or why there are none.
 function quotaWindows(sub) {
   if (sub.balance && !sub.windows?.length) return balanceRow(sub, "What is left on the account: the vendor tells only this, so Used / Left leaves it as it is", "refresh");
@@ -14622,13 +14642,20 @@ function quotaWindows(sub) {
     quota.append(labels);
     if (!w.unlimited) quota.append(track);
     // when it starts again, on the clock and how long until then
+    let r = null;
     if (w.resetsAt) {
       const at = new Date(w.resetsAt);
-      const r = el("div", "quota-reset");
+      r = el("div", "quota-reset");
       r.append(el("span", "", resetText(at) + (at > Date.now() ? " ·" : "")));
       if (at > Date.now()) r.append(" ", el("span", "", untilText(at)));
       quota.append(r);
       quota.title = resetText(at, at.toLocaleString());
+    }
+    // what the whole window holds, by what magpie routed in it (Chiao), on
+    // the reset's line, so the window keeps its three rows
+    if (w.holds) {
+      if (!r) quota.append(r = el("div", "quota-reset"));
+      r.append(holdsLine(w.holds));
     }
     // a model family's figure: its models, level by level, in its tooltip
     if (w.tiers) quota.title = t("{family}: the most used of its models", { family: w.name }) + "\n" + tiersText(w);

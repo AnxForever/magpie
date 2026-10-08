@@ -65,6 +65,10 @@ type QuotaWindow struct {
 	// only — one model's own, or a pool's — so the cap holds the account
 	// for those alone, and the GUI says which.
 	CapsSome bool `json:"capsSome,omitempty"`
+	// Holds is what the whole window holds, reckoned from magpie's own
+	// calls through the account (usage.WithWindowHolds), for the GUI only;
+	// nil where that can't be told honestly.
+	Holds *WindowHolds `json:"holds,omitempty"`
 	// matches further scopes pools whose membership isn't one model word.
 	matches func(string) bool
 	// partial is set on the windows of a reading that may leave some out:
