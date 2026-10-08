@@ -60,6 +60,13 @@ func drawer() (string, bool) {
 	return m, m != ""
 }
 
+// Drawer is the model a request that names none draws with (drawer), as
+// provider/model: "" when image generation is off or no provider draws.
+func Drawer() string {
+	m, _ := drawer()
+	return m
+}
+
 // DrawerMissing is the model Settings › Models › Image generation names
 // when magpie can't find it any more, so that AutoDrawer's draws in its
 // place, as VisionMissing is Image recognition's. "" when none is named,

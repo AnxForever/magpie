@@ -11,6 +11,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // fakeAlma is Alma's API as its spec has it: providers and settings in
@@ -231,6 +234,10 @@ func TestAlma(t *testing.T) {
 	}
 	if got := fl.Get(); got != "magpie/"+ref {
 		t.Fatalf("get: %q", got)
+	}
+	// magpie draws with nothing: Alma's image generation is left be
+	if f.settings["imageGen"] != nil {
+		t.Fatalf("image generation set with nothing to draw: %v", f.settings["imageGen"])
 	}
 	// the user's own provider is as it was
 	if own := f.provider("own"); own["baseURL"] != "https://api.openai.com/v1" || len(own["models"].([]any)) != 1 || own["name"] != "My OpenAI" {
@@ -487,6 +494,103 @@ func TestAlmaServerKeyed(t *testing.T) {
 // Alma's requests say nothing of Alma (they go out as the AI SDK's), so its
 // provider carries a key of Alma's: one wired before there was one gets it
 // on the next Sync, with nothing else sent, and only once.
+// Wiring Alma makes the model magpie draws with Alma's image generation
+// model, listed on magpie's provider as one that makes images, when Alma
+// has none picked (Sorghum on Discord); one the user picked is theirs.
+func TestAlmaImageGen(t *testing.T) {
+	syncHome(t)
+	if err := provider.Save(provider.Provider{ID: "img", Name: "Img", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"gpt-image-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	const drawn = "img/gpt-image-1"
+	if d := gateway.Drawer(); d != drawn {
+		t.Fatalf("magpie draws with %q", d)
+	}
+	f := startAlma(t)
+	a := alma()
+	if err := os.MkdirAll(a.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	image := func() string {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return almaImage(f.settings)
+	}
+	setImage := func(v string) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.settings["imageGen"] = map[string]any{"model": v, "aspectRatio": "16:9"}
+	}
+	// Alma's defaults: Auto
+	setImage("")
+	if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]any
+	for _, q := range f.providers {
+		if q["name"] == "magpie" {
+			p = q
+		}
+	}
+	pid := p["id"].(string)
+	if got := image(); got != pid+":"+drawn {
+		t.Fatalf("image generation: %q, want %q", got, pid+":"+drawn)
+	}
+	if ig := f.settings["imageGen"].(map[string]any); ig["aspectRatio"] != "16:9" ||
+		f.settings["chat"].(map[string]any)["defaultModel"] != pid+":relay/glm-4.6" || f.settings["memory"] == nil {
+		t.Fatalf("settings: %v", f.settings)
+	}
+	listed := false
+	for _, m := range p["availableModels"].([]any) {
+		if o := m.(map[string]any); o["id"] == drawn {
+			c, _ := o["capabilityOverrides"].(map[string]any)
+			listed = c["imageOutput"] == true
+		}
+	}
+	if ms := p["models"].([]any); !listed || ms[len(ms)-1] != drawn {
+		t.Fatalf("magpie's models: %v %v", p["models"], p["availableModels"])
+	}
+
+	// the user's own pick, theirs or magpie's, stays: choosing a model
+	// again or Sync leaves it
+	for _, v := range []string{"own:gpt-image-1", pid + ":relay/glm-4.6"} {
+		setImage(v)
+		if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if got := image(); got != v {
+			t.Fatalf("the user's %q became %q", v, got)
+		}
+	}
+	// Auto, gone back to after magpie set it: Sync leaves it
+	setImage("")
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := image(); got != "" {
+		t.Fatalf("Sync filled Auto with %q", got)
+	}
+	// a drawer magpie gave it before and offers no longer: Sync puts the
+	// one it draws with now
+	setImage(pid + ":old/gpt-image-0")
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if got := image(); got != pid+":"+drawn {
+		t.Fatalf("stale drawer: %q", got)
+	}
+	// back to Alma's own: its image generation goes back to Auto
+	if err := a.Apply("model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := image(); got != "" || len(f.providers) != 1 {
+		t.Fatalf("image generation %q, providers %v", got, f.providers)
+	}
+}
+
 func TestAlmaKey(t *testing.T) {
 	syncHome(t)
 	f := startAlma(t)
