@@ -190,13 +190,18 @@ func presets() error {
 		have[p.ID], have[p.Preset] = true, true
 	}
 	kind := provider.Kind("")
-	for _, pr := range provider.Presets() {
+	// partners first, as the app lists them: their heading says they pay
+	all := []provider.PresetDef{}
+	for _, pa := range provider.PartnersNow(3 * time.Second) {
+		all = append(all, pa.PresetDef)
+	}
+	for _, pr := range append(all, provider.Presets()...) {
 		if pr.Kind != kind {
 			kind = pr.Kind
-			fmt.Println(faint.Render("  " + map[provider.Kind]string{provider.KindVendor: "vendors", provider.KindRelay: "relays", provider.KindLocal: "local"}[kind]))
+			fmt.Println(faint.Render("  " + map[provider.Kind]string{provider.KindPartner: "partners (sponsors)", provider.KindVendor: "vendors", provider.KindRelay: "relays", provider.KindLocal: "local"}[kind]))
 		}
 		name := bold.Render(pr.Name)
-		if pr.Sponsored {
+		if pr.Sponsored && pr.Kind != provider.KindPartner {
 			name += " " + faint.Render("sponsored")
 		}
 		state := muted.Render("magpie provider add " + pr.ID + " <key>")
