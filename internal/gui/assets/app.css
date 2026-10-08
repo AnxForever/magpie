@@ -227,7 +227,10 @@ body.panel .seg { display: none; }
 /* the icon turns on a layer of its own — painted in place, WebKit leaves
    ghosts of each frame behind (#16) — and always finishes its turn */
 .icon svg { transform-origin: 50% 50%; backface-visibility: hidden; }
-.icon.spin svg { animation: spin .9s linear infinite; will-change: transform; }
+/* a spinner turns its drawing inside the svg, round the viewBox's centre:
+   WebKit turns a whole svg on a layer snapped to the pixel grid, so off a
+   whole pixel its ring circles about a point a pixel or so off its centre */
+.icon.spin svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .9s linear infinite; }
 /* a newer magpie is ready: a quiet pill before the header's icons */
 .update {
   align-self: center; display: inline-flex; align-items: center; gap: 4px;
@@ -395,7 +398,7 @@ body.panel #agents > .row .ag-handle::before { left: -10px; }
 .ag-fix:active { transform: scale(.96); }
 .ag-fix:focus-visible { outline: 1.5px solid var(--drift); outline-offset: 1px; }
 .ag-fix.busy { pointer-events: none; opacity: .7; }
-.ag-fix.busy svg { animation: spin .8s linear infinite; }
+.ag-fix.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
 /* what has to listen at an address no agent reaches magpie by (#1013): long addresses wrap, and it can be copied */
 .drift-why { overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 /* the agent's CLI on its name's line (#202): its version faint, and a quiet
@@ -425,8 +428,8 @@ body.window .row.agent .who .ag-cli { flex: 0 1 auto; overflow: hidden; }
 .ag-up:focus-visible { outline: 1.5px solid var(--fg-2); outline-offset: 1px; }
 .ag-up svg { color: var(--muted); }
 .ag-up.busy { pointer-events: none; color: var(--muted); }
-.ag-up.busy svg { animation: spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .ag-up.busy svg { animation: none; } }
+.ag-up.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .ag-up.busy svg > * { animation: none; } }
 /* Update all (#727): a line above the list once two or more agents' CLIs
    are behind, its pill like a row's */
 .ag-updates { flex: none; display: flex; align-items: center; gap: 10px; margin: 0 2px 10px; min-height: 22px; font-size: 12.5px; color: var(--fg-2); }
@@ -718,7 +721,7 @@ body.window .field.solo { grid-column: auto; }
 .quota-refresh:focus-visible { width: 14px; margin: 0 3px 0 -2px; opacity: 1; }
 .quota-refresh:hover { color: var(--fg); background: var(--pill-hover); }
 .quota-refresh.busy { cursor: default; }
-.quota-refresh.busy svg { animation: spin .8s linear infinite; }
+.quota-refresh.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
 @media (hover: none) { .quota-refresh { width: 14px; margin: 0 3px 0 -2px; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .quota-refresh { transition: none; } }
 .skeleton { display: block; border-radius: 5px; background: linear-gradient(90deg, var(--skel, var(--pill)) 25%, var(--skel-hi, var(--pill-hover)) 45%, var(--skel, var(--pill)) 65%); background-size: 240% 100%; animation: skeleton-shift 1.4s ease-in-out infinite; }
@@ -2405,8 +2408,9 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .editor .editor-error.warn { color: var(--amber); }
 .busy { opacity: .55; pointer-events: none; }
 .saving { opacity: 1; display: inline-flex; align-items: center; gap: 5px; }
-.saving svg { flex: none; animation: spin .8s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .saving svg { animation: none; } }
+.saving svg { flex: none; }
+.saving svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .saving svg > * { animation: none; } }
 
 /* agent chips: who is on this provider, click one to pick it a model */
 .achips { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -3036,7 +3040,7 @@ body.panel .modal { padding: 16px 12px; }
 /* how often the Usage page reads its numbers again, and a way to read them now */
 .usage-refresh { display: inline-flex; align-items: center; gap: 2px; margin-right: 10px; }
 .usage-refresh .icon { width: 24px; height: 24px; }
-.usage-refresh .icon.busy svg { animation: spin .8s linear infinite; }
+.usage-refresh .icon.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
 .usage-refresh .sess-pick { height: 24px; }
 .led-rank .rk .rk-b { overflow-wrap: anywhere; }
 

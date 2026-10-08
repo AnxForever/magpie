@@ -20395,11 +20395,12 @@ $("#sync").onclick = async () => {
     // clock: waiting for animationiteration and then dropping the class
     // jumped the icon back by however far it had turned while the page was
     // busy drawing the reply — the twitch at the end of every refresh.
-    const spin = b.querySelector("svg").getAnimations()[0];
+    // The svg's drawing turns, not the svg (app.css), one animation a part.
+    const spins = b.querySelector("svg").getAnimations({ subtree: true });
     const stop = () => b.classList.remove("spin");
-    if (spin?.effect?.updateTiming) {
-      spin.effect.updateTiming({ iterations: (spin.effect.getComputedTiming().currentIteration || 0) + 1 });
-      spin.finished.then(stop, stop);
+    if (spins.length && spins.every((a) => a.effect?.updateTiming)) {
+      for (const a of spins) a.effect.updateTiming({ iterations: (a.effect.getComputedTiming().currentIteration || 0) + 1 });
+      Promise.all(spins.map((a) => a.finished)).then(stop, stop);
     } else stop();
   }
 };
