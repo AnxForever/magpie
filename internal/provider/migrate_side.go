@@ -18,7 +18,7 @@ import (
 func init() {
 	movers["devin"] = &mover{
 		pkg:    "@magpie-community/opencode-devin-auth",
-		min:    "0.1.9", // a tool whose parameters have a root anyOf, oneOf or allOf goes as a plain object (#1196)
+		min:    "0.1.10", // a tool whose parameters have a root anyOf, oneOf or allOf goes as a plain object (#1196), a branch that is a union itself folded too (#1271)
 		agents: []string{"devin"},
 		// a variant picked before the families were one model (swe-2-high)
 		// goes to Devin as it is, through the plugin too, which keeps the
@@ -108,7 +108,7 @@ func init() {
 	// names, as the built-in does: the homes stay where they are.
 	movers["grok"] = &mover{
 		pkg:    "@magpie-community/opencode-grok-auth",
-		min:    "0.1.9", // a Go key the Provider API refuses is taken as Go's and asked at /alpha/generate (#969); a failure's status and its sign-in mark as the built-in's; grok-4.7's reasoning levels; a token Grok refuses early reads as expired; the sign-in renewed ahead of time through auth.refresh; a 429 shows a spent Rate limit window until it lifts; a login with no link says why
+		min:    "0.1.10", // a Go key the Provider API refuses is taken as Go's and asked at /alpha/generate (#969); a failure's status and its sign-in mark as the built-in's; grok-4.7's reasoning levels; a token Grok refuses early reads as expired; the sign-in renewed ahead of time through auth.refresh; a 429 shows a spent Rate limit window until it lifts; a login with no link says why; a tool whose parameters are a root union goes as a plain object (#1271)
 		agents: []string{"grok"},
 		out: func() ([]Moving, error) {
 			var out []Moving
