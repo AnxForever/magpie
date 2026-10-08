@@ -999,6 +999,15 @@ function newModels(a) {
 }
 
 const staleNow = (a) => a.wired && a.stale > 0 && staleSeen[a.id] !== a.stale;
+// a running copy left on the old list (agent.StaleCopy's kind): what it
+// is, since when, and how it is reopened — the words, and the command or
+// key in them as code
+const STALE_HOW = {
+  app: ["The {agent} app, started {when}: closing its window keeps it running. Quit it with {cmd} and open it again.", "⌘Q"],
+  ide: ["{agent} in an editor (VS Code, Cursor…), started {when}: reload that editor's window."],
+  daemon: ["{agent}'s background app-server, started {when}: restart it with {cmd}.", "codex app-server daemon restart"],
+  cli: ["A {agent} in a terminal, started {when}: quit it and start it again."],
+};
 
 // connectLine: the dot and the words under an agent's name
 function connectLine(a, kind) {
@@ -1263,6 +1272,17 @@ function connectPanel(a, { fields, fieldBtn }) {
       later.onclick = () => { staleSeen[a.id] = a.stale; renderAgents(); };
       w.append(later);
       parts.push(w);
+      // which copy is left, and how it is reopened: a reopen of one kind
+      // doesn't end another (the Codex app keeps running on macOS when its
+      // window is closed; an editor's Codex and the CLI's daemon run on)
+      for (const c of a.staleCopies || []) {
+        const how = STALE_HOW[c.kind];
+        if (!how) continue;
+        const [pre, post] = t(how[0], { agent: a.name, when: ago(c.since) }).split("{cmd}");
+        const l = line(pre, ...(how[1] ? [code(how[1]), post || ""] : []));
+        l.classList.add("ag-stale-copy");
+        parts.push(l);
+      }
     }
     kv(t("In {agent}", { agent: a.name }), ...parts);
   } else if (menuFromList(a)) {
