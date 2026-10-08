@@ -34,6 +34,7 @@ func init() {
 	// the Sessions page reads the sessions of the agents in WSL distros
 	sessions.WSLHomes = wslHomes
 	sessions.WSLRunning = WSLRunning
+	sessions.WSLOff = func() bool { return !wslLooks() }
 }
 
 // others are clients that reach the gateway without being agents magpie
