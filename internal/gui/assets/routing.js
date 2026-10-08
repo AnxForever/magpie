@@ -2650,8 +2650,12 @@
   }
   const slug = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   let groups = null, gEdit = null; // gEdit: { id: "" for a new one, draft }
-  async function loadGroups() {
-    try { groups = await api("groups"); } catch { return; }
+  // quiet: the window focused again; the same groups aren't drawn again
+  async function loadGroups(quiet) {
+    let next;
+    try { next = await api("groups"); } catch { return; }
+    if (quiet === true && groups && JSON.stringify(next) === JSON.stringify(groups)) return;
+    groups = next;
     if (!gEdit && !gsec.contains(document.activeElement)) renderGroups(); // not under someone's hands
   }
   const groupDirty = () => !!gEdit && gEdit.was !== undefined &&
@@ -3848,7 +3852,7 @@
   }
   // loaded when the view is shown, and again when the window comes back
   new MutationObserver(() => { if (!$("#view-routing").hidden) loadGroups(); }).observe($("#view-routing"), { attributes: true, attributeFilter: ["hidden"] });
-  window.addEventListener("focus", () => { if (shown()) loadGroups(); });
+  window.addEventListener("focus", () => { if (shown()) loadGroups(true); });
   // newGroupWith: a new group's editor, opened with the model in it — a
   // model of a provider kept for routing groups that no group has, which
   // agents can reach no other way. The picker and the provider's editor

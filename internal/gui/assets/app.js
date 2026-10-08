@@ -3005,7 +3005,12 @@ function fit(extra = 0, glide) {
   api("window/fit?h=" + h + (still ? "" : "&ms=" + glide.ms + "&ease=" + glide.ease), {});
 }
 
-async function load() {
+// again: the window came back (focused, or shown again), which only reads
+// what is on the page anew. It must not put a page's skeleton up over what
+// it shows: under focus-follows-mouse (Hyprland; Zhenzhen on Discord) the
+// pointer crossing into the window blanked the Usage chart each time.
+async function load(again) {
+  again = again === true;
   if (!load.done) renderAgentsLoading();
   // the gateway page too waits for the state first: its skeleton, not a
   // blank page, until then (#123)
@@ -3021,6 +3026,7 @@ async function load() {
     load.done = true;
     // the library may have drawn itself before the saved language was known
     if (applyPrefs(state.settings, state.fx)) {
+      again = false; // the Usage page too is drawn again, in the new language
       if (view === "library") window.loadLibrary?.();
       if (view === "plugins") window.loadPlugins?.();
       if (view === "sessions") window.loadSessionsPage?.();
@@ -3037,7 +3043,9 @@ async function load() {
     // an open provider editor is someone typing: coming back to the window
     // must not rebuild it under them
     if ((view === "providers" || view === "gateway") && !(editing || adding)) await loadProviders();
-    if (view === "usage") await loadUsage();
+    // the window back on the Usage page reads the tab shown as its own timer
+    // does: drawn again only on a change, with no skeleton between
+    if (view === "usage") await (again && usageDrawn() ? refreshUsage() : loadUsage());
     // so is an open sync form (WebDAV, export, import): its passwords are
     // never sent back, so a rebuild would empty it
     if (view === "settings" && !syncOpen) await loadSettings();
@@ -13562,10 +13570,13 @@ let panelUseAt = 0;
 // One read at a time: a 10 s timer must not start a second behind a slow one,
 // and a read asked for while one is (a period or a provider picked, the tab
 // shown) is kept and served when it is done, so a pick is never dropped.
-let panelUseFlight = null, panelUseQueued = false;
-function loadPanelUse() {
+// quiet: the timer or the panel opened again asked, not the reader: what is
+// shown isn't dimmed meanwhile, and is drawn again only when it changed, so
+// the chart doesn't blink every 10 s or at each focus.
+let panelUseFlight = null, panelUseQueued = false, panelUseQueuedLoud = false;
+function loadPanelUse(quiet = false) {
   if (mode !== "panel") return Promise.resolve();
-  if (panelUseFlight) { panelUseQueued = true; return panelUseFlight; }
+  if (panelUseFlight) { panelUseQueued = true; panelUseQueuedLoud = panelUseQueuedLoud || !quiet; return panelUseFlight; }
   const q = new URLSearchParams({ period: panelUsePeriod, limit: "1" });
   if (panelUseProvider) q.set("provider", panelUseProvider);
   if (panelUseComputer) q.set("computer", panelUseComputer);
@@ -13574,7 +13585,7 @@ function loadPanelUse() {
   panelUseAt = performance.now();
   // what is shown stays, dimmed, till the answer comes: the panel doesn't
   // shrink to a skeleton and lose where it was scrolled to
-  $("#panelUsage").classList.add("pu-loading");
+  if (!quiet || !panelUse) $("#panelUsage").classList.add("pu-loading");
   const read = async () => {
     try {
       const l = await api("usage/requests?" + want);
@@ -13583,9 +13594,10 @@ function loadPanelUse() {
       if (panelUseComputer) now.set("computer", panelUseComputer);
       if (panelUseDay) now.set("day", panelUseDay);
       if (now.toString() !== want) return; // another period or provider was picked meanwhile
+      const same = !!panelUse && JSON.stringify(l) === JSON.stringify(panelUse);
       panelUse = l;
       $("#panelUsage").classList.remove("pu-loading");
-      if (panelTab === "stats") renderPanelUse();
+      if (panelTab === "stats" && !(quiet && same)) renderPanelUse();
     } catch (e) {
       // the read failed: nothing is on its way for it, so the dimming comes off
       $("#panelUsage").classList.remove("pu-loading");
@@ -13596,8 +13608,9 @@ function loadPanelUse() {
     if (panelUseFlight !== flight) return;
     panelUseFlight = null;
     if (!panelUseQueued) return;
-    panelUseQueued = false;
-    return loadPanelUse(); // include the latest pick or manual refresh in this promise
+    const loud = panelUseQueuedLoud;
+    panelUseQueued = panelUseQueuedLoud = false;
+    return loadPanelUse(!loud); // include the latest pick or manual refresh in this promise
   });
   panelUseFlight = flight;
   return flight;
@@ -13610,9 +13623,9 @@ function panelUseShown() {
 }
 if (mode === "panel") {
   // requests come while it is looked at
-  setInterval(() => { if (panelTab === "stats" && !document.hidden) loadPanelUse().catch(() => {}); }, 10e3);
+  setInterval(() => { if (panelTab === "stats" && !document.hidden) loadPanelUse(true).catch(() => {}); }, 10e3);
   // and the panel opened again reads them at once, not at the next tick
-  const again = () => { if (panelTab === "stats" && !document.hidden && performance.now() - panelUseAt > 2e3) loadPanelUse().catch(() => {}); };
+  const again = () => { if (panelTab === "stats" && !document.hidden && performance.now() - panelUseAt > 2e3) loadPanelUse(true).catch(() => {}); };
   window.addEventListener("focus", again);
   document.addEventListener("visibilitychange", again);
 }
@@ -20362,7 +20375,7 @@ if (mode === "window") new ResizeObserver(() => {
 }).observe($("#nav"));
 document.fonts?.ready.then(fitTop);
 
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { load(); wag(); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { load(true); wag(); } });
 // an agent's config can be rewritten, or the agent run round magpie, while the
 // window is up: ask what drifted now and then, and redraw only on a change —
 // never under an open menu
@@ -20425,6 +20438,14 @@ function renderUsageEvery() {
 // the reader's own if either asked for it. The promise covers that second read
 // too, so the button turns while the reader's own is still to come.
 let usageFlight = null, usageQueued = false, usageQueuedNow = false;
+// usageDrawn: the tab shown has its figures on the page already, which a
+// quiet read (refreshUsage) only replaces when they changed
+function usageDrawn() {
+  if (usageTab === "sessions") return !!(sessions && sessStats);
+  if (usageTab === "requests") return !!ledger;
+  if (usageTab === "context") return true; // loadContext keeps what it drew when nothing changed
+  return !!usage && !$("#view-usage").classList.contains("loading");
+}
 function refreshUsage(now = false) {
   usageLast = performance.now();
   if (usageFlight) {
@@ -20480,7 +20501,7 @@ setInterval(() => {
   if (!usageEvery || view !== "usage" || document.hidden || document.querySelector(".pop:not([hidden])")) return;
   if (performance.now() - usageLast >= usageEvery * 1000) refreshUsage();
 }, 1000);
-window.addEventListener("focus", load);
+window.addEventListener("focus", () => load(true));
 setInterval(renderUpdateBadge, 15 * 60 * 1000); // a window left open still hears of a new version
 // renderPluginDot puts a dot on Plugins while a plugin's update waits for
 // the reader (someone else's plugin, or one pinned; the community's update
