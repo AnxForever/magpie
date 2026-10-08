@@ -147,6 +147,23 @@ func TestTakesRefusesAlma(t *testing.T) {
 	}
 }
 
+// Claude Desktop keeps its instructions in its own settings and OpenChamber
+// reads OpenCode's: the refusal says where they go instead, and lists the
+// agents here that take that kind (MOMO on Discord: "has no user-wide
+// place" said neither).
+func TestTakesSaysWhereInstead(t *testing.T) {
+	sandbox(t)
+	_, err := Takes("claude-desktop", "instructions")
+	if err == nil || !strings.Contains(err.Error(), "give them to claude") || !strings.Contains(err.Error(), "agents here that take instructions: ") || !strings.Contains(err.Error(), "gemini") {
+		t.Errorf("claude-desktop instructions: %v", err)
+	}
+	for _, kind := range []string{"instructions", "mcp", "skills"} {
+		if _, err := Takes("openchamber", kind); err == nil || !strings.Contains(err.Error(), "give them to opencode") {
+			t.Errorf("openchamber %s: %v", kind, err)
+		}
+	}
+}
+
 // Every format writes a server so that reading it back gives it again, and
 // taking it out leaves the file as the user had it.
 func TestServerEveryFormat(t *testing.T) {
