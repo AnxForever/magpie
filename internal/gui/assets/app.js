@@ -1006,6 +1006,8 @@ const STALE_HOW = {
   app: ["The {agent} app, started {when}: closing its window keeps it running. Quit it with {cmd} and open it again.", "⌘Q"],
   ide: ["{agent} in an editor (VS Code, Cursor…), started {when}: reload that editor's window."],
   daemon: ["{agent}'s background app-server, started {when}: restart it with {cmd}.", "codex app-server daemon restart"],
+  // another app's own Codex (Agents Anywhere's), named by that app
+  embedded: ["{app}'s own {agent}, started {when}: quit {app} and open it again."],
   cli: ["A {agent} in a terminal, started {when}: quit it and start it again."],
 };
 
@@ -1278,7 +1280,7 @@ function connectPanel(a, { fields, fieldBtn }) {
       for (const c of a.staleCopies || []) {
         const how = STALE_HOW[c.kind];
         if (!how) continue;
-        const [pre, post] = t(how[0], { agent: a.name, when: ago(c.since) }).split("{cmd}");
+        const [pre, post] = t(how[0], { agent: a.name, when: ago(c.since), app: c.app || "" }).split("{cmd}");
         const l = line(pre, ...(how[1] ? [code(how[1]), post || ""] : []));
         l.classList.add("ag-stale-copy");
         parts.push(l);

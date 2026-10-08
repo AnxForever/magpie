@@ -4,7 +4,7 @@
 // the app running, and an editor's Codex or the CLI's daemon runs on
 // through a reopened app. Opened, the row says which copy is left on the
 // old list, since when, and how that one is reopened: ⌘Q for the app, the
-// daemon's restart command. Every language, wide and narrow; "Got it"
+// daemon's restart command, the app whose own Codex it is. Every language, wide and narrow; "Got it"
 // takes it away. No backend, the API is faked here.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -17,7 +17,7 @@ const days = (n) => new Date(Date.now() - n * 86400e3).toISOString();
 const codex = {
   id: "codex", name: "Codex", icon: "generic", path: "/fixture/codex", wired: true,
   fields: [{ key: "model", label: "model", value: "gpt-6.1-sol", options: [{ value: "gpt-6.1-sol", label: "GPT-6.1 Sol", ref: "group/auto-gpt-6-1-sol", note: "Group · via magpie" }] }],
-  stale: 2, staleCopies: [{ kind: "app", since: days(3) }, { kind: "daemon", since: days(1) }],
+  stale: 3, staleCopies: [{ kind: "app", since: days(3) }, { kind: "daemon", since: days(1) }, { kind: "embedded", app: "Agents Anywhere", since: days(1) }],
 };
 
 function serve(lang) {
@@ -59,12 +59,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator(`${row} .ag-link`).click();
         const copies = page.locator(`${row} .ag-stale-copy`);
         await copies.first().waitFor();
-        assert.equal(await copies.count(), 2);
-        const [app, daemon] = await copies.allTextContents();
+        assert.equal(await copies.count(), 3);
+        const [app, daemon, embedded] = await copies.allTextContents();
+        // miaopasi: Agents Anywhere's own Codex, named by its app
+        assert.equal(embedded.split("Agents Anywhere").length - 1, 2, embedded);
         assert.equal(await copies.nth(0).locator("code").textContent(), "⌘Q");
         assert.equal(await copies.nth(1).locator("code").textContent(), "codex app-server daemon restart");
         assert.match(app, ago3[lang], "the app's start");
-        for (const s of [app, daemon]) {
+        for (const s of [app, daemon, embedded]) {
           assert.ok(s.includes("Codex"), s);
           assert.doesNotMatch(s, /\{\w+\}/, "a placeholder left: " + s);
         }
