@@ -1259,13 +1259,16 @@ func userMessage(text string) map[string]any {
 // asked once more with the conversation as plain text, none of its items'
 // ids or sealed reasoning in it; when that fails too the summary is
 // magpie's own, the conversation's user messages and last reply,
-// so the compaction still completes and Codex goes on. Any other failure
+// so the compaction still completes and Codex goes on. So is one the
+// ChatGPT backend answers 502 "response protection is unavailable" (vs on
+// Discord): the same long history failed so on every account and model,
+// and as plain text was summarised. Any other failure
 // (401, 429, 500) goes back to Codex as it came.
 func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byte) {
 	rec := &recorder{header: http.Header{}, status: 200}
 	s.serve(rec, r, provider.Responses, body)
 	local := ""
-	if first := rec.status; first == http.StatusNotFound || itemNotFound(rec) {
+	if first := rec.status; first == http.StatusNotFound || itemNotFound(rec) || protectionRefused(first, rec.body.Bytes()) {
 		who, msg := compactFailure(body, rec)
 		log.Printf("codex compaction: %s answered %d (%s); asking again with the conversation as text", who, first, msg)
 		rec = &recorder{header: http.Header{}, status: 200}

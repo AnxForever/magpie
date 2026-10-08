@@ -2192,7 +2192,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !last && hw.failed() && spentAfter(cands[i+1:]) {
+		// the ChatGPT backend's 502 "response protection is unavailable"
+		// (vs on Discord): the same history fails the same on every one
+		// of its accounts and models, so none of them is asked it again,
+		// nor this one after a moment, and nobody rests — 62 compactions
+		// had cost 616 tries, and the accounts their allowances. Another
+		// vendor left in the group is asked, once
+		protected := !hw.passing && !hw.refused && protectionRefused(hw.code(), hw.errBody())
+		if protected {
+			if other == nil {
+				other = &Try{Status: call.Status, Error: call.Error}
+			}
+			try.Fail = failOther
+			if left := elsewhere(cands[i+1:], c); len(left) > 0 {
+				try.Fail = failShape
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				skipped = append(skipped, c.label()+": "+call.Error)
+				cands = append(cands[:i+1:i+1], left...)
+				continue
+			}
+			cands = cands[:i+1]
+			last = true
+		}
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !last && hw.failed() && spentAfter(cands[i+1:]) {
 			// the others left are out of their allowance (Discord, waroy: a
 			// Codex account run out, Grok busy a moment): this one is the
 			// last that may answer, and is tried again as the last is
@@ -2219,7 +2241,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && hw.failed() {
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && hw.failed() {
 			// nobody else is left: the same one again, after a moment
 			try.Fail, try.Again = failureOf(c, hw.code(), hw.errBody()), wait.Milliseconds()
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })

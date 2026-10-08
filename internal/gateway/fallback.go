@@ -736,6 +736,34 @@ func shapeRefused(status int, body []byte) bool {
 		!quotaWords.Match(body) && !unservedWords.Match(body) && !refusedWords.Match(body)
 }
 
+// protectionWords are how the ChatGPT backend answers a long Codex
+// conversation it won't take as it is: 502 "response protection is
+// unavailable" (vs on Discord, 0.1.1108). It comes back the same for the
+// same history on every account and model the backend serves, and the
+// history as plain text is answered, so it is about the request, not the
+// account: asked again there, it only drains the accounts' allowances.
+var protectionWords = regexp.MustCompile(`(?i)response protection is unavailable`)
+
+// protectionRefused says the vendor turned the request's content away
+// with protectionWords: the account is not at fault, and none of its
+// provider's other accounts or models is asked the same.
+func protectionRefused(status int, body []byte) bool {
+	return status >= 400 && protectionWords.Match(body)
+}
+
+// elsewhere is, of the candidates left, those not at c's provider, whose
+// every account and model the same request reaches the same backend
+// through.
+func elsewhere(left []candidate, c candidate) []candidate {
+	var out []candidate
+	for _, x := range left {
+		if x.p.ID != c.p.ID {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 // retryable says whether another provider may do better with a request
 // that failed this way: the vendor was busy, out of quota or failing, or
 // this key or provider can't serve it — not the request itself at fault.
@@ -763,7 +791,7 @@ func retryable(status int, body []byte) bool {
 // vendor turned away as it reads, would fail the same at the next asked:
 // nobody rests for it.
 func lateRests(msg string) bool {
-	return !tooLong(http.StatusBadRequest, msg) && !refusedWords.MatchString(msg)
+	return !tooLong(http.StatusBadRequest, msg) && !refusedWords.MatchString(msg) && !protectionWords.MatchString(msg)
 }
 
 // unsaidMargin is how far past a model's window a request's estimate
