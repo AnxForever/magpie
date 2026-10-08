@@ -3489,7 +3489,7 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				r.OffLevel, req = l, &r
 			}
 		}
-		body, err := build(to, req, model, p.Host(), p.RejectsTemperature(model))
+		body, err := build(to, req, model, buildHost(p), p.RejectsTemperature(model))
 		if err != nil {
 			return nil, to, err
 		}
