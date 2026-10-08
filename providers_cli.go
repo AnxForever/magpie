@@ -198,6 +198,7 @@ func presets() error {
 		shown = append(shown, pa.ID)
 	}
 	provider.CountPartner(provider.PartnerShown, shown...)
+	provider.NoticePartners(shown...)
 	for _, pr := range append(all, provider.Presets()...) {
 		if pr.Kind != kind {
 			kind = pr.Kind

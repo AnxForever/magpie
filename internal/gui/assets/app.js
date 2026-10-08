@@ -4687,6 +4687,7 @@ function renderProviders() {
   // scroll to the top; put it back so closing the editor leaves the reader
   // where they were.
   const view = $("#view-providers"), top = view.scrollTop;
+  markNewPartners();
   keepIcons($("#providers"), $("#offProviders"), $("#addSheet"), $("#excluded"));
   view.classList.remove("loading");
   view.removeAttribute("aria-busy");
@@ -6505,6 +6506,9 @@ function renderAdd() {
       const fresh = partners.filter((p) => !partnersCounted.has(p.id));
       for (const p of fresh) partnersCounted.add(p.id);
       countPartner("shown", fresh.map((p) => p.id));
+      // shown, they are new no more (provider.NoticePartners)
+      for (const p of partners) p.new = false;
+      markNewPartners();
     }
     if (subs.length || inPlugins) {
       any = true;
@@ -6738,6 +6742,18 @@ function partnerNote(pr) {
 // counts them only when the stats are on, and nothing waits on it
 function countPartner(what, ids) {
   if (ids.length) api("partner", { what, ids }).catch(() => {});
+}
+
+// a partner listed since the add sheet last showed the partners puts a
+// small dot on the add button, its name in the button's title, until the
+// sheet shows it (yetone: 有了新的合作伙伴的时候…提醒吸引用户点击查看)
+function markNewPartners() {
+  const b = $("#addProvider");
+  if (!b) return;
+  const fresh = adding ? [] : (providers?.presets || []).filter((p) => p.kind === "partner" && p.new && !p.added && partnerShown(p));
+  b.classList.toggle("has-new", fresh.length > 0);
+  if (fresh.length) b.title = t("New in Partners: {names}", { names: fresh.map((p) => p.name).join(", ") });
+  else b.removeAttribute("title");
 }
 
 // a partner's row: its own section says it is sponsored, so no badge

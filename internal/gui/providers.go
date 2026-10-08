@@ -289,6 +289,9 @@ type presetJSON struct {
 	// a partner's tagline by language, and the languages it is listed in
 	Notes map[string]string `json:"notes,omitempty"`
 	Langs []string          `json:"langs,omitempty"`
+	// New: a partner listed since the add sheet last showed the partners,
+	// and not added; the add button marks it
+	New bool `json:"new,omitempty"`
 }
 
 type gatewayJSON struct {
@@ -645,7 +648,7 @@ func providersState() providersJSON {
 	}
 	// partners first, as the add sheet lists them
 	for _, pa := range provider.Partners() {
-		s.Presets = append(s.Presets, presetJSON{PresetDef: pa.PresetDef, Added: have[pa.ID], Notes: pa.Notes, Langs: pa.Langs})
+		s.Presets = append(s.Presets, presetJSON{PresetDef: pa.PresetDef, Added: have[pa.ID], Notes: pa.Notes, Langs: pa.Langs, New: !have[pa.ID] && !provider.PartnerNoticed(pa.ID)})
 	}
 	for _, pr := range provider.Presets() {
 		team := provider.TakesZhipuTeam(provider.Provider{Chat: pr.Chat, Responses: pr.Responses, Anthropic: pr.Anthropic})
@@ -1730,7 +1733,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	// the add sheet counts what it showed of the partners and what was
-	// opened of them (provider.CountPartner); only listed partners count
+	// opened of them (provider.CountPartner); only listed partners count.
+	// Those shown are no longer new (provider.NoticePartners).
 	mux.HandleFunc("POST /api/partner", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			What string
@@ -1739,6 +1743,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in)
 		if len(in.IDs) <= provider.MaxPartners {
 			provider.CountPartner(in.What, in.IDs...)
+			if in.What == provider.PartnerShown {
+				provider.NoticePartners(in.IDs...)
+			}
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})

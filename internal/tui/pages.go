@@ -407,7 +407,10 @@ func (m *model) openPresets() {
 		items = append(items, agent.Option{Value: d.ID, Note: d.Name + " · partner (sponsor)"})
 		shown = append(shown, d.ID)
 	}
-	go provider.CountPartner(provider.PartnerShown, shown...)
+	go func() {
+		provider.CountPartner(provider.PartnerShown, shown...)
+		provider.NoticePartners(shown...)
+	}()
 	for _, d := range provider.Presets() {
 		items = append(items, agent.Option{Value: d.ID, Note: d.Name + " · " + string(d.Kind)})
 	}

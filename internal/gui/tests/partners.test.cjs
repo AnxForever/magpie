@@ -36,7 +36,9 @@ function server(lang, list, counted) {
     if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:false};` });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light" } });
-    if (url.pathname === "/api/providers") return json({ providers, presets: [...list, ...presets], excluded: [], gateway: { running: true, window: true } });
+    // a partner the sheet showed is new no more, as provider.NoticePartners keeps
+    const shown = new Set((counted || []).filter((c) => c.what === "shown").flatMap((c) => c.ids));
+    if (url.pathname === "/api/providers") return json({ providers, presets: [...list.map((p) => (shown.has(p.id) ? { ...p, new: false } : p)), ...presets], excluded: [], gateway: { running: true, window: true } });
     if (url.pathname === "/api/groups") return json({ groups: [], pools: [] });
     if (url.pathname === "/api/gateway/trace") return json({ routes: [] });
     if (url.pathname.startsWith("/api/")) return json({});
@@ -136,6 +138,42 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(counted.slice(1), [{ what: "opened", ids: ["acme"] }, { what: "keys", ids: ["acme"] }]);
       await page.context().close();
     });
+    // a partner listed since the sheet last showed them puts a small dot on
+    // the add button, named in its title, until the sheet shows it; one
+    // added, or not listed in the page's language, doesn't
+    for (const [lang, title] of [["en", "New in Partners: Acme AI"], ["zh", "合作伙伴有新成员：Acme AI, China Only"]]) for (const width of [900, 440]) {
+      await t.test("new partner dot " + lang + " " + width, async () => {
+        const page = await (await browser.newContext({ viewport: { width, height: 800 } })).newPage();
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        const counted = [];
+        const list = partners.map((p) => ({ ...p, new: true }));
+        await page.route("**/*", server(lang, list, counted));
+        await page.goto("http://magpie.test/?view=providers");
+        const add = page.locator("#addProvider");
+        await add.waitFor();
+        await page.waitForFunction(() => document.querySelector("#addProvider").classList.contains("has-new"));
+        assert.equal(await add.getAttribute("title"), title);
+        const dot = await add.evaluate((b) => { const s = getComputedStyle(b, "::after"); const r = b.getBoundingClientRect(); return { w: s.width, h: s.height, bg: s.backgroundColor, over: b.scrollWidth > b.clientWidth + 1, right: r.right <= innerWidth }; });
+        assert.deepEqual([dot.w, dot.h, dot.over, dot.right], ["6px", "6px", false, true]);
+        assert.notEqual(dot.bg, "rgba(0, 0, 0, 0)");
+
+        // the sheet shows them: no dot, then or after the page comes back
+        await add.click();
+        await page.locator("#addSheet .tile").first().waitFor();
+        assert.equal(await add.evaluate((b) => b.classList.contains("has-new")), false);
+        await page.keyboard.press("Escape");
+        await page.locator("#addSheet").waitFor({ state: "hidden" });
+        assert.equal(await add.evaluate((b) => b.classList.contains("has-new")), false);
+        assert.equal(await add.getAttribute("title"), null);
+        await page.reload();
+        await add.waitFor();
+        await page.waitForTimeout(200);
+        assert.equal(await add.evaluate((b) => b.classList.contains("has-new")), false);
+        assert.deepEqual(errors, []);
+        await page.context().close();
+      });
+    }
     await t.test("no partners, no heading", async () => {
       const page = await (await browser.newContext({ viewport: { width: 900, height: 800 } })).newPage();
       await page.route("**/*", server("en", []));
