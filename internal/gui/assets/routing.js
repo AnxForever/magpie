@@ -199,6 +199,23 @@
   colB.append(actHead, acts);
   hist.append(colA, colB);
   more.append(hist);
+  // the narrow and wide layouts go by a box's own width, as container
+  // queries would, set here as a class (max560: 560px wide or less). Not
+  // by container queries: with query containers in it, WebKit pulled the
+  // scrolling view back from its end a frame after each scroll there, so
+  // the page couldn't be scrolled to its bottom (#1249). Set on the next
+  // frame: a class changed in the observer's own call changes the box's
+  // height, which WebKit reports as a ResizeObserver loop (see quotaFit)
+  const byWidth = (node, marks) => new ResizeObserver(([e]) => {
+    const w = e.contentRect.width;
+    requestAnimationFrame(() => {
+      for (const [cls, fits] of Object.entries(marks)) node.classList.toggle(cls, fits(w));
+    });
+  }).observe(node);
+  byWidth(box, { max560: (w) => w <= 560 });
+  byWidth(list, { max460: (w) => w <= 460, max560: (w) => w <= 560 });
+  byWidth(more, { max520: (w) => w <= 520, min1150: (w) => w >= 1150 });
+  for (const col of [colA, colB]) byWidth(col, { max440: (w) => w <= 440, max760: (w) => w <= 760 });
 
   const path = () => { const p = document.createElementNS(NS, "path"); wires.appendChild(p); return p; };
   const setText = (e, s) => { if (e.textContent !== s) e.textContent = s; };
@@ -1302,7 +1319,7 @@
     ctxShown = r.id;
     const sess = groupSession(r) || r.conv || "";
     ctxBox.replaceChildren(window.ctxCard(r, {
-      still, series, tab: ctxTab,
+      still, series, tab: ctxTab, place: "routing",
       onTab: (id) => { ctxTab = id; },
       crumbs: [agentName(r.agent), sess && (sess.length > 14 ? sess.slice(0, 12) + "…" : sess), "#" + r.id],
       onPoint: (pt) => {

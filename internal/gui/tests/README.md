@@ -1997,6 +1997,18 @@ aligned list bottoms, account model labels, and no horizontal overflow at
 node --test internal/gui/tests/routing-columns.test.cjs
 ```
 
+`routing-scroll-end.test.cjs` wheels the Routing page to its end while the
+trace redraws it, at 440x620, 600x700, 900x500, 1200x600 and 1400x700, and
+checks that it stays there (#1249: in WebKit, container queries pulled it
+back). It also checks the stage, request and column layouts that those
+widths select. `context-scroll-end.test.cjs` does the same on Usage's
+Context tab, with a session open, across its timed reads. Both run in
+English and Chinese, on Chromium and WebKit.
+
+```sh
+node --test internal/gui/tests/routing-scroll-end.test.cjs internal/gui/tests/context-scroll-end.test.cjs
+```
+
 ## Automatic Codex title grouping
 
 `routing-sessions.test.cjs` checks automatic grouping after a Codex title write,
