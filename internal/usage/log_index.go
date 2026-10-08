@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const logBlockRows = 512
+const (
+	logBlockRows   = 512
+	logStampSettle = time.Second
+)
 
 // Raw and priced chunks share the request cache budget. Oversized histories
 // remain queryable but their raw blocks are rebuilt instead of retained.
@@ -22,6 +25,7 @@ const logBlockRows = 512
 type logSnapshot struct {
 	bytes        int64
 	uncached     bool
+	settled      bool
 	path         string
 	info         os.FileInfo
 	off          int64
@@ -38,6 +42,9 @@ var logIndex struct {
 	version  uint64
 }
 
+var logIndexNow = time.Now
+var logRecordHash = recordHash
+
 // File writes must never wait for a historical index rebuild.
 var logAppends struct {
 	sync.Mutex
@@ -53,11 +60,23 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	logIndex.Lock()
 	defer logIndex.Unlock()
 	path := Path()
+	start := logIndexNow()
 	info, err := statLogFile(path)
+	settled := settledLogStamp(info, start)
 	old := logIndex.snapshot
 	unchanged := old != nil && old.path == path && (err != nil && old.info == nil || err == nil && sameLogInfo(old.info, info))
-	if unchanged && info != nil && logChangeStamp(info) == "" {
-		unchanged = old.hash != "" && recordHash(path, info.Size()) == old.hash
+	if unchanged && info != nil {
+		if logChangeStamp(info) == "" || !old.settled {
+			unchanged = old.hash != "" && logRecordHash(path, info.Size()) == old.hash
+			if unchanged && settled {
+				promoted := *old
+				promoted.info, promoted.settled = info, true
+				old = &promoted
+				logIndex.snapshot = old
+			}
+		} else {
+			unchanged = old.settled && settled
+		}
 	}
 	if unchanged && (!old.uncached || metadataOnly) {
 		return old
@@ -66,7 +85,7 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 		logIndex.version++
 	}
 
-	next := &logSnapshot{path: path, info: info, version: logIndex.version, keyProviders: map[string]bool{}}
+	next := &logSnapshot{path: path, info: info, settled: settled, version: logIndex.version, keyProviders: map[string]bool{}}
 	if err != nil {
 		logIndex.snapshot = next
 		return next
@@ -74,8 +93,8 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	logAppends.Lock()
 	notePath, noteBase, noteLast := logAppends.path, logAppends.base, logAppends.last
 	logAppends.Unlock()
-	trusted := logChangeStamp(info) != "" && notePath == path && sameLogInfo(oldInfo(old), noteBase) && sameLogInfo(info, noteLast)
-	continued := old != nil && old.path == path && old.info != nil && sameLogFile(old.info, info) && info.Size() > old.info.Size() && (trusted || old.hash != "" && recordHash(path, old.info.Size()) == old.hash)
+	trusted := old != nil && old.settled && logChangeStamp(info) != "" && notePath == path && sameLogInfo(oldInfo(old), noteBase) && sameLogInfo(info, noteLast)
+	continued := old != nil && old.path == path && old.info != nil && sameLogFile(old.info, info) && info.Size() > old.info.Size() && (trusted || old.hash != "" && logRecordHash(path, old.info.Size()) == old.hash)
 	if continued && !old.uncached {
 		next.off, next.first = old.off, old.first
 		next.blocks = slices.Clone(old.blocks)
@@ -88,6 +107,9 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	defer f.Close()
 	if _, err = f.Seek(next.off, 0); err != nil {
 		return next
+	}
+	if !trusted || !settled {
+		next.hash = logRecordHash(path, info.Size())
 	}
 	var tail *rowChunk
 	if n := len(next.blocks); n > 0 && next.blocks[n-1].Count < logBlockRows {
@@ -123,8 +145,10 @@ func logSnapshotFor(metadataOnly bool) *logSnapshot {
 	if tail != nil {
 		next.blocks = append(next.blocks, tail.freeze())
 	}
-	if !trusted || logChangeStamp(info) == "" {
-		next.hash = recordHash(path, info.Size())
+	// A rewrite during the read must not give old blocks the new content's hash.
+	if (!trusted || !settled) && next.hash != logRecordHash(path, info.Size()) {
+		next.hash = ""
+		next.settled = false
 	}
 	logAppends.Lock()
 	// Preserve writes which arrived while this immutable snapshot was built.
@@ -194,6 +218,14 @@ func oldInfo(s *logSnapshot) os.FileInfo {
 	}
 	return s.info
 }
+
+// A read in the change stamp's clock tick cannot prove that a later equal
+// stamp still names the same bytes. Decide before reading, not at reuse time.
+func settledLogStamp(info os.FileInfo, start time.Time) bool {
+	c := logChangeTime(info)
+	return !c.IsZero() && c.Before(start.Add(-logStampSettle))
+}
+
 func sameLogInfo(a, b os.FileInfo) bool {
 	return a != nil && b != nil && sameLogFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) && logChangeStamp(a) == logChangeStamp(b)
 }

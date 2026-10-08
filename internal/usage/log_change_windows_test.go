@@ -39,6 +39,10 @@ func requireChangeStamp(t *testing.T, path string) string {
 	if stamp == "" {
 		t.Fatal("ChangeTime is available but the snapshot has no stamp")
 	}
+	want := time.Unix(basic.ChangeTime/10_000_000-11_644_473_600, basic.ChangeTime%10_000_000*100)
+	if got := logChangeTime(info); !got.Equal(want) {
+		t.Fatalf("captured ChangeTime %v != FILETIME %v", got, want)
+	}
 	return stamp
 }
 
@@ -122,6 +126,7 @@ func TestLogChangeSnapshotStampImmutable(t *testing.T) {
 
 func TestLogChangeSnapshotReuseWithoutFingerprint(t *testing.T) {
 	pageHome(t)
+	settleLogClock(t)
 	historyLog(t, 1034)
 	first := readLogSnapshot()
 	requireChangeStamp(t, Path())
@@ -141,6 +146,7 @@ func TestLogChangeSnapshotReuseWithoutFingerprint(t *testing.T) {
 
 func TestLogChangeTrustedAppendReuse(t *testing.T) {
 	pageHome(t)
+	settleLogClock(t)
 	historyLog(t, 1034)
 	before := readLogSnapshot()
 	requireChangeStamp(t, Path())
