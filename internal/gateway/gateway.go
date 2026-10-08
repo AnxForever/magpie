@@ -2615,7 +2615,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	}
 	to := s.usable(p, model)
 	if len(to) == 0 {
-		to = p.Speaks()
+		// every API turned the model away: the one the user picked for it
+		// is asked again, not the first the provider has a URL for, which
+		// they said it isn't asked on (01huadalang: picked for Responses,
+		// sent as chat after one refusal there)
+		if proto, ok := p.ModelAPI(model); ok {
+			to = []provider.Protocol{proto}
+		} else {
+			to = p.Speaks()
+		}
 	}
 	if len(to) == 0 {
 		msg := p.Name + " has no endpoint configured"
