@@ -2588,8 +2588,6 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .font-menu .pm-head { white-space: normal; }
 .font-menu .pm-name { white-space: normal; overflow-wrap: anywhere; }
 /* Keep export consent readable, and give collector URLs their own line. */
-#otelList .otel-section { padding: 10px 14px 6px; font-size: 11px; font-weight: 600; color: var(--muted); background: var(--pill); }
-#otelList .otel-section:not(:first-child) { border-top: 1px solid var(--line-2); }
 #otelList .row .sub { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 #otelList .row { align-items: flex-start; padding-top: 12px; padding-bottom: 12px; }
 #otelList .otel-stacked { flex-wrap: wrap; gap: 8px; }

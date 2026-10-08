@@ -19400,10 +19400,17 @@ function renderRedact(s, keep) {
 }
 
 function renderOTel(s, keep) {
-  const box = $("#otelList");
-  box.replaceChildren();
+  const page = $("#otelList");
+  page.replaceChildren();
   let config = { ...(s.otel || {}) };
-  const section = (name) => box.append(el("div", "otel-section", t(name)));
+  // a heading over a card of its own, as on every other Settings tab
+  let box;
+  const section = (name) => {
+    const head = el("div", "row-head");
+    head.append(el("span", "label", t(name)));
+    box = el("div", "list prefs");
+    page.append(head, box);
+  };
   const row = (id, name, sub, control) => {
     const r = el("div", "row pref");
     r.id = id;
