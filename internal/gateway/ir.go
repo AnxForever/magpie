@@ -136,6 +136,10 @@ type Request struct {
 	Parallel  *bool // parallel tool calls allowed
 	WebSearch bool  // the client offered its provider's own web search
 	Fast      bool  // the client asked for priority processing: service_tier priority (Codex's Fast mode)
+	// Ultrafast is Codex's Ultrafast (service_tier "ultrafast"), which a
+	// ChatGPT account on a plan with it offers on its models; Fast is set
+	// with it, so where there is no Ultrafast the request goes fast
+	Ultrafast bool
 	// CacheKey is the client's prompt_cache_key (Codex sends its thread's
 	// id), which OpenAI, and relays in front of it, route a conversation by
 	// to where its prompt is cached.
