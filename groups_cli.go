@@ -557,6 +557,10 @@ func groupCmd(args []string) error {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "saved", bold.Render(g.Name))
+		if slices.ContainsFunc(rest[1:], func(kv string) bool { return strings.HasPrefix(strings.ToLower(kv), "name=") }) {
+			// a new name isn't a new id: say what agents still ask for
+			fmt.Println(muted.Render("  its id stays " + g.ID + ": agents ask for " + provider.GroupPrefix + g.ID + " (a client given the name may ask by the name too)"))
+		}
 		return showGroup(g)
 	case "rm", "remove", "delete":
 		if len(rest) < 1 {
