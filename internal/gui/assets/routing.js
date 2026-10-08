@@ -1621,7 +1621,39 @@
   const groupSession = (r) => r.parentSession || r.session || "";
   const sessionKey = (r) => groupSession(r) ? JSON.stringify([r.agent || "other", groupSession(r)]) : "";
   let namesBusy = false;
+  // Other agents' sessions are named from their own files, by the id the
+  // agent gave (magpie's X-Magpie-Session can stand in front of it), so a
+  // Claude Code session heads its group with its title, not its UUID
+  // (#1293). Kept here by agent:id, as each trace update brings its rows
+  // anew; a key not asked about yet is asked about at once.
+  const ownSession = (r) => r.native_session || r.session || "";
+  const ownKey = (r) => r.agent && r.agent !== "codex" && ownSession(r) ? r.agent + ":" + ownSession(r) : "";
+  const otherTitles = new Map(), askedTitles = new Set();
+  let askSoon = 0;
+  function askUnnamed(rs) {
+    if (askSoon || !rs.some((r) => ownKey(r) && !askedTitles.has(ownKey(r)))) return;
+    askSoon = setTimeout(() => { askSoon = 0; refreshSessionNames(); }, 300);
+  }
+  async function refreshOtherNames() {
+    const keys = [...new Set(listed().map(ownKey).filter(Boolean))].slice(0, 2000);
+    if (!keys.length) return false;
+    for (const k of keys) askedTitles.add(k);
+    const res = await fetch("/api/gateway/session-titles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [], routeIds: [], sessions: keys }) });
+    if (!res.ok) return false;
+    const titles = (await res.json()).titles || {};
+    let changed = false;
+    for (const k of keys) {
+      const name = typeof titles[k] === "string" ? titles[k] : "";
+      if ((otherTitles.get(k) || "") !== name) { if (name) otherTitles.set(k, name); else otherTitles.delete(k); changed = true; }
+    }
+    return changed;
+  }
   async function refreshSessionNames() {
+    if (namesBusy || !shown()) return;
+    namesBusy = true;
+    let others = false;
+    try { others = await refreshOtherNames(); } catch {} finally { namesBusy = false; }
+    if (others) steady(renderHist);
     if (namesBusy || !shown()) return;
     const rs = listed().filter((r) => r.agent === "codex"), sourceDay = day, routeIDs = new Set(rs.map((r) => r.id));
     if (!rs.some(groupSession)) return;
@@ -1670,6 +1702,7 @@
     return "≈" + fmtCost({ cost: r.cost || 0, unpriced: 0 }) + (r.unpriced ? "+" : "");
   }
   function groupedRows(rs, rowEls) {
+    askUnnamed(rs);
     const groups = new Map();
     rs.forEach((r, i) => {
       const key = sessionKey(r);
@@ -1710,7 +1743,7 @@
       // for one purpose without renaming a chat that also made helper calls.
       const memory = g.r.agent === "codex" && g.rows.every((r) => purposeOf(r.kind) === "kind:memory_consolidation");
       const suggestions = g.r.agent === "codex" && g.rows.every((r) => purposeOf(r.kind) === "kind:ambient_suggestions");
-      const name = g.rows.find((r) => r.sessionTitle)?.sessionTitle || (memory ? t("Background memory task") : suggestions ? t("Background prompt suggestions") : "");
+      const name = g.rows.find((r) => r.sessionTitle)?.sessionTitle || otherTitles.get(ownKey(g.r)) || (memory ? t("Background memory task") : suggestions ? t("Background prompt suggestions") : "");
       setText(x.name, g.key ? agentName(g.r.agent) + " · " + (name || groupSession(g.r)) : t("No session ID"));
       const purpose = memory ? t("Codex is organizing memories from earlier chats in the background. This can continue after a chat finishes.") + "\n"
         : suggestions ? kindWhy(g.r) + "\n"

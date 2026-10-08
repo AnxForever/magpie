@@ -834,8 +834,11 @@ your choice across reloads.
 Codex title helpers with an explicit parent or fork source join their originating
 chat, retaining their title badge and contributing to its cost. Titles without
 ancestry and ordinary forked chats stay separate.
-Codex chat names come from its local name index and follow renames. Unknown or
-remote-only names fall back to the ID; the full ID remains in the heading tooltip.
+Codex chat names come from its local name index and follow renames. Other
+agents' sessions (Claude Code and the rest the Sessions page reads) take the
+name the Sessions page shows for them, read from their own files on this
+computer. Unknown or remote-only names fall back to the ID; the full ID
+remains in the heading tooltip.
 Expand a session to see each request. Each request and session shows its estimated cost at the effective model
 prices, including cache reads and writes. Session totals cover the listed
 requests only (the live trace or the selected day's retained history), and a
