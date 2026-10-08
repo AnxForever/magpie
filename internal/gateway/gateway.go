@@ -1909,6 +1909,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// its queue full, or waited out (QueueLimit, QueueWait), it is
 			// turned away below
 			waited := time.Now()
+			// a streaming agent waiting is kept alive meanwhile
+			queuedAlive := hw.keepQueued()
 			release, err := s.lanes.take(ctx, c.who(), c.p.LaneLimit(), c.p.QueueLimit, time.Duration(c.p.QueueWait)*time.Second)
 			if err == nil && c.p.RPMLimit() > 0 {
 				// with a MaxRPM, it then waits for room in the minute, and
@@ -1920,6 +1922,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 					ctx = s.paidFor(ctx, c.p, c.who())
 				}
 			}
+			queuedAlive()
 			queued = time.Since(waited).Milliseconds()
 			var tooMany *errRPM
 			if errors.Is(err, errQueueFull) || errors.Is(err, errQueueWait) || errors.As(err, &tooMany) {
