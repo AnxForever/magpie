@@ -1612,12 +1612,15 @@ function cliTag(a) {
     return box;
   }
   const c = cliInfo[a.id];
-  if (!c?.version) return box;
-  const v = el("span", "ag-ver", c.version);
-  v.title = !c.via ? t("{agent} {v} · magpie can't tell how it was installed — update it the way you installed it", { agent: a.name, v: c.version })
-    : c.update ? t("{agent} {v} is installed · {latest} is out", { agent: a.name, v: c.version, latest: c.latest })
-    : t("{agent} {v} · up to date", { agent: a.name, v: c.version });
-  box.append(v);
+  if (!c?.version && !c?.app) return box;
+  if (c.version) {
+    // beside its desktop app's version, the CLI's says it is the CLI's
+    const v = el("span", "ag-ver", c.app ? t("CLI {v}", { v: c.version }) : c.version);
+    v.title = !c.via ? t("{agent} {v} · magpie can't tell how it was installed — update it the way you installed it", { agent: a.name, v: c.version })
+      : c.update ? t("{agent} {v} is installed · {latest} is out", { agent: a.name, v: c.version, latest: c.latest })
+      : t("{agent} {v} · up to date", { agent: a.name, v: c.version });
+    box.append(v);
+  }
   if (c.update || cliBusy.has(a.id)) {
     const b = el("button", "ag-up");
     b.type = "button";
@@ -1625,6 +1628,13 @@ function cliTag(a) {
     paintCLIButton(b, c, cliBusy.has(a.id));
     b.onclick = (e) => { e.stopPropagation(); updateCLI(a, b); };
     box.append(b);
+  }
+  // the desktop app (the Codex app, #1334): its version, which updates
+  // itself; one connection serves the app and the CLI
+  if (c.app) {
+    const v = el("span", "ag-ver ag-app", t("App {v}", { v: c.app }));
+    v.title = t("The {agent} app {v}. It reads the same settings as the CLI: connecting {agent} here connects both", { agent: a.name, v: c.app });
+    box.append(v);
   }
   return box;
 }
