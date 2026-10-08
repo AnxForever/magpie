@@ -225,10 +225,13 @@ func targetOf(a *agent.Agent) *Target {
 	case "alma":
 		// Alma reads personal skills from ~/.config/alma/skills, on every
 		// system (its home, not its data folder), and Claude Code's, Codex's
-		// and ~/.agents/skills besides (its skills service, #824); it has
-		// no user-wide instructions file or MCP file of the kind magpie
-		// writes, its prompts being its settings' own
+		// and ~/.agents/skills besides (its skills service, #824). Its MCP
+		// servers are ~/.config/alma/mcp.json's mcpServers, read as Alma
+		// starts and when its MCP settings refresh (0.4.164's
+		// out/main/index.js, #1292). It has no user-wide instructions file,
+		// its prompts being its settings' own
 		t.Skills = filepath.Join(h, ".config", "alma", "skills")
+		t.MCP = &mcpFile{Path: filepath.Join(h, ".config", "alma", "mcp.json"), Format: fmtAlma}
 		t.SkillsAlso = []string{"claude", "codex"}
 	case "cindy":
 		// Cindy keeps its user-wide skills in ~/.agents/skills
