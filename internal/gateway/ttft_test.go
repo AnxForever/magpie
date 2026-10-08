@@ -354,7 +354,10 @@ func TestBurstTellsNoSpeed(t *testing.T) {
 				}
 				u := lastUsage(t)
 				span := u.Millis - u.TTFT
-				if u.TTFT <= 0 || span < gap.Milliseconds() {
+				// the upstream's wait starts when it sent the first word,
+				// which magpie reads a moment later: the span is the gap
+				// less that moment (599 ms of 600 on a busy macOS runner)
+				if u.TTFT <= 0 || span < gap.Milliseconds()*9/10 {
 					t.Fatalf("usage ttft %d, ms %d; want the end %v after the first word", u.TTFT, u.Millis, gap)
 				}
 				r := lastRoute(s)
@@ -386,7 +389,9 @@ func TestCodexBackendBurstTellsNoSpeed(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 	u := lastUsage(t)
-	if u.Millis-u.TTFT < 600 || u.Output != 1000 {
+	// the end after the wait, less the moment the first word took to
+	// reach magpie (599 ms of 600 on macOS CI at 58f45d05)
+	if u.Millis-u.TTFT < 540 || u.Output != 1000 {
 		t.Fatalf("usage %+v", u)
 	}
 	if n, w := u.Decode(); n != 0 || w != 0 {
