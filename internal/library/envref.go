@@ -64,7 +64,11 @@ func (f *mcpFile) refsOf() envSyntax {
 		// the clouds' and the package registries' own credential variables
 		// as empty. Droid 0.231 expands ${NAME} in env and headers of
 		// ~/.factory/mcp.json and won't connect with one unset
-		// (docs.factory.com/cli/configuration/mcp).
+		// (docs.factory.com/cli/configuration/mcp). CodeBuddy Code, and
+		// WorkBuddy, whose servers its CodeBuddy engine runs, expand ${NAME}
+		// in command, args, cwd, env, url and headers of every scope's
+		// servers and warn of one unset (McpConfigEnvExpandService,
+		// @tencent-ai/codebuddy-code 2.162.0).
 		return envSyntax{refDollar, refDollar}
 	case fmtGrok:
 		// Grok Build expands ${NAME} and ${NAME:-default} in url, command,

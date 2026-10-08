@@ -58,6 +58,22 @@ func claudeJSON() string {
 	return filepath.Join(home(), ".claude.json")
 }
 
+// codebuddyMCP is the file CodeBuddy Code, its folder dir, reads its
+// user-wide MCP servers from (see targetOf).
+func codebuddyMCP(dir string) string {
+	base := appdir.Getenv("CODEBUDDY_CONFIG_DIR")
+	if base == "" {
+		base = home()
+	}
+	all := []string{filepath.Join(dir, ".mcp.json"), filepath.Join(dir, "mcp.json"), filepath.Join(base, ".codebuddy.json")}
+	for _, p := range all {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return all[0]
+}
+
 func codexDir() string {
 	if d := appdir.Getenv("CODEX_HOME"); d != "" {
 		return d
@@ -266,13 +282,35 @@ func targetOf(a *agent.Agent) *Target {
 		// Command Code reads ~/.commandcode/mcp.json (getUserMcpConfigPath)
 		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtCommandCode}
 		t.Skills = filepath.Join(a.Dir, "skills")
-	case "workbuddy", "hanako", "fx":
-		// a skills folder in the agent's own: WorkBuddy's ~/.workbuddy,
-		// Hanako's $HANA_HOME, fx's ~/.fx — each said by its docs or
-		// source. No MCP servers: WorkBuddy runs one in its mcp.json only
-		// once it is approved in WorkBuddy, OpenHanako only once switched
-		// on for each agent and tool, and fx's mcp.json, which one entry it
-		// refuses makes it read none of, isn't one magpie could try.
+	case "workbuddy":
+		// WorkBuddy's own servers are mcp.json in its folder
+		// ($WORKBUDDY_CONFIG_DIR, else ~/.workbuddy: ConnectorService's
+		// customMcpConfigPath in 5.5.6's app.asar), mcpServers as Claude
+		// Code's, which its CodeBuddy engine runs (type stdio, http or sse).
+		// WorkBuddy connects one only once it is trusted there: a server
+		// mcp-approvals.json has no approval for (its command, args and env
+		// names, or its URL's origin) is listed as needing approval until it
+		// is switched on in WorkBuddy, which magpie leaves to the user
+		// (#1266). Its skills are in skills/ there.
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtClaude}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "codebuddy":
+		// CodeBuddy Code's user-wide servers are in the first of
+		// .mcp.json, mcp.json (in its folder) and .codebuddy.json (beside
+		// it, or in $CODEBUDDY_CONFIG_DIR) that is there, else the first,
+		// as it reads them and `codebuddy mcp add -s user` writes them
+		// (PathUtils.resolveMcpFilePath, @tencent-ai/codebuddy-code
+		// 2.162.0); mcpServers as Claude Code's, and no approval for a
+		// user's server (isAllowed asks only of a project's). Its skills
+		// are in skills/ in its folder (getHomeSkillsDir) (#1266).
+		t.MCP = &mcpFile{Path: codebuddyMCP(a.Dir), Format: fmtClaude}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "hanako", "fx":
+		// a skills folder in the agent's own: Hanako's $HANA_HOME, fx's
+		// ~/.fx — each said by its docs or source. No MCP servers:
+		// OpenHanako runs one only once switched on for each agent and
+		// tool, and fx's mcp.json, which one entry it refuses makes it read
+		// none of, isn't one magpie could try.
 		t.Skills = filepath.Join(a.Dir, "skills")
 	case "atomcode":
 		// AtomCode reads ~/.atomcode/ATOMCODE.md before every conversation

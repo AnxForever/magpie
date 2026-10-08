@@ -97,6 +97,37 @@ func TestAgentMCPFiles(t *testing.T) {
 			noSSE: true,
 		},
 		{
+			// as WorkBuddy's own add writes them (connectCustomMcpServer)
+			id: "workbuddy", file: ".workbuddy/mcp.json",
+			user: `{"mcpServers": {"mine": {"command": "uvx", "args": ["mine"], "disabled": false}}}`,
+			fs:   entry{"type": "stdio", "command": "npx", "args": []any{"-y", "@mcp/fs"}, "env": entry{"K": "V"}},
+			web:  entry{"type": "http", "url": "https://example.com/mcp", "headers": entry{"Authorization": "Bearer x"}},
+			sse:  entry{"type": "sse", "url": "https://example.com/sse"},
+		},
+		{
+			// CodeBuddy Code reads the first of .mcp.json, mcp.json and
+			// ~/.codebuddy.json that is there
+			id: "codebuddy", file: ".codebuddy/.mcp.json",
+			user: `{"mcpServers": {"mine": {"type": "stdio", "command": "uvx", "args": ["mine"]}}, "disabledMcpServers": []}`,
+			fs:   entry{"type": "stdio", "command": "npx", "args": []any{"-y", "@mcp/fs"}, "env": entry{"K": "V"}},
+			web:  entry{"type": "http", "url": "https://example.com/mcp", "headers": entry{"Authorization": "Bearer x"}},
+			sse:  entry{"type": "sse", "url": "https://example.com/sse"},
+		},
+		{
+			id: "codebuddy", file: ".codebuddy/mcp.json",
+			user: `{"mcpServers": {"mine": {"type": "stdio", "command": "uvx", "args": ["mine"], "timeout": 30}}}`,
+			fs:   entry{"type": "stdio", "command": "npx", "args": []any{"-y", "@mcp/fs"}, "env": entry{"K": "V"}},
+			web:  entry{"type": "http", "url": "https://example.com/mcp", "headers": entry{"Authorization": "Bearer x"}},
+			sse:  entry{"type": "sse", "url": "https://example.com/sse"},
+		},
+		{
+			id: "codebuddy", file: "cb/.codebuddy.json", env: map[string]string{"CODEBUDDY_CONFIG_DIR": "cb"},
+			user: `{"$schema": "x", "mcpServers": {"mine": {"type": "stdio", "command": "uvx", "args": ["mine"]}}}`,
+			fs:   entry{"type": "stdio", "command": "npx", "args": []any{"-y", "@mcp/fs"}, "env": entry{"K": "V"}},
+			web:  entry{"type": "http", "url": "https://example.com/mcp", "headers": entry{"Authorization": "Bearer x"}},
+			sse:  entry{"type": "sse", "url": "https://example.com/sse"},
+		},
+		{
 			id: "grok", file: ".grok/config.toml", toml: true,
 			user:  "# mine\n[models]\ndefault = \"grok-4\"\n\n[mcp_servers.mine]\ncommand = \"uvx\"\nargs = [\"mine\"]\nenabled = true\n\n[mcp_servers.mine.env]\nA = \"b\"\n",
 			fs:    entry{"command": "npx", "args": []any{"-y", "@mcp/fs"}, "env": entry{"K": "V"}},
@@ -221,5 +252,28 @@ func TestAgentMCPFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// With none of its three files there, CodeBuddy Code's servers go where
+// its own `mcp add -s user` puts them, .mcp.json in its folder; one there
+// later than ~/.codebuddy.json is still read first (#1266).
+func TestCodeBuddyMCPFile(t *testing.T) {
+	h := sandbox(t)
+	write(t, filepath.Join(h, ".codebuddy/models.json"), "")
+	tg := targetByID("codebuddy")
+	if tg == nil || tg.MCP == nil || tg.MCP.Path != filepath.Join(h, ".codebuddy/.mcp.json") {
+		t.Fatalf("with no file: %+v", tg)
+	}
+	write(t, filepath.Join(h, ".codebuddy.json"), `{"mcpServers": {}}`)
+	if p := targetByID("codebuddy").MCP.Path; p != filepath.Join(h, ".codebuddy.json") {
+		t.Errorf("with only ~/.codebuddy.json: %s", p)
+	}
+	write(t, filepath.Join(h, ".codebuddy/.mcp.json"), `{"mcpServers": {}}`)
+	if p := targetByID("codebuddy").MCP.Path; p != filepath.Join(h, ".codebuddy/.mcp.json") {
+		t.Errorf("with both: %s", p)
+	}
+	if s := targetByID("codebuddy").Skills; s != filepath.Join(h, ".codebuddy/skills") {
+		t.Errorf("skills: %s", s)
 	}
 }
