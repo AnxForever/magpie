@@ -1567,6 +1567,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (#63): its reasoning, sealed by the account that wrote it, is refused
 	// by another.
 	cands, pl, aff, stuck := affine(scope, mode, rotate, r.Header, from, body, cands, pl)
+	defer opened(stuck)
 	leadAccount := ""
 	if sealedTask && !aff.Kept {
 		parent := metadata.Parent
