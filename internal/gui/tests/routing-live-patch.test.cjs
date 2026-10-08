@@ -8,7 +8,8 @@
 // nodes, the new one goes in beside them, the context window's card and
 // grid are the ones that were there, patched, and the grid and its box
 // keep their height on every frame between. In Chromium and WebKit, at a
-// phone's width and a desk's.
+// phone's width and a desk's; with the card open, and folded to its head
+// (magpie.ctxShut), whose nodes, bar and height stay the same too.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -74,7 +75,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
     for (const [width, height] of [[420, 760], [1100, 760]]) {
-      await t.test(`${width}x${height}`, async () => {
+      await t.test(`${width}x${height}, open`, async () => {
         const context = await browser.newContext({ viewport: { width, height } });
         const page = await context.newPage();
         page.setDefaultTimeout(5000);
@@ -154,6 +155,70 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(s.grid, got.grid0, `the grid kept its height on every frame: ${JSON.stringify(got.sizes)}`);
           assert(s.box >= got.box0 - 1, `the context window never collapsed: ${JSON.stringify([got.box0, got.sizes])}`);
         }
+        assert.deepEqual(got.scroll, [], "the page doesn't scroll by itself");
+        assert.deepEqual(errors, []);
+        feed.next?.(req(999, "done"));
+        await context.close();
+      });
+      await t.test(`${width}x${height}, folded`, async () => {
+        const context = await browser.newContext({ viewport: { width, height } });
+        const page = await context.newPage();
+        await page.addInitScript(() => { try { localStorage.setItem("magpie.ctxShut", "1"); } catch {} });
+        page.setDefaultTimeout(5000);
+        const errors = [];
+        page.on("pageerror", (e) => errors.push(e.message));
+        const feed = { next: null };
+        await page.route("**/*", serve(feed));
+        await page.goto("http://magpie.test/?view=routing");
+        await page.locator(".rt-req").nth(first.length - 1).waitFor();
+        await page.locator(".rt-ctx .ctx-card.shut").waitFor();
+        await page.waitForTimeout(600);
+        await page.evaluate(() => {
+          const box = document.querySelector(".rt-ctx");
+          window.__was = { rows: [...document.querySelectorAll(".rt-req")], line: box.querySelector(".ctx-card"), head: box.querySelector(".ctx-head"), bar: box.querySelector(".ctx-stack"), h: box.offsetHeight, list: document.querySelector(".rt-reqs").getBoundingClientRect().top };
+          window.__sizes = [];
+          window.__ro = new ResizeObserver(() => window.__sizes.push(box.offsetHeight));
+          window.__ro.observe(box);
+          window.__scroll = [];
+          document.querySelector("#view-routing").addEventListener("scroll", (e) => window.__scroll.push(e.target.scrollTop));
+        });
+        const said = [];
+        for (const id of [104, 105]) {
+          for (const step of ["start", "read", "done"]) {
+            for (let i = 0; i < 60 && !feed.next; i++) await page.waitForTimeout(50);
+            assert(feed.next, "the page asks for the next trace");
+            const next = feed.next;
+            feed.next = null;
+            next(req(id, step));
+            await page.waitForTimeout(400);
+            said.push(await page.evaluate(() => {
+              const box = document.querySelector(".rt-ctx");
+              return box.querySelector(".ctx-short").textContent + " " + box.querySelector(".ctx-crumbs").textContent.split(" › ").pop()
+                + " " + [...box.querySelectorAll(".ctx-stack > i")].map((i) => i.style.width).join(",");
+            }));
+          }
+        }
+        // the folded head waits for a prompt in its place, then tells of it
+        const bar = (f, r, c) => `3.31%,4.41%,0%,${f}%,${r}%,${c}%`;
+        assert.deepEqual(said, [
+          "114K / 272K · 42% #103 " + bar(15.44, 9.56, 9.19),
+          ...Array(3).fill("122K / 272K · 45% #104 " + bar(16.91, 10.29, 9.93)),
+          ...Array(2).fill("130K / 272K · 48% #105 " + bar(18.38, 11.03, 10.66)),
+        ]);
+        const got = await page.evaluate(() => {
+          window.__ro.disconnect();
+          const box = document.querySelector(".rt-ctx"), w = window.__was, rows = [...document.querySelectorAll(".rt-req")];
+          return {
+            kept: w.rows.every((r) => rows.includes(r)), line: box.querySelector(".ctx-card") === w.line && box.querySelector(".ctx-head") === w.head, bar: box.querySelector(".ctx-stack") === w.bar,
+            card: !box.querySelector(".ctx-card").classList.contains("shut") || box.querySelector(".ctx-waffle").getClientRects().length > 0, h: box.offsetHeight, h0: w.h, sizes: window.__sizes, scroll: window.__scroll,
+            list: document.querySelector(".rt-reqs").getBoundingClientRect().top, list0: w.list,
+          };
+        });
+        assert(got.kept, "the requests listed before are the same nodes");
+        assert(got.line && got.bar, "the folded card, its head and bar are the ones that were there");
+        assert(!got.card, "it stays folded, its grid out of sight");
+        for (const h of [got.h, ...got.sizes]) assert.equal(h, got.h0, `the folded card keeps its height: ${JSON.stringify([got.h0, got.sizes])}`);
+        assert.equal(got.list, got.list0, "the request list stays where it was");
         assert.deepEqual(got.scroll, [], "the page doesn't scroll by itself");
         assert.deepEqual(errors, []);
         feed.next?.(req(999, "done"));

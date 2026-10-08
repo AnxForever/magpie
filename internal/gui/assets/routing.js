@@ -1428,7 +1428,11 @@
   // (Zhenzhen on Discord: each new request flashed the whole card, and its
   // grid went and came back); a request the reader picks comes in afresh,
   // its cells one after another
-  let ctxKey = "", ctxShown = 0, ctxTab = "all";
+  //
+  // ctxFor is a request opened to see its context window (the Usage
+  // page's Context tab): its card shows unfolded, it alone, whatever the
+  // reader keeps folded
+  let ctxKey = "", ctxShown = 0, ctxTab = "all", ctxFor = 0;
   function renderCtx(r) {
     if (!r.prompt || !window.ctxCard) {
       // a live request whose prompt the gateway is still reading keeps
@@ -1443,7 +1447,8 @@
     const series = (sk || r.conv) && !r.kind ? listed().filter(same).sort((a, b) => a.id - b.id)
       .map((x) => ({ id: x.id, tokens: x.prompt.tokens, time: x.time })) : null;
     if (series && !series.some((x) => x.id === r.id)) series.push({ id: r.id, tokens: r.prompt.tokens, time: r.time });
-    const key = JSON.stringify([document.documentElement.lang, r.id, r.done, r.prompt.tokens, r.prompt.counted, r.prompt.window, r.usage?.length, series?.map((x) => x.id + ":" + x.tokens).join()]);
+    if (ctxFor && ctxFor !== r.id) ctxFor = 0;
+    const key = JSON.stringify([document.documentElement.lang, ctxFor, r.id, r.done, r.prompt.tokens, r.prompt.counted, r.prompt.window, r.usage?.length, series?.map((x) => x.id + ":" + x.tokens).join()]);
     if (key === ctxKey) return;
     ctxKey = key;
     const still = ctxShown === r.id;
@@ -1453,6 +1458,7 @@
     const draw = card?.ctxUpdate && (still || !pinned) ? card.ctxUpdate : (r, o) => ctxBox.replaceChildren(window.ctxCard(r, o));
     draw(r, {
       still, series, tab: ctxTab, place: "routing", foldable: true,
+      open: ctxFor === r.id, onFold: () => { ctxFor = 0; },
       onTab: (id) => { ctxTab = id; },
       crumbs: [agentName(r.agent), sess && (sess.length > 14 ? sess.slice(0, 12) + "…" : sess), "#" + r.id],
       onPoint: (pt) => {
@@ -1549,7 +1555,9 @@
     say(affWhy(r, true) || ruleWhy(r, true) || firstWhy(r));
   }
 
-  window.openRoute = async (id, time) => {
+  // o.context: opened to see its context window (the Usage page's
+  // Context tab), which shows unfolded for it
+  window.openRoute = async (id, time, o = {}) => {
     let r = routes.get(id);
     if (!r) {
       const res = await fetch("/api/gateway/route?id=" + encodeURIComponent(id) + "&day=" + encodeURIComponent(time.slice(0, 10)));
@@ -1566,6 +1574,7 @@
     if (!matchesPurpose(r)) purpose = [];
     offline("");
     window.show("routing");
+    if (o.context) ctxFor = r.id;
     pick(r);
   };
 

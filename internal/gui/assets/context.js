@@ -233,8 +233,11 @@
   // (0xBCD18E on X: it took most of the height, three rows were left)
   let ctxShut = false;
   try { ctxShut = localStorage.getItem("magpie.ctxShut") === "1"; } catch {}
+  // opts.open: this request was opened to see its context window (the
+  // Usage page's Context tab), so it shows unfolded, it alone: the next
+  // request drawn in the card takes the reader's choice again
   function ctxCard(r, opts = {}) {
-    const card = el("div", "ctx-card" + (opts.foldable && ctxShut ? " shut" : ""));
+    const card = el("div", "ctx-card" + (opts.foldable && ctxShut && !opts.open ? " shut" : ""));
     card.dataset.place = opts.place || "";
     if (cardWidth[card.dataset.place] !== undefined) sizeCard(card, cardWidth[card.dataset.place]);
     cardSizes.observe(card);
@@ -348,6 +351,7 @@
       const live = !r.done;
 
       // the head: what it is and how it was counted
+      if (opts.foldable) card.classList.toggle("shut", ctxShut && !opts.open);
       const head = el("div", "ctx-head");
       let title = el("span", "ctx-title", t("Context window"));
       if (opts.foldable) {
@@ -364,6 +368,7 @@
           tip.hidden = true;
           e.currentTarget.setAttribute("aria-expanded", String(!ctxShut));
           try { localStorage.setItem("magpie.ctxShut", ctxShut ? "1" : "0"); } catch {}
+          opts.onFold?.(ctxShut);
         };
         title = fold;
       }
@@ -373,7 +378,23 @@
         : p.counted ? "As many tokens as the vendor counted; the parts are measured from the request and scaled to it"
         : "Estimated from what the agent sent: the vendor didn't say how many tokens it read");
       head.append(title);
-      if (opts.foldable) head.append(el("span", "ctx-short", fmtK(p.tokens) + (window ? " / " + fmtK(window) + " · " + pct(full) : "")));
+      if (opts.foldable) {
+        head.append(el("span", "ctx-short", fmtK(p.tokens) + (window ? " / " + fmtK(window) + " · " + pct(full) : "")));
+        // folded, a thin bar of what fills the window, a part each; it is
+        // morphed with the head, so a live request moves its widths only
+        const bar = el("span", "ctx-stack");
+        bar.setAttribute("role", "img");
+        bar.setAttribute("aria-label", t("{used} of {window} tokens used", { used: fmtK(p.tokens), window: fmtK(window || p.tokens) }));
+        const scale = Math.max(window, p.tokens, 1);
+        for (const k of PARTS) {
+          const n = p.parts.find((x) => x.kind === k)?.tokens || 0;
+          const i = el("i", "k-" + k);
+          i.title = partName(k);
+          i.style.width = +(Math.max(0, n) / scale * 100).toFixed(2) + "%";
+          bar.append(i);
+        }
+        head.append(bar);
+      }
       head.append(el("span", "grow"));
       if (r.model) head.append(el("code", "ctx-model", r.model));
       head.append(st);
@@ -633,7 +654,7 @@
     if (a.latestId) {
       const go = el("button", "text", t("Latest request"));
       go.type = "button";
-      go.onclick = () => window.openRoute(a.latestId, a.latestTime).catch((e) => status(e.message, "err"));
+      go.onclick = () => window.openRoute(a.latestId, a.latestTime, { context: true }).catch((e) => status(e.message, "err"));
       foot.append(go);
     }
     card.append(head, scores, tags, facts, mix, foot);
@@ -669,7 +690,7 @@
         still: true, cache, place: "session",
         series: s.points,
         crumbs: [agentLabel(s.agent), s.title || s.key.slice(0, 12), t("latest request")],
-        onPoint: (pt) => window.openRoute(pt.id, pt.time).catch((e) => status(e.message, "err")),
+        onPoint: (pt) => window.openRoute(pt.id, pt.time, { context: true }).catch((e) => status(e.message, "err")),
       }));
     }
     return box;

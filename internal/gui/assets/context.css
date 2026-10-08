@@ -121,6 +121,14 @@ i.dot.free { background: var(--k-free); box-shadow: inset 0 0 0 1px color-mix(in
    opens and the page doesn't follow it (it moved 4px with a 10px one) */
 .ctx-card.shut > :not(.ctx-head) { display: none; }
 :where(.ctx-card.shut.max420) .ctx-model { display: none; }
+/* folded, the head is one line of a fixed height whatever a live request
+   puts in it, so nothing under it moves; a thin bar of what fills the
+   window, a part each, takes the room between the figure and the model */
+.ctx-card.shut .ctx-head { height: 20px; white-space: nowrap; }
+.ctx-stack { display: none; flex: 1 1 0; min-width: 24px; max-width: 360px; height: 6px; border-radius: 3px; background: var(--k-free); overflow: hidden; }
+.ctx-card.shut .ctx-stack { display: flex; }
+.ctx-stack i { flex: none; height: 100%; background: var(--k); transition: width .3s var(--ease, ease); }
+@media (prefers-reduced-motion: reduce) { .ctx-stack i { transition: none; } }
 
 /* the Usage page's Context tab */
 .ctx-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 12px; margin: 4px 0 18px; }
