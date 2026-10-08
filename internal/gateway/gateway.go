@@ -3141,7 +3141,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 				u.RequestID = "" // another endpoint answers, with its own id
 				return res.StatusCode, msg, false
 			}
-			msg += wrongAPINote(p, model, res)
+			msg += wrongAPINote(p, model, res, b)
 		}
 		if p.Preset == "openrouter" && openRouterSharedPool(b) {
 			markOpenRouterSharedPool(w)
@@ -3862,6 +3862,10 @@ func wrongEndpoint(status int, body []byte) bool {
 		"no model endpoints available given user constraints",
 		"is not supported for format",    // OpenCode: "Model grok-4.7 is not supported for format anthropic"
 		"does not support this protocol", // OpenCode, with a key: "Model does not support this protocol"
+		// a relay serving a model with tools on Responses alone (#1308:
+		// "gpt-6.1-sol requires Responses for tool calls; this account
+		// only supports Chat Completions")
+		"requires responses",
 	} {
 		if strings.Contains(msg, phrase) {
 			return true
@@ -3875,7 +3879,7 @@ func wrongEndpoint(status int, body []byte) bool {
 // ask: the URL asked, and the APIs the vendor's list serves the model on
 // that the provider has no URL for, so "Model does not support this
 // protocol" says which protocol, and what to set (#1215).
-func wrongAPINote(p provider.Provider, model string, res *http.Response) string {
+func wrongAPINote(p provider.Provider, model string, res *http.Response, body []byte) string {
 	note := ""
 	if res != nil && res.Request != nil && res.Request.URL != nil {
 		u := *res.Request.URL
@@ -3884,7 +3888,12 @@ func wrongAPINote(p provider.Provider, model string, res *http.Response) string 
 	}
 	paths := map[provider.Protocol]string{provider.Chat: "/v1/chat/completions", provider.Responses: "/v1/responses", provider.Anthropic: "/v1/messages"}
 	var missing []string
-	for _, a := range p.APIs(model) {
+	apis := p.APIs(model)
+	if asksResponses(body) && !slices.Contains(apis, provider.Responses) {
+		// the vendor's error names the API, where its list doesn't (#1308)
+		apis = append(apis, provider.Responses)
+	}
+	for _, a := range apis {
 		if paths[a] != "" && p.Base(a) == "" {
 			missing = append(missing, paths[a])
 		}
@@ -3901,6 +3910,19 @@ func wrongAPINote(p provider.Provider, model string, res *http.Response) string 
 		note += ")"
 	}
 	return note
+}
+
+// asksResponses is an upstream's word that the model is served, or served
+// with what was asked, on OpenAI's Responses API: where a provider has no
+// URL for it, wrongAPINote says to set one.
+func asksResponses(body []byte) bool {
+	msg := strings.ToLower(string(body))
+	for _, phrase := range []string{"requires responses", "use v1/responses", "use /v1/responses", "only supported in v1/responses", "only supported in /v1/responses"} {
+		if strings.Contains(msg, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // translate serves a client API the provider lacks by speaking another
@@ -3961,7 +3983,7 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		msg := p.Explain(p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b)
 		if wrongEndpoint(res.StatusCode, b) {
-			msg += wrongAPINote(p, model, res)
+			msg += wrongAPINote(p, model, res, b)
 		}
 		if res.StatusCode == http.StatusTooManyRequests && accountAgent(p) == "antigravity" && antigravityTurnsAway(request.System) {
 			msg += " — " + antigravityTurnedAwayHint
