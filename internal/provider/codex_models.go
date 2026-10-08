@@ -196,6 +196,9 @@ func parseCodexModels(b []byte) []catalog.Model {
 			} `json:"supported_reasoning_levels"`
 			Context int `json:"context_window"`
 			Max     int `json:"max_context_window"`
+			Tiers   []struct {
+				ID string `json:"id"`
+			} `json:"service_tiers"`
 		} `json:"models"`
 	}
 	if json.Unmarshal(b, &list) != nil {
@@ -217,6 +220,9 @@ func parseCodexModels(b []byte) []catalog.Model {
 		}
 		for _, l := range m.Levels {
 			mm.Efforts = append(mm.Efforts, l.Effort)
+		}
+		for _, t := range m.Tiers {
+			mm.Tiers = append(mm.Tiers, t.ID)
 		}
 		out = append(out, mm)
 	}
@@ -275,6 +281,25 @@ func (a *Account) Levels(model string) (levels []string, ok bool) {
 	for _, m := range live {
 		if m.ID == model && len(m.Efforts) > 0 {
 			return m.Efforts, true
+		}
+	}
+	return nil, false
+}
+
+// Tiers are the service tiers the account's own model list offers on
+// model, when its list says: a list that gives no model a tier doesn't
+// say, as one fetched before ChatGPT listed them.
+func (a *Account) Tiers(model string) (tiers []string, ok bool) {
+	if a == nil || a.plugin != nil {
+		return nil, false
+	}
+	live, _, found := catalog.Live(accountModels(a.Agent, a.User))
+	if !found || !slices.ContainsFunc(live, func(m catalog.Model) bool { return len(m.Tiers) > 0 }) {
+		return nil, false
+	}
+	for _, m := range live {
+		if m.ID == model {
+			return m.Tiers, true
 		}
 	}
 	return nil, false

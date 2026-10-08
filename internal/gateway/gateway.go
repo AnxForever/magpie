@@ -1846,6 +1846,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				continue
 			}
 		}
+		// Ultrafast goes first to an account whose plan offers it, and an
+		// account whose own list doesn't is asked for priority (Fast)
+		// instead, which every plan with Fast takes (yxinyu715 on X)
+		if from == provider.Responses && askedTier(attemptBody) == "ultrafast" && !takesTier(c, "ultrafast") {
+			if j := tierMate(cands[i+1:], c, "ultrafast"); j >= 0 {
+				j += i + 1
+				cs := slices.Clone(cands)
+				cands = slices.Insert(slices.Delete(cs, i, i+1), j, c)
+				i--
+				continue
+			}
+			attemptBody = withFields(attemptBody, map[string]any{"service_tier": "priority"})
+		}
 		// an effort changed mid-thread goes as an update in the history,
 		// which keeps the prompt the upstream cached (#617)
 		updated := false
