@@ -3329,6 +3329,9 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 		if forcesTool(req.ToolChoice) && !s.fits(p.ID, forcedRefused(model), to) {
 			req = unforced(req)
 		}
+		if req.Format != nil && !s.fits(p.ID, formatRefused(model), to) {
+			req = req.inSystem()
+		}
 		if to == provider.Anthropic && p.IsBedrock() && req.Metadata != nil {
 			// not the plain id Bedrock checks metadata.user_id against (#176)
 			r := *req
@@ -3401,6 +3404,15 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			// of Google after all, or Google changing them): asked as
 			// before, with reasoning_effort, and not sent them again
 			s.markUnfit(p.ID, thinkingConfigField, to)
+			continue
+		}
+		if req.Format != nil && refusesFormat(res.StatusCode, b) {
+			// structured output turned away by the model or the relay in
+			// front of it (DeepSeek takes json_object only; a schema
+			// Anthropic can't hold): asked again with the format in the
+			// system prompt, and so from then on
+			s.markUnfit(p.ID, formatRefused(model), to)
+			req = req.inSystem()
 			continue
 		}
 		if offEffort(req.Effort) && res.StatusCode == http.StatusBadRequest && effortLevelsNamed.Match(b) {
