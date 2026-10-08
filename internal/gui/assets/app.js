@@ -15442,14 +15442,20 @@ function ledHScroll() {
 $("#ledWrap").addEventListener("scroll", () => { const bar = $("#ledHScroll"); if (bar.scrollLeft !== $("#ledWrap").scrollLeft) bar.scrollLeft = $("#ledWrap").scrollLeft; }, { passive: true });
 $("#ledHScroll").addEventListener("scroll", () => { const wrap = $("#ledWrap"); if (wrap.scrollLeft !== $("#ledHScroll").scrollLeft) wrap.scrollLeft = $("#ledHScroll").scrollLeft; }, { passive: true });
 // a window that changes size redraws the chart at its new width
-// a new width fits the table again, on the next frame: leaving columns out
-// changes the table's height, which this would be told of in its own call
+// a new width fits the table again, on the next frame, and so do the
+// details' width (--ledw) and the scrollbar: each changes the table's or the
+// wrap's height, which this would be told of in its own call, and WebKit
+// reports that as a ResizeObserver loop (number-units' page error)
 let ledFitW = 0, ledFitFrame = 0;
 new ResizeObserver(() => {
-  const wrap = $("#ledWrap");
-  wrap.style.setProperty("--ledw", wrap.clientWidth + "px");
-  if (wrap.clientWidth !== ledFitW && !ledFitFrame) ledFitFrame = requestAnimationFrame(() => { ledFitFrame = 0; ledFitW = wrap.clientWidth; ledFit(); ledHScroll(); });
-  ledHScroll();
+  if (ledFitFrame) return;
+  ledFitFrame = requestAnimationFrame(() => {
+    ledFitFrame = 0;
+    const wrap = $("#ledWrap");
+    wrap.style.setProperty("--ledw", wrap.clientWidth + "px");
+    if (wrap.clientWidth !== ledFitW) { ledFitW = wrap.clientWidth; ledFit(); }
+    ledHScroll();
+  });
 }).observe($("#ledWrap"));
 // a table that grows past the window when its width didn't change (a font
 // arriving, a redraw while out of sight) leaves its columns out then too;
