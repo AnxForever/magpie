@@ -260,8 +260,13 @@ first text (`usage.DecodeOf`): hidden reasoning is written before the stream
 shows anything, so counting it in a window that starts after it read
 gpt-6.1-sol at hundreds of tok/s. A reply that reasoned and then wrote only
 tool calls, one not streamed, and a burst (under 100 ms, or over 10,000 tok/s)
-tell no speed. History is read the same way, as it keeps the reasoning and the
-first text.
+tell no speed. The window is no longer than the reply's content took to come
+(`flow_ms`, from a tenth of its bytes to nine tenths, scaled to the whole): a
+vendor that sends the first words, holds the rest and lets it go in one burst
+gives a flow of next to none, so such a reply tells no speed instead of its
+tokens over the wait. History is read the same way, as it keeps the reasoning,
+the first text and the flow; a record from before the flow was kept is read
+over its whole window.
 
 It lists **accounts** too: each Codex, Claude or other subscription account's
 tokens and cost, by the account that actually answered — the one that took

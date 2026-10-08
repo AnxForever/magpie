@@ -15583,11 +15583,13 @@ const LED_COLS = [
 // the tokens a reply was seen to write and the ms it took, as
 // usage.DecodeOf and routing.js's decodeOf tell them: one that reasoned
 // counts its answer from its first text, its reasoning written before
-// the stream showed any (tony on Discord); null when it tells no speed
+// the stream showed any (tony on Discord); null when it tells no speed.
+// Its window is no longer than its content took to come (flow_ms): a
+// reply held back and sent in one burst tells none (John on Discord)
 const ledDecode = (r) => {
   if (ledFailed_(r) || !(r.ttft_ms > 0)) return null;
   const think = r.reasoning > 0, n = think ? r.out - r.reasoning : r.out, from = think ? r.first_text_ms : r.ttft_ms;
-  const w = r.ms - from;
+  const w = r.flow_ms > 0 ? Math.min(r.ms - from, r.flow_ms) : r.ms - from;
   return n > 0 && from > 0 && w >= 100 && n * 1000 <= 10000 * w ? { n, w } : null;
 };
 // how fast a reply wrote, in tokens a second: 0 when it can't tell
