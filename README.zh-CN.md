@@ -347,7 +347,9 @@ magpie tui                                      # 全部功能，在终端里
 
 ## 社区
 
-有问题、有想法，或者某个模型就是不出现？来 **[Discord](https://discord.gg/vGSnD3ZKQF)** 聊聊，或者[提个 issue](https://github.com/yetone/magpie/issues)。
+有问题、有想法，或者某个模型就是不出现？请到 **[Discord](https://discord.gg/vGSnD3ZKQF)** 反馈。
+
+**本仓库不接受 Pull Request**，只有维护者能提交。想要修复或新功能，请在 Discord 里描述清楚，我们来实现。
 
 如果 magpie 帮你少改了一次配置文件，**点个 ⭐ 能让更多人发现它。**
 

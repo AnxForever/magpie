@@ -347,7 +347,9 @@ magpie tui                                      # the whole thing, in a terminal
 
 ## Community
 
-Questions, ideas, or a model that won't show up? Join us on **[Discord](https://discord.gg/vGSnD3ZKQF)** or [open an issue](https://github.com/yetone/magpie/issues).
+Questions, ideas, or a model that won't show up? Tell us on **[Discord](https://discord.gg/vGSnD3ZKQF)**. That is where feedback goes.
+
+**This repository doesn't take pull requests.** Only maintainers can open them. If you'd like a fix or a feature, describe it on Discord and we'll build it.
 
 If magpie saved you from editing one more config file, **a ⭐ helps others find it.**
 
