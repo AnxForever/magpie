@@ -261,11 +261,30 @@ func (a *Agent) Detected() bool {
 	if _, err := os.Stat(a.Path); err == nil {
 		return true
 	}
-	if a.Dir != "" && !a.dirShared && isDir(a.Dir) {
+	if a.Dir != "" && !a.dirShared && agentDir(a.Dir) {
 		return true
 	}
 	if a.Bin != "" {
 		if _, err := exec.LookPath(a.Bin); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// agentDir reports whether p is a folder an agent itself made. Skill
+// installers (npx skills and the like) make <folder>/skills for every agent
+// they know, installed or not; a folder holding nothing else is theirs.
+func agentDir(p string) bool {
+	es, err := os.ReadDir(p)
+	if err != nil {
+		return isDir(p)
+	}
+	if len(es) == 0 {
+		return true
+	}
+	for _, e := range es {
+		if n := e.Name(); n != "skills" && n != ".DS_Store" {
 			return true
 		}
 	}
