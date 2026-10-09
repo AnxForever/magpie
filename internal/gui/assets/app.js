@@ -15068,6 +15068,7 @@ function ledParams(extra) {
 // quiet: a refresh while it's looked at, redrawn only on a change
 async function loadLedger(quiet) {
   if (!ledger && !quiet) renderLedgerLoading();
+  loadLedHeat().catch(() => {});
   const want = ledParams({ offset: ledOffset, limit: LED_PAGE });
   const l = await api("usage/requests?" + want);
   if (want !== ledParams({ offset: ledOffset, limit: LED_PAGE })) return; // another page or filter was picked meanwhile
@@ -15756,6 +15757,174 @@ function drawLedTrend() {
     loadLedger().catch((e) => status(e.message, "err"));
   }, false);
 }
+// ---------- the heatmap (#1369) ----------
+//
+// The last 53 weeks a day each, Monday on top, as a calendar of
+// contributions lays them out: each day as dark as it is busy among the
+// others, by tokens, requests or cost. It is of the requests the filters
+// above keep, whatever the period (the server's /api/usage/heatmap, read
+// from the same index as the page), its days in the gateway's time zone. A
+// narrow window scrolls it sideways inside its card, the newest week in
+// sight; the pointer on a day says its date and what it had.
+let ledHeat = null, ledHeatWant = "", ledHeatMetric = "tokens";
+try {
+  const m = localStorage.getItem("magpie.ledHeatMetric");
+  if (["tokens", "calls", "cost"].includes(m)) ledHeatMetric = m;
+} catch {}
+const LED_HEAT = [["tokens", "Tokens"], ["calls", "Requests"], ["cost", "Cost"]];
+function ledHeatParams() {
+  const q = new URLSearchParams(ledParams());
+  q.delete("period");
+  q.delete("day");
+  return q.toString();
+}
+async function loadLedHeat() {
+  const want = ledHeatParams();
+  ledHeatWant = want;
+  const h = await api("usage/heatmap?" + want);
+  if (want !== ledHeatWant) return; // another filter was picked meanwhile
+  if (ledHeat && ledHeat.want === want && JSON.stringify(ledHeat.data) === JSON.stringify(h)) return;
+  ledHeat = { want, data: h };
+  if (view === "usage" && usageTab === "requests") drawLedHeat();
+}
+const ledHeatDate = (s) => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
+function ledHeatTip(x) {
+  const loc = intlLang() || "en";
+  const tip = el("div");
+  tip.append(el("b", "", x.day.toLocaleDateString(loc, { year: "numeric", month: "short", day: "numeric", weekday: "short" })));
+  if (!x.calls) {
+    tip.append(el("span", "", t("No requests")));
+    return tip;
+  }
+  const parts = [t("{n} tokens", { n: fmtN(x.tokens) }), t(x.calls === 1 ? "{n} request" : "{n} requests", { n: ledNum(x.calls) })];
+  const c = fmtCost(x);
+  if (c) parts.push("≈" + c);
+  const order = { tokens: 0, calls: 1, cost: 2 }[ledHeatMetric];
+  if (order && parts[order]) parts.unshift(...parts.splice(order, 1)); // the metric shown first
+  tip.append(el("span", "", parts.join(" · ")));
+  return tip;
+}
+function drawLedHeat() {
+  const box = $("#ledHeat"), h = ledHeat?.data;
+  const at = new Map((h?.days || []).map((d) => [d.date, d]));
+  box.hidden = !h?.from || !h?.to || ![...at.values()].some((d) => d.calls > 0);
+  if (box.hidden) return;
+  const first = ledHeatDate(h.from), last = ledHeatDate(h.to);
+  const days = [];
+  for (const d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+    const x = at.get(sessISO(d)) || { calls: 0, tokens: 0, cost: 0 };
+    days.push({ ...x, day: new Date(d) });
+  }
+  const value = (x) => ledHeatMetric === "cost" ? x.cost : ledHeatMetric === "calls" ? x.calls : x.tokens;
+  const lv = sessLevels(days.map(value));
+  const seg = $("#ledHeatMetric");
+  seg.replaceChildren();
+  for (const [id, name] of LED_HEAT) {
+    const b = el("button", "opt" + (id === ledHeatMetric ? " on" : ""), t(name));
+    b.type = "button";
+    b.onclick = () => {
+      if (id === ledHeatMetric) return;
+      ledHeatMetric = id;
+      try { localStorage.setItem("magpie.ledHeatMetric", id); } catch {}
+      drawLedHeat();
+    };
+    seg.append(b);
+  }
+  slide(seg, "ledHeatMetric");
+  const scroll = $("#ledHeatScroll");
+  // the same days in the same language keep their cells, coloured again, so
+  // a refresh moves nothing and the scroll stays where the reader left it
+  const shape = [h.from, h.to, locale].join("|");
+  let grid = scroll.querySelector(".heat-grid");
+  if (!grid || grid.dataset.shape !== shape) {
+    grid = el("div", "heat-grid");
+    grid.dataset.shape = shape;
+    grid.setAttribute("role", "img");
+    const names = sessWeekdays();
+    // every row has its place at the edge, named every other day
+    for (let i = 0; i < 7; i++) {
+      const l = el("span", "wd", i % 2 ? "" : names[i]);
+      l.style.gridArea = `${i + 2} / 1`;
+      grid.append(l);
+    }
+    const loc = intlLang() || "en";
+    const weeks = Math.ceil(days.length / 7), labels = [];
+    let month = -1;
+    days.forEach((x, i) => {
+      const w = Math.floor(i / 7), wd = i % 7;
+      if (wd === 0 && x.day.getMonth() !== month) {
+        month = x.day.getMonth();
+        // a month mostly gone in the first week is left unnamed, so as not
+        // to crowd out the next one's name, and so is one begun in the last
+        // week, with no room for its name
+        if ((!labels.length || w - labels.at(-1).w >= 3) && !(w === 0 && x.day.getDate() > 14) && w < weeks - 1) {
+          const m = el("span", "mo", x.day.toLocaleDateString(loc, { month: "short" }));
+          labels.push({ m, w });
+          grid.append(m);
+        }
+      }
+      const c = el("i");
+      c.dataset.date = sessISO(x.day);
+      c.style.gridArea = `${wd + 2} / ${w + 2}`;
+      grid.append(c);
+    });
+    // a month's name spans its weeks up to the next name, cut there, so a
+    // long one never widens the grid past its last week
+    labels.forEach(({ m, w }, i) => { m.style.gridArea = `1 / ${w + 2} / 2 / ${(labels[i + 1]?.w ?? weeks) + 2}`; });
+    grid.onpointerover = (e) => { if (e.target.dataset?.date) ledHeatShow(e.target); };
+    grid.onpointerleave = () => { $("#ledHeatTip").hidden = true; };
+    scroll.replaceChildren(grid);
+    if (!scroll.onscroll) {
+      // the newest week in sight, by the card's own scroll, never the page's:
+      // kept there as the card is laid out or resized, until the reader
+      // scrolls it back, and again once they scroll to the end
+      scroll.onscroll = () => {
+        $("#ledHeatTip").hidden = true;
+        // its own scroll to the end, seen after the card narrowed, is not the reader's
+        if (scroll.clientWidth && scroll.scrollLeft !== ledHeatSetAt) ledHeatAtEnd = scroll.scrollLeft >= scroll.scrollWidth - scroll.clientWidth - 2;
+      };
+    }
+    ledHeatSized.disconnect();
+    ledHeatSized.observe(scroll);
+    ledHeatSized.observe(grid);
+    ledHeatKeepEnd();
+  }
+  grid.setAttribute("aria-label", t("Usage heatmap"));
+  const cells = grid.querySelectorAll("i");
+  days.forEach((x, i) => {
+    const c = cells[i];
+    c.className = "l" + lv(value(x));
+    c.day = x;
+  });
+  const legend = box.querySelector(".heat-foot");
+  legend.replaceChildren(sessLegend());
+  const tip = $("#ledHeatTip");
+  if (!tip.hidden && tip.cell?.isConnected) ledHeatShow(tip.cell);
+  else tip.hidden = true;
+}
+let ledHeatAtEnd = true, ledHeatSetAt = -1;
+const ledHeatSized = new ResizeObserver(() => ledHeatKeepEnd());
+function ledHeatKeepEnd() {
+  const scroll = $("#ledHeatScroll");
+  if (!ledHeatAtEnd || !scroll.clientWidth || scroll.scrollWidth <= scroll.clientWidth) return;
+  scroll.scrollLeft = scroll.scrollWidth;
+  ledHeatSetAt = scroll.scrollLeft;
+}
+// the tip over a day, above it, kept inside the card
+function ledHeatShow(cell) {
+  const box = $("#ledHeat"), tip = $("#ledHeatTip");
+  if (!cell.day) return;
+  tip.replaceChildren(...ledHeatTip(cell.day).children); // the date over the figures
+  tip.cell = cell;
+  tip.hidden = false;
+  const b = box.getBoundingClientRect(), c = cell.getBoundingClientRect();
+  const w = tip.offsetWidth, hgt = tip.offsetHeight;
+  const left = Math.max(6, Math.min(b.width - w - 6, c.left - b.left + c.width / 2 - w / 2));
+  let top = c.top - b.top - hgt - 6;
+  if (top < 4) top = c.bottom - b.top + 6;
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
 // the table's scrollbar, kept in view at the window's foot (#799): as wide
 // as the table can go sideways, and moving it as the table moves it
 function ledHScroll() {
@@ -15986,6 +16155,7 @@ function renderLedger() {
     loadLedger().catch((e) => status(e.message, "err"));
   };
   renderLedgerDash(l);
+  drawLedHeat();
 
   const wrap = $("#ledWrap");
   const pager = $("#ledPager");

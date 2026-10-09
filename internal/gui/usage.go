@@ -390,6 +390,11 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		writeJSON(rw, ledgerPage(periodOf(q.Get("period")), ledgerFilter(q), offset, limit))
 	})
+	// the heatmap (#1369): the last 53 weeks a day each, of the requests the
+	// page's filters keep, read from the same index as the page
+	mux.HandleFunc("GET /api/usage/heatmap", func(rw http.ResponseWriter, r *http.Request) {
+		writeJSON(rw, usage.HeatmapOf(ledgerFilter(r.URL.Query())))
+	})
 	// what was said in one request, read from the agent's session file when the
 	// row is opened, between two times (the call's own, or a gateway request's
 	// span): magpie keeps no copy
