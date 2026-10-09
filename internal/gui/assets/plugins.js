@@ -115,7 +115,7 @@
   // spec (its npm name when its author published it there from the
   // repository, else github:owner/repo)
   const ghListing = (r) => ({
-    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r,
+    package: r.spec, name: r.repo.split("/")[1], kind: r.kind, github: r, icon: r.icon || undefined,
     summary: r.description ? { en: r.description } : undefined,
     npm: { version: r.version || "", publisher: r.owner, repository: r.url, license: r.license, weekly: 0 },
   });

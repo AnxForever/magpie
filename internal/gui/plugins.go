@@ -256,7 +256,13 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 	// repositories on GitHub tagged magpie-plugin: nobody's list, shown
 	// apart as not reviewed, installed from the repository
 	mux.HandleFunc("GET /api/plugins/github", func(rw http.ResponseWriter, r *http.Request) {
-		writeJSON(rw, map[string]any{"repos": plugin.TaggedRepos(r.Context()), "topic": plugin.Topic})
+		// each one's own picture as the page can show it, kept here as an
+		// installed plugin's is (a data URI isn't sent on to the page)
+		repos := append([]plugin.Tagged(nil), plugin.TaggedRepos(r.Context())...)
+		for i := range repos {
+			repos[i].Icon = provider.RepoIcon(repos[i].Icon)
+		}
+		writeJSON(rw, map[string]any{"repos": repos, "topic": plugin.Topic})
 	})
 	mux.HandleFunc("GET /api/plugins/npm", func(rw http.ResponseWriter, r *http.Request) {
 		names := []string{}

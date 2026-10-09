@@ -112,6 +112,11 @@ func pluginOwnIcon(said string) string {
 	return ""
 }
 
+// RepoIcon is the Icon value of the picture a plugin not installed yet
+// gives in its package.json (a repository tagged magpie-plugin), checked
+// and kept as an installed plugin's is: "" while there is none to show.
+func RepoIcon(said string) string { return pluginOwnIcon(said) }
+
 // keptPluginIcons are the names of the stored pictures plugins gave, which
 // pruneIcons leaves.
 func keptPluginIcons() []string {
