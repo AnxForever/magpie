@@ -3010,9 +3010,14 @@
     return true;
   };
   const groupIcons = (g) => [...new Map((g.memberInfo || []).filter((i) => i.icon).map((i) => [i.provider || i.icon, i.icon])).values()];
-  const memberIcon = (id) => { const s = subOf(id); return s ? stackIcon(groupIcons(s)) : icon(modelOf(id)?.icon || "generic"); };
-  const memberName = (id) => { const s = subOf(id), m = modelOf(id); return s ? s.name : m ? m.name || m.id : id; };
-  const memberNote = (id) => subOf(id) ? t("routing group") : [modelOf(id)?.providerName, fixedOf(id) && fixedWords(fixedOf(id))].filter(Boolean).join(" · ");
+  // offOf: a member whose provider is switched off (groupsState's
+  // providerOff), said by its provider's name and model rather than a bare
+  // id: the group skips it until the provider is on again
+  const offOf = (id) => { for (const g of groups?.groups || []) { const i = g.memberInfo?.find((x) => x.id === id && x.providerOff); if (i) return i; } };
+  const offWords = (i) => t("{name} is switched off: the group skips it until it is on again", { name: i.name });
+  const memberIcon = (id) => { const s = subOf(id); return s ? stackIcon(groupIcons(s)) : icon(modelOf(id)?.icon || offOf(id)?.icon || "generic"); };
+  const memberName = (id) => { const s = subOf(id), m = modelOf(id), o = !m && offOf(id); return s ? s.name : m ? m.name || m.id : o ? o.model : id; };
+  const memberNote = (id) => { const o = !subOf(id) && !modelOf(id) && offOf(id); return subOf(id) ? t("routing group") : [modelOf(id)?.providerName || o && `${o.name} · ${t("switched off")}`, fixedOf(id) && fixedWords(fixedOf(id))].filter(Boolean).join(" · "); };
   // a member the group sends in its vendor's fast mode (Group.Fast)
   const fastIn = (g, id) => !!g?.fast?.includes(id) && !subOf(id);
   function memberLabel(g, id) {
@@ -3020,6 +3025,7 @@
     if (s) return `${t("routing group")} · ${s.name}`;
     const at = (f ? ` · ${fixedWords(f)}` : "") + (fastIn(g, id) ? ` · ${t("fast")}` : "");
     if (m) return `${m.providerName} · ${m.name || m.id}${at}`;
+    if (i?.providerOff) return `${i.name} · ${i.model}${at} (${t("switched off")})`;
     return i?.name ? `${i.name} · ${i.model}${at}` : id;
   }
   function renderGroups() {
@@ -3395,6 +3401,7 @@
       const note = [memberNote(id), fastIn(g, id) && t("fast")].filter(Boolean).join(" · ");
       if (note) b.append(el("small", "", note));
       b.title = on ? t("Every request goes to {name}", { name: memberLabel(g, id) })
+        : info?.providerOff ? offWords(info)
         : info && !info.ready ? t("No provider serves {id} now; it is skipped", { id })
         : t("Send every request to {name}", { name: memberLabel(g, id) });
       b.onclick = (e) => {
@@ -3536,6 +3543,7 @@
         const n = el("span", "n");
         n.append(el("span", "", memberName(id)));
         if (m || s) n.append(el("small", "", subOf(id) ? memberNote(id) : m.providerName));
+        else if (info?.providerOff) n.append(el("small", "", `${info.name} · ${t("switched off")}`));
         const matched = d.matched.includes(id);
         if (matched) n.append(el("small", "", t("by pattern")));
         // switched off, it keeps its place and its rules but is sent
@@ -3615,7 +3623,7 @@
           row.append(hx);
         }
         if (s) row.title = s.members.map((x) => memberLabel(s, x)).join(s.routing === "order" ? " → " : " · ");
-        if (!m && !s) { row.classList.add("off"); row.title = t("No provider serves {id} now; it is skipped", { id }); }
+        if (!m && !s) { row.classList.add("off"); row.title = info?.providerOff ? offWords(info) : t("No provider serves {id} now; it is skipped", { id }); }
         if (matched) {
           // a pattern's: it follows the catalog, so it is switched off
           // rather than taken out — the pattern would find it again
