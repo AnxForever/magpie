@@ -591,16 +591,21 @@ func (f *mcpFile) encode(s *Server) ordered {
 			add("tool_timeout_sec", t)
 		}
 	case fmtDsh:
+		// a reference is a !!js expression dsh evaluates (dshRef)
 		add("serverName", s.Name)
 		if s.Remote() {
 			add("transport", "streamable-http")
 			add("url", s.URL)
-			optional("headers", s.Headers)
+			if len(s.Headers) > 0 {
+				add("headers", dshRefs(s.Headers))
+			}
 		} else {
 			add("transport", "stdio")
 			add("command", s.Command)
 			add("args", list(s.Args))
-			optional("env", s.Env)
+			if len(s.Env) > 0 {
+				add("env", dshRefs(s.Env))
+			}
 		}
 	}
 	return o
@@ -705,17 +710,26 @@ func (f *mcpFile) decode(name string, m map[string]any) (*Server, bool) {
 			local(str(m, "command"), m["args"], m["env"])
 		}
 	case fmtDsh:
-		// a value dsh works out itself (!!js) isn't one magpie can hold
+		// a variable read as dshRef writes it is a reference; any other
+		// value dsh works out itself (!!js) isn't one magpie can hold
+		headers, env := dshUnrefs(m["headers"]), dshUnrefs(m["env"])
 		for _, k := range owned[fmtDsh] {
-			if hasJS(m[k]) {
+			v := m[k]
+			switch k {
+			case "headers":
+				v = headers
+			case "env":
+				v = env
+			}
+			if hasJS(v) {
 				return nil, false
 			}
 		}
 		switch str(m, "transport") {
 		case "stdio":
-			local(str(m, "command"), m["args"], m["env"])
+			local(str(m, "command"), m["args"], env)
 		case "streamable-http":
-			remote("http", str(m, "url"), m["headers"])
+			remote("http", str(m, "url"), headers)
 		}
 	case fmtHermes, fmtKimi, fmtDevin, fmtAlma:
 		// each takes a url over a command when an entry has both
