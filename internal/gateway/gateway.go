@@ -1757,6 +1757,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// for a reply that only reasoned to be asked again (#667).
 		hw.thinkingShown = !refusesAfterThinking(c.model) || last && modelFamily(c.model) != ""
 		hw.ctx, hw.alive, hw.streams = r.Context(), kept, streams
+		if streams && !settings.Load().NoLoopGuard {
+			// a reply stuck in a loop is ended, not let run to its limit
+			// (#1359)
+			hw.loop = &loopGuard{}
+		}
 		if isGroup && g.FirstToken > 0 && !last && streams {
 			// slow to start, the next member is asked (Group.FirstToken)
 			hw.firstWait = time.Duration(g.FirstToken) * time.Second
@@ -2026,6 +2031,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if hw.refused {
 			// the vendor's safety filter, with nothing said (#248)
 			call.Error = refusedError(c.p, c.model, hw.failMsg)
+		}
+		if hw.looped != "" {
+			// ended for looping (#1359): the agent had its 200 and the
+			// stream's error; logged apart from the vendor's own errors
+			call.Status, call.Error, call.Usage.ErrType = hw.status, c.p.Name+": "+hw.looped, loopErrType
 		}
 		try := Try{ID: c.rest, Model: c.model, Effort: sent, Picked: picked, Fixed: fixed, Fast: fast, Start: began, Done: true, Status: call.Status, Millis: time.Since(began).Milliseconds(), Error: call.Error, Queued: queued,
 			Served: call.Usage.Served, Upstream: call.Usage.Upstream, Auto: autoPicked()}
@@ -2430,7 +2440,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			if hit == nil || !hit.Compact {
 				unanswered(stuck, c)
 			}
-			if hw.refusedAfter {
+			if hw.looped != "" {
+				// the model looped (#1359): its account and key are not at
+				// fault, and nobody rests
+				try.Fail = failLoop
+			} else if hw.refusedAfter {
 				// the vendor's filter refused the turn it had begun, as it
 				// refused one before any of it was said (#248): the account
 				// is at fault no more for it, and nobody rests

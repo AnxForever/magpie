@@ -19811,7 +19811,18 @@ function renderReplies(s, keep) {
   val.append(segs([["off", t("Off")], ["on", t("On")]], s.memberModel ? "on" : "off",
     (v) => savePrefs({ ...keep, memberModel: v === "on" })));
   r.append(who, val);
-  box.append(r);
+  // a reply stuck in a loop is ended with an error the agent can act on,
+  // not let run to its output limit (#1359): on unless turned off
+  const l = el("div", "row pref");
+  l.id = "loopGuardRow";
+  const lwho = el("div", "who");
+  lwho.append(el("div", "name", t("Stop looping replies")),
+    el("div", "sub", t("A reply whose reasoning or text goes round the same few lines is ended with an error the agent can retry, not left to run to its output limit")));
+  const lval = el("div", "val");
+  lval.append(segs([["off", t("Off")], ["on", t("On")]], s.noLoopGuard ? "off" : "on",
+    (v) => savePrefs({ ...keep, noLoopGuard: v === "off" })));
+  l.append(lwho, lval);
+  box.append(r, l);
 }
 
 // renderRedact: what the gateway masks before a request goes to a vendor —
@@ -20393,7 +20404,7 @@ function prefsKeep(s) {
     redact: !!s.redact, redactPersonal: !!s.redactPersonal, redactWords: s.redactWords || [], codexWarmup: s.codexWarmup || "",
     claudeWarmup: s.claudeWarmup || "", codexWarmAt: s.codexWarmAt || "", claudeWarmAt: s.claudeWarmAt || "",
     codexWarmAts: warmTimes(s.codexWarmAts, s.codexWarmAt), claudeWarmAts: warmTimes(s.claudeWarmAts, s.claudeWarmAt), workbuddyCheckin: !!s.workbuddyCheckin, traeCheckin: !!s.traeCheckin, minimaxCheckin: !!s.minimaxCheckin, qoderCheckin: !!s.qoderCheckin, noStats: !!s.noStats, noUsageStats: !!s.noUsageStats,
-    memberModel: !!s.memberModel,
+    memberModel: !!s.memberModel, noLoopGuard: !!s.noLoopGuard,
     noUpdatePill: !!s.noUpdatePill, noAutoUpdate: !!s.noAutoUpdate, updateEvery: s.updateEvery || 360,
     trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayNoBird: !!s.trayNoBird, vision: s.vision || "", imageGen: s.imageGen || "", searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd",
     chineseUnits: !!s.chineseUnits, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0 };

@@ -179,7 +179,14 @@ const (
 	// FirstToken ran out, nothing of it sent — the next is asked, and
 	// nobody rests, as a long prompt is slow anywhere
 	failSlow = "slow"
+	// failLoop: the reply was ended stuck in a loop (#1359) — the agent
+	// is told, and nobody rests, as the model, not the account, looped
+	failLoop = "loop"
 )
+
+// loopErrType is the usage log's ErrType for a reply ended for looping
+// (#1359), told apart from what vendors call their errors.
+const loopErrType = "reply_loop"
 
 // proxyDown is the error Go gives when the proxy itself can't be reached,
 // over HTTP (proxyconnect) or SOCKS (socks connect).

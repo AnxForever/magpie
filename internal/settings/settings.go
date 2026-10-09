@@ -172,6 +172,10 @@ type Settings struct {
 	// usage by the reply's model (#822). Claude Code, Claude Desktop and
 	// Codex always get the vendor's name: they read it themselves.
 	MemberModel bool `json:"memberModel,omitempty"`
+	// NoLoopGuard lets a streamed reply run on when its reasoning or text
+	// is stuck in a loop of the same few lines (#1359). Off, as by
+	// default, the gateway ends such a reply with an error.
+	NoLoopGuard bool `json:"noLoopGuard,omitempty"`
 	// NoStats stops the one event a day that counts magpie's users (see
 	// internal/stats).
 	NoStats bool `json:"noStats,omitempty"`
