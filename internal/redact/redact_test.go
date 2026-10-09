@@ -166,3 +166,52 @@ func TestWriterWhole(t *testing.T) {
 		t.Fatalf("%v %s", rec.Header(), rec.Body.String())
 	}
 }
+
+// What a vendor sealed goes back as the vendor wrote it: the values masked
+// elsewhere in the request as their placeholders, its own words as they
+// are; the same text unsealed is masked as any other.
+func TestMaskJSONSignedGoesBackAsWritten(t *testing.T) {
+	o := Options{Secrets: true, Personal: true}
+	const email, key = "jeremy.zhou@gmail.com", "sk-proj-abcdEFGH1234ijklMNOP5678qrst"
+	pe, _ := Mask(email, o)
+	pk, _ := Mask(key, o)
+	// what the agent has back of what the vendor wrote: the values in it
+	// in other words around them, and the vendor's own number
+	agent := "Order 13800138000 is for " + email + ". Its key is the one ending " + key + "."
+	vendor := "Order 13800138000 is for " + pe + ". Its key is the one ending " + pk + "."
+	user := `{"role":"user","content":"I am ` + email + `, key ` + key + `"}`
+	for _, c := range []struct{ name, body, want string }{
+		{"anthropic", `{"messages":[` + user + `,{"role":"assistant","content":[{"type":"thinking","thinking":"` + agent + `","signature":"Eqk1"}]}]}`, vendor},
+		{"gemini", `{"contents":[{"role":"user","parts":[{"text":"I am ` + email + `, key ` + key + `"}]},{"role":"model","parts":[{"text":"` + agent + `","thought":true,"thoughtSignature":"Cs4B"}]}]}`, vendor},
+		{"gemini call", `{"contents":[{"role":"user","parts":[{"text":"I am ` + email + `, key ` + key + `"}]},{"role":"model","parts":[{"functionCall":{"name":"note","args":{"text":"` + agent + `"}},"thoughtSignature":"Cs4B"}]}]}`, vendor},
+		{"responses", `{"input":[` + user + `,{"type":"reasoning","summary":[{"type":"summary_text","text":"` + agent + `"}],"encrypted_content":"gAAAA"}]}`, vendor},
+	} {
+		out, _ := MaskJSON([]byte(c.body), o)
+		if !strings.Contains(string(out), `"`+c.want+`"`) {
+			t.Errorf("%s: sealed text not as the vendor wrote it:\n%s", c.name, out)
+		}
+		if strings.Contains(string(out), email) || strings.Contains(string(out), key) {
+			t.Errorf("%s: a value went out: %s", c.name, out)
+		}
+	}
+	// no signature, nothing to match: masked by the rules
+	out, _ := MaskJSON([]byte(`{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"call 13800138000 now","signature":""}]}]}`), o)
+	if strings.Contains(string(out), "13800138000") {
+		t.Errorf("unsigned thinking left unmasked: %s", out)
+	}
+}
+
+// An id goes as the vendor gave it, on both sides of what it matches.
+func TestMaskJSONKeepsIDs(t *testing.T) {
+	o := Options{Secrets: true, Personal: true}
+	const id = "call_-6090648166611204696" // 19 digits that pass Luhn
+	for _, k := range []string{"id", "tool_call_id", "tool_use_id", "call_id", "approval_request_id", "toolCallId"} {
+		body := `{"` + k + `":"` + id + `"}`
+		if out, _ := MaskJSON([]byte(body), o); string(out) != body {
+			t.Errorf("%s masked: %s", k, out)
+		}
+	}
+	if out, _ := MaskJSON([]byte(`{"content":"card `+id[6:]+`"}`), o); strings.Contains(string(out), id[6:]) {
+		t.Errorf("the same digits in text should be masked: %s", out)
+	}
+}

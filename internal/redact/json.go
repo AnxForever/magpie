@@ -3,6 +3,7 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -19,7 +20,71 @@ var kept = map[string]bool{
 }
 
 func keep(key, s string) bool {
-	return kept[key] || strings.HasPrefix(s, "data:")
+	return kept[key] || isID(key) || strings.HasPrefix(s, "data:")
+}
+
+// isID says a key holds an identifier the vendor matches against another:
+// a tool result's tool_call_id against its call's id, an approval's
+// approval_request_id against its request. A vendor's ids are its own
+// letters and digits, and GLM's call_ and 19 digits can read as a bank
+// card number; masked on one side only, the two no longer match.
+func isID(key string) bool {
+	return key == "id" || key == "ids" || strings.HasSuffix(key, "_id") || strings.HasSuffix(key, "_ids") ||
+		strings.HasSuffix(key, "Id") || strings.HasSuffix(key, "Ids")
+}
+
+// signatureKeys are the keys of what a vendor seals the content beside it
+// with: Anthropic's thinking signature, Gemini's thought signature,
+// Responses' encrypted reasoning.
+var signatureKeys = []string{"signature", "thoughtSignature", "thought_signature", "encrypted_content"}
+
+// signedPaths are the paths of the objects in body that carry a signature
+// with a value: what is in them the vendor wrote and checks, so it goes
+// back exactly as the vendor wrote it.
+func signedPaths(body []byte) []string {
+	found := false
+	for _, k := range signatureKeys {
+		found = found || bytes.Contains(body, []byte(`"`+k+`"`))
+	}
+	if !found {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(body, &v) != nil {
+		return nil
+	}
+	var out []string
+	var visit func(path string, v any)
+	visit = func(path string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for _, k := range signatureKeys {
+				if s, _ := x[k].(string); s != "" {
+					out = append(out, path)
+					return
+				}
+			}
+			for k, c := range x {
+				visit(join(path, k), c)
+			}
+		case []any:
+			for i, c := range x {
+				visit(join(path, strconv.Itoa(i)), c)
+			}
+		}
+	}
+	visit("", v)
+	return out
+}
+
+// under says path is in one of the objects at roots.
+func under(path string, roots []string) bool {
+	for _, r := range roots {
+		if r == "" || path == r || strings.HasPrefix(path, r+".") {
+			return true
+		}
+	}
+	return false
 }
 
 // walk calls fn with every string value in the JSON document b — its path
@@ -177,13 +242,32 @@ func jsonEscape(s string) string {
 
 // MaskJSON masks the strings of a request body, and says how many values
 // it masked. A body that isn't JSON is masked as text.
+//
+// What a vendor sealed with a signature (a thinking block, Gemini's
+// thoughts, Responses' encrypted reasoning) is checked by the vendor
+// against the text it wrote, so it goes back as written: the values
+// masked elsewhere in the request become their placeholders again, which
+// is what the vendor wrote where the agent reads the value (Restore), and
+// nothing else in it is touched. Masked by the rules instead, a value the
+// vendor wrote as a placeholder in other words around it ("the password
+// is {{SECRET_…}}") went back as the value itself, and what the vendor
+// wrote of its own that looks like an email or a phone number went as a
+// placeholder: either way the text no longer matched its signature, and
+// Anthropic answers 400 "Invalid `signature` in `thinking` block".
 func MaskJSON(body []byte, o Options) ([]byte, int) {
+	signed := signedPaths(body)
 	total := 0
-	out, ok := walk(body, func(_, key, s string) string {
-		if keep(key, s) {
+	var seen []string // value, placeholder, value, placeholder…
+	put := func(kind, v string) string {
+		p := placeholder(kind, v)
+		seen = append(seen, v, p)
+		return p
+	}
+	out, ok := walk(body, func(path, key, s string) string {
+		if keep(key, s) || signed != nil && under(path, signed) {
 			return s
 		}
-		t, n := Mask(s, o)
+		t, n := mask(s, o, put)
 		total += n
 		return t
 	})
@@ -191,7 +275,41 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 		t, n := Mask(string(body), o)
 		return []byte(t), n
 	}
+	if len(signed) == 0 || len(seen) == 0 {
+		return out, total
+	}
+	remask := replacerOf(seen)
+	out, _ = walk(out, func(path, key, s string) string {
+		if keep(key, s) || !under(path, signed) {
+			return s
+		}
+		t := remask.Replace(s)
+		if t != s {
+			total++
+		}
+		return t
+	})
 	return out, total
+}
+
+// replacerOf swaps each value of pairs (value, placeholder, …) for its
+// placeholder, the longest value first where two start at the same place.
+func replacerOf(pairs []string) *strings.Replacer {
+	type pair struct{ v, p string }
+	var ps []pair
+	have := map[string]bool{}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !have[pairs[i]] {
+			have[pairs[i]] = true
+			ps = append(ps, pair{pairs[i], pairs[i+1]})
+		}
+	}
+	sort.SliceStable(ps, func(i, j int) bool { return len(ps[i].v) > len(ps[j].v) })
+	args := make([]string, 0, 2*len(ps))
+	for _, p := range ps {
+		args = append(args, p.v, p.p)
+	}
+	return strings.NewReplacer(args...)
 }
 
 // asJSON says a string under key holds JSON text of its own, so a value
