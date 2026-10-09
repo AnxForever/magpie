@@ -44,6 +44,22 @@ type aBlock struct {
 	CacheControl map[string]string `json:"cache_control,omitempty"`
 }
 
+// MarshalJSON writes a thinking block's text even when it is empty.
+// Messages requires the field: a signed block with no text (Claude Code's
+// thinking when its display is omitted) sent without it is refused,
+// "messages.N.content.0.thinking.thinking: Field required" (#1447). Every
+// other block keeps its omitempty fields.
+func (b aBlock) MarshalJSON() ([]byte, error) {
+	type plain aBlock
+	if b.Type != "thinking" {
+		return json.Marshal(plain(b))
+	}
+	return json.Marshal(struct {
+		plain
+		Thinking string `json:"thinking"`
+	}{plain(b), b.Thinking})
+}
+
 // ephemeral marks a prompt-cache breakpoint.
 var ephemeral = map[string]string{"type": "ephemeral"}
 
