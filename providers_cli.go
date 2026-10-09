@@ -237,7 +237,9 @@ func models(args []string) error {
 		}
 		entries, hidden = provider.CatalogFor(agentID)
 	}
-	if len(entries) == 0 && agentID != "" {
+	if _, only := provider.PickedModels(agentID); len(entries) == 0 && agentID != "" && only {
+		fmt.Println(amber.Render("!"), agentID, "is shown none of them: it is shown only the models picked for it, and none is", muted.Render("· tick some in its list on the Agents page, or magpie visible "+agentID+" --show-new"))
+	} else if len(entries) == 0 && agentID != "" {
 		names, _ := provider.VisibleTo(agentID)
 		fmt.Println(amber.Render("!"), agentID, "is shown none of them: nothing is in", strings.Join(names, ", "), muted.Render("· magpie visible "+agentID+" all shows it every model"))
 	} else if len(entries) == 0 && bad != nil {

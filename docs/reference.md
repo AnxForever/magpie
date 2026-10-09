@@ -69,7 +69,12 @@ line; agents connected to magpie lose it when it quits.
 - **Each agent's own model list.** Under an agent's name on the Agents page,
   "Showing 5 / 32 models" opens its list: click a model to take it out of
   that agent's picker (Codex's `/model` included, its ChatGPT models too) or
-  put it back; other agents still use it, and a new model is shown.
+  put it back; other agents still use it, and a new model is shown. Its
+  "Only models I pick" switch turns the list around: the models ticked
+  when it is switched on stay, and a model added later, of any provider,
+  stays out of that agent's picker and its config until it is ticked
+  (`magpie visible <agent> --only-picked`, back with `--show-new`). A
+  model asked for by name still works either way.
 - **Profiles.** Snapshot every agent's settings under a name and switch all of
   them back in one move.
 - **Real logos, no framework.** Plain HTML over the system webview; brand

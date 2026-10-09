@@ -411,16 +411,19 @@ func CodexCatalog(shown []Entry) []catalog.Model {
 }
 
 // CodexNativeHidden is the ChatGPT account's own model slugs the user took
-// out of Codex's list (HiddenModels): the backend lists them, and the
-// gateway drops them from its /models answer as it does the ones not picked.
+// out of Codex's list (HiddenModels), or didn't pick for it when it is
+// shown only the models picked (PickedModels): the backend lists them, and
+// the gateway drops them from its /models answer as it does the ones not
+// picked.
 func CodexNativeHidden() map[string]bool {
-	off := HiddenModels("codex")
-	if len(off) == 0 {
+	_, only := PickedModels("codex")
+	if !only && len(HiddenModels("codex")) == 0 {
 		return nil
 	}
+	off := ModelOff("codex")
 	out := map[string]bool{}
 	for _, e := range Catalog() {
-		if off[e.ID] && CodexOwn(e) {
+		if CodexOwn(e) && off(e.ID) {
 			out[e.Model] = true
 		}
 	}

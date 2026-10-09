@@ -2346,8 +2346,10 @@ async function openAgentModels(a, anchor, ev) {
   document.addEventListener("mousedown", loading.away, true);
   // every agent's list goes in the order dragged here (Codex's, #855; the
   // others', #1052)
-  let models, ordered = false;
-  try { ({ models, ordered } = await api("agent-models/" + encodeURIComponent(a.id))); }
+  // only: the agent is shown only the models ticked for it, a new one off
+  // until it is ticked (#1337), not every one not taken out
+  let models, ordered = false, only = false;
+  try { ({ models, ordered, only = false } = await api("agent-models/" + encodeURIComponent(a.id))); }
   catch (e) {
     if (agentModelsLoading === loading) { loading.drop(); status(e.message, "err"); }
     return;
@@ -2385,10 +2387,22 @@ async function openAgentModels(a, anchor, ev) {
   hideAll.type = reset.type = "button";
   const unorder = el("button", "am-reset", t("Default order"));
   unorder.type = "button";
-  const footNote = el("span", "", t("New models are shown"));
+  const footNote = el("span", "");
+  // whether a model that comes later is shown, or stays off until ticked:
+  // the agent's own switch, not every agent's (nianlee-official, #1337)
+  const onlyBox = el("label", "am-only");
+  const onlySw = el("button", "lib-switch use-credits" + (only ? " on" : ""));
+  onlySw.type = "button";
+  onlySw.setAttribute("role", "switch");
+  onlySw.setAttribute("aria-checked", String(only));
+  onlySw.append(el("i"));
+  const onlySay = el("span", "", t("Only models I pick"));
+  onlySw.setAttribute("aria-label", onlySay.textContent);
+  onlyBox.title = t("Off: new models are shown. On: only the models ticked here are shown, and a model added later, of any provider, stays off until you tick it");
+  onlyBox.append(onlySw, onlySay);
   // takes back a first click on Hide all or Show all (twice, below)
   let disarm = () => {};
-  foot.append(footNote, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+  foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
   // groups as the catalog has them, routing groups first; a long one
   // starts folded, unless the agent is set to a model in it
   const groups = [];
@@ -2468,8 +2482,30 @@ async function openAgentModels(a, anchor, ev) {
       for (const said of row?.querySelectorAll(".ag-st.on .ag-st-t, .ag-conn-said") || []) said.textContent = connectSaid(a);
       row?.querySelector(".ag-sum .vt")?.replaceChildren(menuSaid(count));
     } else renderAgents();
-    me.saving = me.saving.then(() => api("agent-models/" + encodeURIComponent(a.id), { hidden }))
+    // shown only its picks, the ones ticked are what is sent: a model that
+    // came since the list was opened isn't among them, so it stays off
+    const body = only ? { shown: models.filter((m) => !m.hidden).map((m) => m.id) } : { hidden };
+    me.saving = me.saving.then(() => api("agent-models/" + encodeURIComponent(a.id), body))
       .catch((e) => status(e.message, "err"));
+  };
+  onlySw.onclick = (e) => {
+    e.preventDefault();
+    disarm();
+    only = !only;
+    onlySw.classList.toggle("on", only);
+    onlySw.setAttribute("aria-checked", String(only));
+    me.changed = true;
+    // the models shown stay as they are, so the list drawn needs nothing
+    // new; what comes back is the same, but for one added meanwhile
+    const want = only;
+    me.saving = me.saving.then(() => api("agent-models/" + encodeURIComponent(a.id), { only: want }))
+      .catch((err) => {
+        status(err.message, "err");
+        if (only !== want) return;
+        only = !want;
+        onlySw.classList.toggle("on", only);
+        onlySw.setAttribute("aria-checked", String(only));
+      });
   };
   // the shown models as the agent lists them: as dragged, or, before any
   // drag, Codex's own (a ChatGPT account's) ahead of magpie's, as its
@@ -2624,11 +2660,11 @@ async function openAgentModels(a, anchor, ev) {
     // Codex's /model, in WSL too, lists them as handed (#855); another
     // agent is handed them in it, and one that sorts its own menu may sort
     // them again
-    footNote.textContent = !order ? t("New models are shown")
+    footNote.textContent = !order ? ""
       : a.id.split("@wsl:")[0] === "codex" ? t("Drag to put them in the order {agent} lists them; new models go last", { agent: a.name })
       : t("Drag to put them in the order magpie hands them to {agent}; new models go last", { agent: a.name });
     if (order) foot.replaceChildren(footNote, el("span", "sp"), unorder);
-    else foot.replaceChildren(footNote, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+    else foot.replaceChildren(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
     list.scrollTop = 0;
     draw();
   };
@@ -2656,7 +2692,7 @@ async function openAgentModels(a, anchor, ev) {
         disarm();
         b.dataset.armed = "1";
         b.textContent = armed();
-        footNote.hidden = true;
+        onlyBox.hidden = true;
         b._t = setTimeout(disarm, 4000);
         return;
       }
@@ -2673,7 +2709,7 @@ async function openAgentModels(a, anchor, ev) {
       delete b.dataset.armed;
       b.textContent = label;
     }
-    footNote.hidden = false;
+    onlyBox.hidden = false;
   };
   twice(reset, () => t("Show {n} hidden, of every provider? Click again", { n: models.filter((m) => m.hidden).length }), () => {
     for (const m of models) m.hidden = false;
