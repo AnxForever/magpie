@@ -757,6 +757,12 @@ func (b *subscriptionBridge) resume(req *Request, owner string) (*subscriptionRu
 	if run == nil {
 		return nil, nil
 	}
+	if slices.ContainsFunc(since[len(since)-1].Parts, func(p Part) bool { return p.Kind == ToolResult }) {
+		// said after the "no run waiting" line it follows: the run took
+		// the turn back when the client went away (letGo), and is told it
+		// again from its user message, not the whole conversation
+		log.Printf("claude: a turn taken back goes on in its run, told again from its user message (%d messages)", len(since))
+	}
 	// a run still taking back the turn the client gave up on (letGo) is
 	// waited for: it goes on from before that turn, or ended
 	run.mu.Lock()
@@ -1031,10 +1037,17 @@ func (b *subscriptionBridge) retire(owner string, msgs []Message) {
 // asked for nothing more waits for the conversation's next turn; one that
 // failed, was cut short or went unheard is let go, as is a one-off ask.
 func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
-	// the turn's reply is over: nothing after it (its tool calls' answers
-	// going on) is taken back to before it (letGo)
+	// the turn's reply is over: nothing after it is taken back to before
+	// it (letGo). A reply that calls tools hasn't ended the turn: the
+	// client's results go on with it, and a client that goes away during
+	// what the run says to them takes back the whole turn, its user
+	// message on, as it would before its first call (#1365). Ended there,
+	// the client's next request, its results sent again or the next turn,
+	// found no run and a new one was told the whole conversation.
 	r.mu.Lock()
-	r.turnUUID, r.backKey = "", ""
+	if !ok || stop != "tool" {
+		r.turnUUID, r.backKey = "", ""
+	}
 	r.mu.Unlock()
 	switch {
 	case !ok:
@@ -1367,9 +1380,12 @@ type controlReply struct {
 // a run kept for it is taken back: Claude Code is told to rewind to the
 // turn's message, which stops the reply and leaves its conversation as it
 // was before the turn, and the run waits there again, for the client's
-// resend to go on from the prefix it cached. Any other run — one started
-// for the turn, one with a tool call in the client's hands, one whose
-// Claude Code refuses or doesn't answer — is ended, as before.
+// resend to go on from the prefix it cached. That holds in the reply to
+// the turn's tool results too (#1365): the turn is taken back whole, its
+// tool rounds with it, and the client's next request is told the turn
+// since its user message, not the whole conversation. Any other run — one
+// started for the turn, one with a tool call in the client's hands, one
+// whose Claude Code refuses or doesn't answer — is ended, as before.
 func (r *subscriptionRun) letGo() {
 	r.mu.Lock()
 	turn, back := r.turnUUID, r.backKey

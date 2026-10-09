@@ -29,6 +29,25 @@ cache.
    starts from with `--resume`, told the turn's messages alone.
 3. `retire`, then a new run told the whole conversation.
 
+## A turn the client gives up on (`letGo`, #780, #1365)
+
+When the client goes away mid-reply, a run resumed for the turn is told to
+rewind (`rewind_conversation`) to the turn's user message, and waits at the
+conversation before the turn (`backKey`). The turn's id lasts until its
+reply ends without calling a tool: `ended` keeps `turnUUID` and `backKey`
+over a reply that calls tools, so a client that goes away while the run
+answers its tool results also has the whole turn taken back, its tool
+rounds with it. Its next request (the same results sent again, or the next
+turn) then finds no run waiting on the calls ("tool results no run
+waiting"), is resumed in that run at `backKey` and told the turn since its
+user message (logged "a turn taken back goes on in its run"). Before, the
+turn's id was dropped with the reply that called the tool, the run was
+ended, and that request was told the whole conversation in a new run.
+Claude Code 2.1.295 rewinds past a tool round mid-reply (tried against a
+local mock of Anthropic). A run started anew for the turn has nothing to
+rewind to and is still ended; so is one with a call still in the client's
+hands (`pending`).
+
 ## Finding the run: keys
 
 - `nextTurn` splits a request at its last reply that calls no tool: the
@@ -133,7 +152,7 @@ carries none.
 ## Verification
 
 ```sh
-go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each
