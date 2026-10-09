@@ -255,10 +255,7 @@ var wslKinds = []wslKind{
 				}
 			case "effort":
 				return func(cur map[string]string) []Option {
-					if e := catalog.Efforts(append(catalog.Codex(), magpieModels("codex")...), cur["model"]); len(e) > 0 {
-						return static(e...)
-					}
-					return static("low", "medium", "high", "xhigh")
+					return codexEfforts(append(catalog.Codex(), magpieModels("codex")...), cur["model"])
 				}
 			}
 			return nil

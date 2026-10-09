@@ -80,6 +80,21 @@ func codex(home string) *Agent { return codexIn(here(home)) }
 
 // codexIn is Codex as it lives at a place: this machine's home, or a WSL
 // distro's (see wsl.go).
+// codexEfforts are the effort control's choices for a model among ms:
+// Default first, with the level Codex takes for it when none is set, as
+// the catalog entry it reads says it, then the model's levels.
+func codexEfforts(ms []catalog.Model, model string) []Option {
+	e := catalog.Efforts(ms, model)
+	if len(e) == 0 {
+		return static("low", "medium", "high", "xhigh")
+	}
+	d := Option{Value: "", Note: "Codex's default for the model", Takes: codexcat.TakesEffort(ms, model)}
+	if d.Takes != "" {
+		d.Note += ": " + d.Takes
+	}
+	return append([]Option{d}, static(e...)...)
+}
+
 func codexIn(at place) *Agent {
 	dir := filepath.Join(at.home, ".codex")
 	path := filepath.Join(dir, "config.toml")
@@ -142,7 +157,10 @@ func codexIn(at place) *Agent {
 		return catalog.Codex()
 	}
 	var dropSubEffort func() error
-	// keep the effort valid for the model; a fresh model gets its default.
+	// keep the effort valid for the model: one set that the model doesn't
+	// take becomes its default. One left unset stays unset — Codex then
+	// takes the model's own default, which is what Default on the effort
+	// control asked for (lgtm: Default turned into medium on its own).
 	// Routed, the Codex app offers magpie's models' efforts too (#310).
 	settle := func() error {
 		if routed() {
@@ -152,7 +170,7 @@ func codexIn(at place) *Agent {
 		}
 		ms := models()
 		model, effort := get("model"), get("model_reasoning_effort")
-		if e := catalog.Efforts(ms, model); len(e) > 0 && !contains(e, effort) {
+		if e := catalog.Efforts(ms, model); len(e) > 0 && effort != "" && !contains(e, effort) {
 			if err := edit.SetTOMLTop(path, edit.KV{Path: "model_reasoning_effort", Value: codexcat.DefaultEffort(e)}); err != nil {
 				return err
 			}
@@ -954,31 +972,19 @@ func codexIn(at place) *Agent {
 			},
 			{
 				Key: "effort", Label: "effort",
-				// unset, Codex takes the model's default, as the catalog
-				// magpie wrote says it — shown as such rather than as none
-				Get: func() string {
-					if e := get("model_reasoning_effort"); e != "" {
-						return e
-					}
-					if m := get("model"); isMagpie(m) {
-						if e := catalog.Efforts(models(), m); len(e) > 0 {
-							return codexcat.DefaultEffort(e)
-						}
-					}
-					return ""
-				},
+				// unset reads as Default, which it is; the level Codex then
+				// takes is on the Default option (Takes), not the value, so
+				// picking Default doesn't read back as medium (lgtm)
+				Get: func() string { return get("model_reasoning_effort") },
 				Set: func(v string) error {
 					if v == "" {
 						return edit.DelTOMLTop(path, "model_reasoning_effort")
 					}
 					return edit.SetTOMLTop(path, edit.KV{Path: "model_reasoning_effort", Value: v})
 				},
-				Options: func(cur map[string]string) []Option {
-					if e := catalog.Efforts(models(), cur["model"]); len(e) > 0 {
-						return static(e...)
-					}
-					return static("low", "medium", "high", "xhigh")
-				},
+				// Default first, with the level Codex takes for the model
+				// when none is set, as the catalog entry it reads says it
+				Options: func(cur map[string]string) []Option { return codexEfforts(models(), cur["model"]) },
 			},
 			{
 				// Codex lists only the first few models in the spawn_agent

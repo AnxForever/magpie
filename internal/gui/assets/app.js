@@ -3744,7 +3744,10 @@ function openPicker(agent, field, anchor, ev, only) {
 }
 
 function effortName(option) {
-  if (!option?.value) return t("default");
+  // the agent's default, with the level it takes then when the agent says
+  // (Codex: the model's default_reasoning_level), so Default doesn't read
+  // as a level of its own that turned into medium (lgtm)
+  if (!option?.value) return option?.takes ? t("default ({level})", { level: t(option.takes) }) : t("default");
   return t(option.label || option.value);
 }
 
