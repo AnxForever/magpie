@@ -100,7 +100,7 @@ func dshAt(at place) *Agent {
 		Sync: func() error { return dshSync(dir, gw()) },
 		Notice: func() string {
 			var notes []string
-			if Running(`(^|/)dsh( |$)`) {
+			if Running(`DeepSeek Harness\.app/`, `(^|/)dsh( |$)`) {
 				if len(dshProfiles(dir)) > 0 {
 					notes = append(notes, "New dsh sessions start on this; one already open keeps its model until you pick another in it. A dsh started with -p or in a terminal reads it at start-up.")
 				} else {
