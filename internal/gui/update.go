@@ -156,20 +156,29 @@ func (u *updater) placeExe(exe string) {
 	u.blocked = update.ReadBlocked(Version)
 }
 
-// exeStuck says why the binary in dir can't be replaced off the Mac, or ""
-// when it can: "not-writable" when magpie may not write to dir and this
-// system can't ask for the administrator's password. On Windows a magpie.exe
-// kept at C:\ updated only by opening the release page, with nothing saying
-// why (#1277).
+// exeStuck says why the binary in dir can't be replaced, or "" when it
+// can: "not-writable" when magpie may not write to dir and this system
+// can't ask for the administrator's password. On Windows a magpie.exe kept
+// at C:\ updated only by opening the release page, with nothing saying why
+// (#1277). "container" is that in a container (the Docker image's /magpie,
+// run as nonroot): there the new image is pulled, and "move it to a folder
+// you can write to" was the wrong advice.
 func exeStuck(dir string) string {
 	if update.Writable(dir) || canElevate() {
 		return ""
 	}
+	if inContainer() {
+		return "container"
+	}
 	return "not-writable"
 }
 
-// canElevate is update.CanElevate; tests stand in for it.
-var canElevate = update.CanElevate
+// canElevate is update.CanElevate, inContainer gateway.InContainer; tests
+// stand in for them.
+var (
+	canElevate  = update.CanElevate
+	inContainer = gateway.InContainer
+)
 
 // check asks the feed and, when it can, stages the new version.
 func (u *updater) check() {

@@ -3263,8 +3263,10 @@ async function backAsNew(was) {
 }
 
 // updateStuck says why this magpie can't replace itself where it is: off
-// the Mac, a folder it may not write to, such as C:\ (#1277).
+// the Mac, a folder it may not write to, such as C:\ (#1277), or a
+// container, whose image is what gets updated.
 function updateStuck(u) {
+  if (u.stuck === "container") return t("magpie runs in a container, so it can't update itself; pull the new image (docker pull ghcr.io/yetone/magpie:latest) and recreate the container.");
   if (u.stuck === "not-writable") return t("magpie can't write to the folder it runs from ({dir}), so it can't update itself; move it to a folder you can write to and open it from there.", { dir: u.stuckDir || "" });
   return u.stuck === "translocated"
     ? t("macOS is running magpie from a temporary copy, so it can't update itself; move magpie to Applications and open it from there.")
