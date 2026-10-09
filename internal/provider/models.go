@@ -1505,6 +1505,26 @@ func (p Provider) replyLimit(m catalog.Model, s settings.Settings) int {
 	return output
 }
 
+// OutputWithin is a reply limit as it is published beside a window: kept
+// within it. models.dev lists some models' output above the window their
+// vendor's own list gives (Grok's grok-4.7: 500000 against the 256000 its
+// backend says, #1438; deepseek-chat's 384000 against 128000, #338), and a
+// client that reads both sizes its replies past what the window holds. An
+// unknown window or output is left as it is. Every place that hands out the
+// pair uses it — the agents' files, the gateway's model lists, the GUI and
+// the CLI — while a request is still lowered only to the model's own limit
+// (Entry.Output, withMaxOutput).
+func OutputWithin(window, output int) int {
+	if window > 0 && output > window {
+		return window
+	}
+	return output
+}
+
+// PublishedOutput is e's reply limit as it is handed out beside its window
+// (OutputWithin).
+func (e Entry) PublishedOutput() int { return OutputWithin(e.Context, e.Output) }
+
 func outputOf(s settings.Settings, providerID, model string) int {
 	if n := s.ModelOutputs[providerID+"/"+model]; n > 0 {
 		return n

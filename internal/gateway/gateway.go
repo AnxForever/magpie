@@ -656,8 +656,10 @@ func modelObject(e provider.Entry) map[string]any {
 	if e.Context > 0 {
 		m["context_window"], m["context_length"], m["max_input_tokens"] = e.Context, e.Context, e.Context
 	}
-	if e.Output > 0 {
-		m["max_output_tokens"] = e.Output
+	// the reply limit, kept within that window as agents are told it
+	// (#1438)
+	if out := e.PublishedOutput(); out > 0 {
+		m["max_output_tokens"] = out
 	}
 	// for another magpie that has this one as its provider (remote-magpie):
 	// the APIs a request for the model goes on as it is, so it sends each
@@ -710,8 +712,8 @@ func cursorLocalModel(m map[string]any, e provider.Entry) {
 	if e.Context > 0 {
 		c["context_length"] = e.Context
 	}
-	if e.Output > 0 {
-		c["max_output_tokens"] = e.Output
+	if out := e.PublishedOutput(); out > 0 {
+		c["max_output_tokens"] = out
 	}
 	if e.Images {
 		c["supports_vision"] = true
