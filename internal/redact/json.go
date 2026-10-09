@@ -20,7 +20,21 @@ var kept = map[string]bool{
 }
 
 func keep(key, s string) bool {
-	return kept[key] || isID(key) || strings.HasPrefix(s, "data:")
+	return kept[key] || strings.HasPrefix(s, "data:")
+}
+
+// keepIn is keep for a request's string at path, with its ids kept too.
+// In a tool call's arguments (args) the keys are the tool's, not the
+// vendor's: a "signature", "name" or "user_id" there holds what the agent
+// wrote, so only an encoded data: value is kept.
+func keepIn(path, key, s string, args []string) bool {
+	if strings.HasPrefix(s, "data:") {
+		return true
+	}
+	if under(path, args) {
+		return false
+	}
+	return kept[key] || isID(key)
 }
 
 // isID says a key holds an identifier the vendor matches against another:
@@ -38,43 +52,66 @@ func isID(key string) bool {
 // Responses' encrypted reasoning.
 var signatureKeys = []string{"signature", "thoughtSignature", "thought_signature", "encrypted_content"}
 
-// signedPaths are the paths of the objects in body that carry a signature
-// with a value: what is in them the vendor wrote and checks, so it goes
-// back exactly as the vendor wrote it.
-func signedPaths(body []byte) []string {
+// scan finds two kinds of objects in body. signed are those a vendor
+// sealed with a signature: what is in them the vendor wrote and checks, so
+// it goes back exactly as the vendor wrote it. args are a tool call's
+// arguments (Anthropic's tool_use input, Gemini's functionCall args), whose
+// keys are the tool's own; nothing in them counts as sealed.
+func scan(body []byte) (signed, args []string) {
 	found := false
-	for _, k := range signatureKeys {
+	for _, k := range append(signatureKeys, "tool_use", "functionCall", "function_call") {
 		found = found || bytes.Contains(body, []byte(`"`+k+`"`))
 	}
 	if !found {
-		return nil
+		return nil, nil
 	}
 	var v any
 	if json.Unmarshal(body, &v) != nil {
-		return nil
+		return nil, nil
 	}
-	var out []string
-	var visit func(path string, v any)
-	visit = func(path string, v any) {
+	var visit func(path, key string, v any)
+	visit = func(path, key string, v any) {
 		switch x := v.(type) {
 		case map[string]any:
-			for _, k := range signatureKeys {
-				if s, _ := x[k].(string); s != "" {
-					out = append(out, path)
-					return
-				}
+			if sealed(x) {
+				signed = append(signed, path)
+				return
 			}
+			t, _ := x["type"].(string)
 			for k, c := range x {
-				visit(join(path, k), c)
+				if k == "input" && (t == "tool_use" || t == "server_tool_use") ||
+					k == "args" && (key == "functionCall" || key == "function_call") {
+					args = append(args, join(path, k))
+					continue
+				}
+				visit(join(path, k), k, c)
 			}
 		case []any:
 			for i, c := range x {
-				visit(join(path, strconv.Itoa(i)), c)
+				visit(join(path, strconv.Itoa(i)), key, c)
 			}
 		}
 	}
-	visit("", v)
-	return out
+	visit("", "", v)
+	return signed, args
+}
+
+// sealed says x is a block the vendor signed: a part with Gemini's thought
+// signature, or a thinking or reasoning block with Anthropic's signature or
+// Responses' encrypted content. Another object with a key of that name
+// (a text block, the request itself) holds the agent's words.
+func sealed(x map[string]any) bool {
+	t, _ := x["type"].(string)
+	for _, k := range signatureKeys {
+		if s, _ := x[k].(string); s == "" {
+			continue
+		}
+		if k == "thoughtSignature" || k == "thought_signature" ||
+			t == "thinking" || t == "reasoning" || strings.HasPrefix(t, "reasoning.") {
+			return true
+		}
+	}
+	return false
 }
 
 // under says path is in one of the objects at roots.
@@ -255,7 +292,7 @@ func jsonEscape(s string) string {
 // placeholder: either way the text no longer matched its signature, and
 // Anthropic answers 400 "Invalid `signature` in `thinking` block".
 func MaskJSON(body []byte, o Options) ([]byte, int) {
-	signed := signedPaths(body)
+	signed, args := scan(body)
 	total := 0
 	var seen []string // value, placeholder, value, placeholder…
 	put := func(kind, v string) string {
@@ -264,7 +301,7 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 		return p
 	}
 	out, ok := walk(body, func(path, key, s string) string {
-		if keep(key, s) || signed != nil && under(path, signed) {
+		if keepIn(path, key, s, args) || signed != nil && under(path, signed) {
 			return s
 		}
 		t, n := mask(s, o, put)
@@ -280,7 +317,7 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 	}
 	remask := replacerOf(seen)
 	out, _ = walk(out, func(path, key, s string) string {
-		if keep(key, s) || !under(path, signed) {
+		if keepIn(path, key, s, args) || !under(path, signed) {
 			return s
 		}
 		t := remask.Replace(s)
