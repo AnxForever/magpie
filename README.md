@@ -121,7 +121,7 @@ flowchart LR
 
 Click a value and a searchable list opens: every model of every provider you added, as `provider/model`. Pick one and the agent's config is rewritten safely and atomically. Start a new session and the agent is on the new model.
 
-**Profiles** save the setup of every agent under one name ("Budget", "Focus") and switch them all back in one move. Each agent can also have its own short list of models, so its picker shows only what you want there.
+**Profiles** save the setup of every agent under one name ("Budget", "Focus") and switch them all back in one move. Each agent can also have its own short list of models, so its picker shows only what you want there; a profile keeps that list too.
 
 magpie lives where you are: a **menu bar** panel on macOS, Windows and Linux, a full **window**, a **TUI** (`magpie tui`), a **web UI** (`magpie web`, for WSL or a server over SSH) and a plain **CLI**.
 

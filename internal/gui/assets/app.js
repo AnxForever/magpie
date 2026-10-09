@@ -758,6 +758,9 @@ function profileDetail(p, footed) {
       else if (!f.value) row(t(f.label), t("agent default"), "pd-default");
       else row(t(f.label), effort ? effortName({ value: f.value }) : f.value);
     }
+    // the models its list shows, which applying it switches to (#1368)
+    const m = g.models;
+    if (m) row(t("Model list"), m.only ? t("only the {n} picked", { n: m.picked }) : m.hidden ? t("{n} hidden", { n: m.hidden }) : t("every model shown"), m.only || m.hidden ? "" : "pd-default");
     if (g.servers?.length) row(t("MCP servers"), g.servers.join(t(", ")));
     if (g.skills?.length) row(t("Skills"), g.skills.join(t(", ")));
     if (g.instructions) row(t("Instructions"), t("on"));

@@ -121,7 +121,7 @@ flowchart LR
 
 点一下模型，弹出可搜索的列表：你添加的每个 provider 的每个模型，格式是 `provider/model`。选中后，magpie 安全、原子地改写 Agent 的配置。开一个新会话，Agent 就用上新模型了。
 
-**方案（Profile）**把所有 Agent 的配置存成一个名字，比如「省钱」「专注」，一键全部切回去。每个 Agent 还可以有自己的常用模型短名单，选择器里只显示你想要的。
+**方案（Profile）**把所有 Agent 的配置存成一个名字，比如「省钱」「专注」，一键全部切回去。每个 Agent 还可以有自己的常用模型短名单，选择器里只显示你想要的；方案也会一并保存这份名单。
 
 magpie 在你需要的地方：macOS、Windows 和 Linux 的**菜单栏**面板、完整的**窗口**、**TUI**（`magpie tui`）、**Web 界面**（`magpie web`，适合 WSL 或通过 SSH 管服务器）和纯 **CLI**。
 
