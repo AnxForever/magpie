@@ -582,7 +582,18 @@ var runUpdate = func(ctx context.Context, u *updater) ([]byte, error) {
 	cmd := proc.CommandContext(ctx, u.cmd[0], u.cmd[1:]...)
 	cmd.Stdin = nil
 	cmd.Dir, _ = os.UserHomeDir()
+	cmd.Env = updateEnv(u)
+	return cmd.CombinedOutput()
+}
+
+// updateEnv is the environment an update runs in: the proxy magpie's own
+// requests take (a SOCKS5 one bridged for bun, which can't use it: #1409),
+// and u's PATH first.
+func updateEnv(u *updater) []string {
 	env := netproxy.Env(os.Environ())
+	if u.via == "bun" {
+		env = netproxy.EnvForBun(env)
+	}
 	if u.path != "" {
 		for i, kv := range env {
 			if k, v, _ := strings.Cut(kv, "="); strings.EqualFold(k, "PATH") {
@@ -590,8 +601,7 @@ var runUpdate = func(ctx context.Context, u *updater) ([]byte, error) {
 			}
 		}
 	}
-	cmd.Env = append(env, "NONINTERACTIVE=1", "HOMEBREW_NO_ENV_HINTS=1", "NO_COLOR=1")
-	return cmd.CombinedOutput()
+	return append(env, "NONINTERACTIVE=1", "HOMEBREW_NO_ENV_HINTS=1", "NO_COLOR=1")
 }
 
 // updateTimeout bounds an update: a download, or Homebrew updating itself first.

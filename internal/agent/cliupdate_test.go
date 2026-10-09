@@ -323,3 +323,37 @@ func TestUpdateCLI(t *testing.T) {
 		t.Error("a WSL codex has a CLI here")
 	}
 }
+
+// An agent's CLI installed with bun is updated by bun add -g, which can't
+// use a SOCKS5 proxy (#1409): it is given the bridge in front of it. npm,
+// which can, is given the proxy as it is.
+func TestUpdateWithBunBridgesSOCKS(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const socks = "socks5://127.0.0.1:4401"
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, socks)
+	}
+	proxies := func(env []string) []string {
+		var out []string
+		for _, kv := range env {
+			if k, v, _ := strings.Cut(kv, "="); strings.HasSuffix(strings.ToUpper(k), "_PROXY") && v != "" {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	bun := proxies(updateEnv(&updater{via: "bun", cmd: []string{"bun", "add", "-g", "x@latest"}}))
+	if len(bun) == 0 {
+		t.Fatal("bun is given no proxy")
+	}
+	for _, v := range bun {
+		if !strings.HasPrefix(v, "http://127.0.0.1:") {
+			t.Fatalf("bun is given %s", v)
+		}
+	}
+	for _, v := range proxies(updateEnv(&updater{via: "npm", cmd: []string{"npm", "i", "-g", "x@latest"}})) {
+		if v != socks {
+			t.Fatalf("npm is given %s", v)
+		}
+	}
+}

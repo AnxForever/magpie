@@ -75,6 +75,8 @@ Keep the migration, host, and upstream behavior separate when investigating fail
 
 The host gets magpie's proxy only as `MAGPIE_*_PROXY` and applies it to each fetch itself. A program a plugin starts, such as the Grok plugin's `grok login`, gets it back as `HTTPS_PROXY`/`HTTP_PROXY` from the spawn wrapper in `host.js`, unless the plugin set one. A sign-in that works in the built-in and fails through the plugin may be a host difference like this one, not a plugin bug.
 
+Bun takes only http:// and https:// proxies. A SOCKS5 one, such as a Mac's system SOCKS proxy, is given to every bun magpie starts as a loopback HTTP proxy in front of it (`netproxy.Bridge`): to the host through `hostEnv`, and to `bun add`, `bun update` and `bun remove` through `bunCommand` (`netproxy.EnvForBun`). Before, an install with only a SOCKS system proxy failed as `UnsupportedProxyProtocol` (#1409). An agent CLI that bun installed is updated through the bridge too (`updateEnv` in `internal/agent/cliupdate.go`).
+
 The host reads its proxy once, when it starts. When the proxy magpie would give a new host differs from the one the running host got (the system proxy set after magpie started, as at login before Clash is up, or Settings changed), the next call to the host replaces it (`proxyMoved` in [`host.go`](../../internal/plugin/host.go), looked at no more than every 15s). Before this, a host started without a proxy kept none, so the Grok plugin's `grok models` couldn't renew its token and the account read as signed out after each restart (#1363).
 
 A plugin's account whose sign-in its vendor refused (`lapsed`, or an allowance read saying so) keeps Sign in again and Remove on its row, whether it is in use or the agent's own (`signedOut` in `renderAccounts`, `app.js`).
