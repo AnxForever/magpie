@@ -1364,7 +1364,12 @@ func entryIn(entries []Entry, id string) (Entry, bool) {
 
 // Resolve maps an id an agent sent to a provider and the vendor's model id.
 // It accepts catalog ids, "provider/model" for any model (exposed or not),
-// and the bare model id when exactly one provider serves it.
+// and a bare model id: the first provider in the Providers order (All)
+// that exposes it, else the one provider that lists it unexposed. The
+// gateway asks GroupFor first, so with found groups on a bare id several
+// providers serve is that group, its members in the same order (MOMO on
+// Discord: glm-5.3 under opencode-go and a6api). magpie writes only
+// provider/model ids into agents' configs, so a bare one is the user's.
 // A group's id resolves to its first member.
 func Resolve(id string) (Provider, string, bool) {
 	// Claude Code's mark for a model with a 1M window; it drops it before

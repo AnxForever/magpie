@@ -1172,8 +1172,17 @@ request to which is translated anyway.
 Requests pass straight through when the vendor speaks the agent's API and
 are translated otherwise, streaming, tool calls and reasoning included. The
 key is `magpie` (any value works; the gateway only listens on loopback), and
-models are named `provider/model`. Anything with a base-URL setting can use
-it:
+models are named `provider/model`.
+
+- A routing group is asked by its id (`group/<id>`) or its name.
+- A bare model id (`glm-5.3`) works too. When several providers serve it,
+  it goes to the routing group magpie found for it, which asks them in the
+  order of the Providers page and falls over to the next. With found
+  groups off, it goes to the first of them in that order alone.
+- Every reply names who answered in `X-Magpie-Provider` (the provider)
+  and `X-Magpie-Model` (`provider/model`), and so does the usage log.
+
+Anything with a base-URL setting can use it:
 
 | Tool speaks | Base URL                   | Environment                                   |
 | ----------- | -------------------------- | --------------------------------------------- |
