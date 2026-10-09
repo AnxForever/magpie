@@ -2817,7 +2817,7 @@ function closeAgentMenu() {
   agentMenu.box.remove();
   document.removeEventListener("mousedown", agentMenu.outside, true);
   document.removeEventListener("keydown", agentMenu.keys, true);
-  document.removeEventListener("scroll", closeAgentMenu, true);
+  document.removeEventListener("scroll", agentMenu.scroll, true);
   removeEventListener("resize", closeAgentMenu);
   agentMenu = null;
 }
@@ -2868,13 +2868,11 @@ function openRowMenu(anchor, acts) {
     if (!o.off) items.push(b);
   }
   document.body.append(box);
-  const r = anchor.getBoundingClientRect(), w = box.offsetWidth, hh = box.offsetHeight, pad = 8;
-  let y = r.bottom + 5;
-  if (y + hh > innerHeight - pad && r.top - 5 - hh >= pad) { y = r.top - 5 - hh; box.classList.add("up"); }
-  box.style.left = Math.max(pad, Math.min(r.left - 4, innerWidth - w - pad)) + "px";
-  box.style.top = Math.max(pad, y) + "px";
+  placeMenu(box, anchor, "left", -4);
   anchor.classList.add("open");
   const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeAgentMenu(); };
+  // a long menu scrolls inside itself; only a scroll outside it closes it
+  const scroll = (e) => { if (!box.contains(e.target)) closeAgentMenu(); };
   const keys = (e) => {
     const k = items.indexOf(document.activeElement);
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAgentMenu(); anchor.focus({ preventScroll: true }); }
@@ -2887,9 +2885,9 @@ function openRowMenu(anchor, acts) {
   };
   document.addEventListener("mousedown", outside, true);
   document.addEventListener("keydown", keys, true);
-  document.addEventListener("scroll", closeAgentMenu, true);
+  document.addEventListener("scroll", scroll, true);
   addEventListener("resize", closeAgentMenu);
-  agentMenu = { box, anchor, outside, keys };
+  agentMenu = { box, anchor, outside, keys, scroll };
   items[0]?.focus({ preventScroll: true });
 }
 
@@ -12441,6 +12439,26 @@ function closeProtoMenu() {
 // ticked ones, in the menu's order, once it closes (and only if they
 // changed). With live, choose runs after each tick instead; "" is none
 // of them and closes it, "\x00" a note to read.
+// placeMenu puts an app menu (box, already in the page) under its anchor,
+// or over it when the window runs out below. One that fits neither way goes
+// where there is more room, its height held to that room, and scrolls inside
+// itself, so its last item can be reached in a short window (#1437). align
+// "right" lines its right edge up with the anchor's; dx nudges it sideways.
+function placeMenu(box, anchor, align = "left", dx = 0) {
+  const r = anchor.getBoundingClientRect(), h = box.offsetHeight, pad = 8;
+  let y = r.bottom + 5;
+  const below = innerHeight - pad - y, above = r.top - 5 - pad;
+  if (h > below && above >= h) { y = r.top - 5 - h; box.classList.add("up"); }
+  else if (h > below && above > below) {
+    box.style.maxHeight = above + "px";
+    y = pad;
+    box.classList.add("up");
+  } else if (h > below) box.style.maxHeight = Math.max(below, 0) + "px";
+  const w = box.offsetWidth;
+  const left = (align === "right" ? r.right - w : r.left) + dx;
+  box.style.left = Math.max(pad, Math.min(left, innerWidth - w - pad)) + "px";
+  box.style.top = Math.max(pad, y) + "px";
+}
 function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key speaks", cls = "", align = "left", live = false, search = "") {
   closeProtoMenu();
   const multi = Array.isArray(value);
@@ -12493,20 +12511,7 @@ function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key sp
     items.forEach((b, i) => { b.hidden = !opts[i].always && !opts[i].name.toLocaleLowerCase().includes(q); });
   };
   document.body.append(box);
-  // under the pill, or above it when the window runs out
-  const r = anchor.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight, pad = 8;
-  let y = r.bottom + 5;
-  const below = innerHeight - pad - y, above = r.top - 5 - pad;
-  if (h > below && above >= h) { y = r.top - 5 - h; box.classList.add("up"); }
-  else if (h > below && above > below) {
-    // fits neither way: above, where there is more room, scrolling
-    box.style.maxHeight = above + "px";
-    y = pad;
-    box.classList.add("up");
-  } else if (h > below) box.style.maxHeight = Math.max(below, 0) + "px";
-  const left = align === "right" ? r.right - w : r.left;
-  box.style.left = Math.max(pad, Math.min(left, innerWidth - w - pad)) + "px";
-  box.style.top = Math.max(pad, y) + "px";
+  placeMenu(box, anchor, align);
   anchor.classList.add("open");
   if (anchor.hasAttribute("aria-expanded")) anchor.setAttribute("aria-expanded", "true");
   const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeProtoMenu(); };
@@ -17025,11 +17030,7 @@ function openSessCombo(anchor, all, opts, value, choose, head) {
   draw();
   q.oninput = () => { draw(); box.scrollTop = 0; };
   document.body.append(box);
-  const r = anchor.getBoundingClientRect(), w = box.offsetWidth, h = box.offsetHeight, pad = 8;
-  let y = r.bottom + 5;
-  if (y + h > innerHeight - pad && r.top - 5 - h >= pad) { y = r.top - 5 - h; box.classList.add("up"); }
-  box.style.left = Math.max(pad, Math.min(r.left, innerWidth - w - pad)) + "px";
-  box.style.top = Math.max(pad, y) + "px";
+  placeMenu(box, anchor);
   anchor.classList.add("open");
   const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeProtoMenu(); };
   const scroll = (e) => { if (!box.contains(e.target)) closeProtoMenu(); };
