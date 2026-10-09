@@ -849,8 +849,9 @@ type codexAuth struct {
 
 func codexAccount(home string) (Provider, bool) {
 	path := filepath.Join(home, ".codex", "auth.json")
+	b, err := os.ReadFile(path)
 	var a codexAuth
-	if !readJSON(path, &a) || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {
+	if err != nil || json.Unmarshal(b, &a) != nil || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {
 		return Provider{}, false
 	}
 	id := jwtClaims(a.Tokens.IDToken)
@@ -858,6 +859,10 @@ func codexAccount(home string) (Provider, bool) {
 		User: codexUser(id), Plan: claimString(id, "https://api.openai.com/auth", "chatgpt_plan_type")}
 	if acct.User == "" {
 		acct.User = "ChatGPT"
+	} else {
+		// as it is saved, as liveLogin names it: a second Team seat of
+		// the email is "email · Team · <workspace>" (#1424)
+		acct.User = codexLiveName(acct.User, bytes.TrimSpace(b))
 	}
 	acct.sign = codexSign(func(ctx context.Context) (string, string, error) { return codexToken(ctx, path) })
 	acct.body = codexBody
