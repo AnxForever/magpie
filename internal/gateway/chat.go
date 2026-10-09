@@ -1119,6 +1119,9 @@ func renderChat(res Result, model string) []byte {
 	for _, p := range res.Parts {
 		switch p.Kind {
 		case Text:
+			if p.Text == "" && p.Signature != "" {
+				continue // only Gemini's signature on its text, which is Gemini's
+			}
 			if msg["content"] == nil {
 				msg["content"] = p.Text
 			} else {

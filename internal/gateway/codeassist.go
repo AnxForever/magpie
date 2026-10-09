@@ -160,11 +160,24 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 			role = "model"
 		}
 		var parts, after []map[string]any // after: tools' images held back
+		// signed: a step Gemini signed, whose later calls go without, as
+		// Gemini signs the first (#1445, as chat's #687)
+		signed := false
+		for _, p := range m.Parts {
+			if p.Kind == ToolCall && p.Signature != "" {
+				signed = true
+			}
+		}
 		for _, p := range m.Parts {
 			switch p.Kind {
 			case Text:
-				if p.Text != "" {
-					parts = append(parts, map[string]any{"text": p.Text})
+				if p.Text != "" || (p.Signature != "" && !claude) {
+					part := map[string]any{"text": p.Text}
+					if p.Signature != "" && !claude {
+						// Gemini's signature on its text, back as it gave it
+						part["thoughtSignature"] = p.Signature
+					}
+					parts = append(parts, part)
 				}
 			case Image, File:
 				if p.Data != "" {
@@ -178,7 +191,17 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 				if id := toolID(p.ID); id != "" {
 					call["id"] = id
 				}
-				parts = append(parts, map[string]any{"functionCall": call, "thoughtSignature": skipSignature})
+				part := map[string]any{"functionCall": call}
+				switch {
+				case claude:
+					part["thoughtSignature"] = skipSignature
+				case p.Signature != "":
+					// Gemini's own signature, back as it gave it (#1445)
+					part["thoughtSignature"] = p.Signature
+				case !signed:
+					part["thoughtSignature"] = skipSignature
+				}
+				parts = append(parts, part)
 			case ToolResult:
 				name := names[p.CallID]
 				if name == "" {
@@ -633,7 +656,9 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 					args = json.RawMessage("{}")
 				}
 				d.tools = true
-				emit(Event{Kind: KToolStart, ID: id, Name: toolOfCall(p.FunctionCall.Name)})
+				// its signature rides in the id, and comes back off it
+				// (signedID, unsignCalls), as on chat (#687, #1445)
+				emit(Event{Kind: KToolStart, ID: signedID(id, p.Signature), Name: toolOfCall(p.FunctionCall.Name)})
 				emit(Event{Kind: KToolArgs, Text: string(args)})
 			case p.Thought:
 				d.flush(emit)
@@ -649,8 +674,13 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 				// reasoning above (#620)
 				d.flush(emit)
 				emit(Event{Kind: KImage, Name: p.InlineData.MimeType, Text: p.InlineData.Data})
-			case p.Text != "":
+			case p.Text != "" || p.Signature != "":
 				d.text(p.Text, emit)
+				if p.Signature != "" {
+					// Gemini's signature on its text, after it (#1445)
+					d.flush(emit)
+					emit(Event{Kind: KTextSig, Text: p.Signature})
+				}
 			}
 		}
 		if g := cand.GroundingMetadata; g != nil && !d.searched {
