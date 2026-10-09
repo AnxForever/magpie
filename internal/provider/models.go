@@ -60,7 +60,7 @@ func (p Provider) available() []catalog.Model {
 			}
 		}
 	}
-	if live, _, ok := p.live(); ok {
+	if live, _, ok := p.live(); ok && (p.Account == nil || !p.Account.magpieList) {
 		if p.Account != nil && p.Account.unusable != nil {
 			// a model the list offers that the account was refused
 			// (Copilot's, copilot_refused.go)
