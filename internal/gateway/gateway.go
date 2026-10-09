@@ -3524,6 +3524,12 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				r.OffLevel, req = l, &r
 			}
 		}
+		// the tier the client asked for goes to a provider the user added
+		// by its address as it was asked (Request.Tier)
+		if own := p.Preset == "" && p.Account == nil && s.fits(p.ID, tierField, to); own != req.OwnTier {
+			r := *req
+			r.OwnTier, req = own, &r
+		}
 		body, err := build(to, req, model, buildHost(p), p.RejectsTemperature(model))
 		if err != nil {
 			return nil, to, err
@@ -3640,6 +3646,15 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 				continue
 			}
 		}
+		if req.OwnTier && req.Tier != "" && slices.Contains(refusedOptional(res.StatusCode, b, body), tierField) {
+			// the field turned away: asked again without it, and not sent
+			// it again. A value it doesn't offer reaches the client as the
+			// upstream said it, as on a relayed request
+			s.markUnfit(p.ID, tierField, to)
+			r := *req
+			r.Tier, req = "", &r
+			continue
+		}
 		if req.CacheKey != "" && badRequest(res.StatusCode) && !wrongEndpoint(res.StatusCode, b) && !provider.CopilotRefusal(b) {
 			// a vendor that turns away fields it doesn't know is asked again
 			// without the cache key, and not sent it again once that works —
@@ -3694,10 +3709,14 @@ func refusesField(status int, body []byte, field string) bool {
 	return badRequest(status) && bytes.Contains(body, []byte(field))
 }
 
+// tierField is the client's service tier as a request carries it upstream
+// (Request.Tier); a provider that refused it is remembered under it in unfit.
+const tierField = "service_tier"
+
 // optionalFields are request fields OpenAI's APIs (or an agent's own
 // vendor, Kimi's and Qwen's thinking switches) take that a request does
 // without: an upstream that refuses one by name is asked again without it.
-var optionalFields = []string{"store", "metadata", "service_tier", cacheKeyField, "prompt_cache_retention",
+var optionalFields = []string{"store", "metadata", tierField, cacheKeyField, "prompt_cache_retention",
 	"safety_identifier", "stream_options", "parallel_tool_calls", "verbosity", "thinking", "enable_thinking"}
 
 // refusedOptional lists optional fields an upstream explicitly rejects as
