@@ -1385,9 +1385,25 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if isGroup {
 			scope = provider.GroupPrefix + g.ID
 		}
+		conv := conversationID(r.Header, body)
 		sealedLead = leadProvider(scope, parent)
-		sealers = []string{sealedLead, leadProvider(scope, conversationID(r.Header, body))}
-		if !(isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool { return s.sealedReader(m.Provider, m.Model, sealers) }) || !isGroup && s.sealedReader(p, model, sealers)) {
+		sealers = []string{sealedLead, leadProvider(scope, conv)}
+		readable := func() bool {
+			return isGroup && slices.ContainsFunc(ms, func(m provider.Member) bool { return s.sealedReader(m.Provider, m.Model, sealers) }) || !isGroup && s.sealedReader(p, model, sealers)
+		}
+		if !readable() {
+			// affinity let the lead go (a day since, a restart, its reply
+			// broken off): the usage log still has who answered it (#1367)
+			logged := loggedAnswerers(parent, conv)
+			sealers = append(sealers, logged...)
+			if sealedLead == "" && len(logged) > 0 {
+				sealedLead = logged[0]
+			}
+		}
+		if sealedLead == "" {
+			sealedLead = sealers[1] // a lead's own turn: who answered it
+		}
+		if !readable() {
 			call.Status, call.Error = 400, "sealed subagent task"
 			writeError(w, from, 400, sealedTaskError(call.Model, sealedLead))
 			turnedAway()

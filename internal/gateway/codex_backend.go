@@ -137,12 +137,14 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 // sealedTaskError is what a subagent is told whose task its lead sealed
 // when nothing model names can read it. lead is the provider that
 // answered the lead, "" when magpie didn't (the lead was one of Codex's
-// own models) or no longer remembers it.
+// own models) or has no record of it in the last sealerKeep. A task
+// already sealed opens only where it was sealed, so the way on with it
+// is said too (#1367).
 func sealedTaskError(model, lead string) string {
 	if lead != "" {
-		return fmt.Sprintf("This subagent's task was sealed by the server that answered its lead (%s), and only that server can open it; %s can't. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read.", lead, model)
+		return fmt.Sprintf("This subagent's task was sealed by the server that answered its lead (%s), and only that server can open it; %s can't. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read. To go on with this task, use a model on %s for the lead and the subagent, or have the lead spawn the subagent again.", lead, model, lead)
 	}
-	return fmt.Sprintf("This subagent's task was sealed by the ChatGPT backend that answered its lead, and only that backend can open it: a ChatGPT account, or the Responses API provider that answered the lead. %s is neither. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read.", model)
+	return fmt.Sprintf("This subagent's task was sealed by the ChatGPT backend that answered its lead, and only that backend can open it: a ChatGPT account, or the Responses API provider that answered the lead. %s is neither: magpie has no record of it answering the lead in the last 30 days. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read. To go on with this task, use the lead's model, or have the lead spawn the subagent again.", model)
 }
 
 // sealedReader is who can read a subagent's task its lead sealed: a
@@ -208,6 +210,69 @@ func leadProvider(scope, parent string) string {
 	return id
 }
 
+// sealerKeep is how far back the usage log is read for who answered a
+// lead whose answerer affinity no longer remembers (#1367).
+const sealerKeep = 30 * 24 * time.Hour
+
+// loggedAnswer is who the usage log has answering a conversation: the
+// provider, and the key or account as candidate.who names it ("" when the
+// record doesn't tell).
+type loggedAnswer struct {
+	provider, who string
+	at            time.Time
+}
+
+// loggedAnswers are the answers the usage log has to these conversations
+// (a lead's thread, a request's own) in the last sealerKeep, the latest
+// first: who could have sealed a message in them when affinity has let it
+// go — a day and more since, a restart past the conversations
+// affinity.json keeps, or the lead's last reply breaking off
+// (unanswered), after which nothing could answer the lead again to be
+// remembered (#1367). A call refused or failed answered nothing, a title
+// isn't the conversation's own turn, and Codex's own sign-in (the ChatGPT
+// backend, relayed as it came) is no provider here: a lead it answered is
+// told of as one sealed by the ChatGPT backend.
+func loggedAnswers(convs ...string) []loggedAnswer {
+	convs = slices.DeleteFunc(slices.Clone(convs), func(c string) bool { return strings.TrimSpace(c) == "" })
+	if len(convs) == 0 {
+		return nil
+	}
+	var all []loggedAnswer
+	usage.Visit(time.Now().Add(-sealerKeep), func(r usage.Record) {
+		if r.Provider == "" || r.Provider == "magpie" || r.IsRejected() || r.Status <= 0 || r.Status >= 400 || r.Computer != "" || isTitleKind(r.Kind) {
+			return
+		}
+		if r.Provider == "openai" && strings.HasPrefix(r.Endpoint, CodexPath) {
+			return // Codex's own sign-in
+		}
+		if !slices.Contains(convs, r.NativeSession) && !slices.Contains(convs, r.Session) {
+			return
+		}
+		a := loggedAnswer{provider: r.Provider, at: r.Time}
+		switch {
+		case r.ProviderAccount != "":
+			a.who = r.Provider + "@" + strings.ToLower(r.ProviderAccount)
+		case r.ProviderKeyID != "":
+			a.who = r.Provider + "#" + r.ProviderKeyID
+		}
+		all = append(all, a)
+	})
+	slices.SortStableFunc(all, func(a, b loggedAnswer) int { return b.at.Compare(a.at) })
+	return all
+}
+
+// loggedAnswerers are the providers of loggedAnswers, each once, the
+// latest first.
+func loggedAnswerers(convs ...string) []string {
+	var ids []string
+	for _, a := range loggedAnswers(convs...) {
+		if !slices.Contains(ids, a.provider) {
+			ids = append(ids, a.provider)
+		}
+	}
+	return ids
+}
+
 // leadFirst puts first the account that answered the lead, the thread
 // parent names, in scope: the one that sealed its subagent's task, which
 // another account may not open, as it doesn't another's reasoning.
@@ -230,7 +295,18 @@ func leadFirst(scope, parent string, cands []candidate, pl planned) ([]candidate
 	}
 	sticks.Unlock()
 	if !had || time.Since(st.at) > stickKeep {
-		return cands, pl, ""
+		// affinity let the lead go: the usage log still has which key or
+		// account answered it (#1367)
+		st = stick{}
+		for _, a := range loggedAnswers(parent) {
+			if a.who != "" {
+				st.who = a.who
+				break
+			}
+		}
+		if st.who == "" {
+			return cands, pl, ""
+		}
 	}
 	for i, c := range cands {
 		if i > 0 && c.who() == st.who {
