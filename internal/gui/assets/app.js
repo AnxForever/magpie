@@ -20527,7 +20527,34 @@ addEventListener("touchend", flings, { capture: true, passive: true });
 addEventListener("scroll", () => { if (performance.now() < flingUntil) flings(); }, { capture: true, passive: true });
 // a drag, not the tremble of a click
 let downAt = null;
-addEventListener("pointerdown", (e) => { downAt = [e.clientX, e.clientY]; }, { capture: true, passive: true });
+// A scrollbar dragged by the mouse is the reader's scroll, but Chromium and
+// WebView2 give it no pointermove: the press lands on the view itself with
+// the pointer past its content, in the scrollbar band, the scrolls then come
+// with no event of the reader's between them, and the lift ends it. Held for
+// the drag's length they count as the reader's, so the view follows the bar
+// instead of putting every one of them back (emo172, #1089).
+// Whatever the last click was holding in place is let go of here, as the
+// wheel and a drag of the content let go of it through readerScrolls: a hold
+// keeps what was clicked on the screen frame by frame, and would fight the
+// drag — the same bug as the one this fixes, with a click before it.
+let barDrag = null;
+// WebKit sends the drag's last scrolls after the lift, once the gesture is
+// over, so the reader's window is held open past it for them, as a flick's is
+const barLifted = () => {
+  if (!barDrag) return;
+  readerScrolls(250);
+  barDrag = null;
+};
+addEventListener("pointerdown", (e) => {
+  downAt = [e.clientX, e.clientY];
+  const v = e.target;
+  const bar = v instanceof Element && v.classList.contains("view") ? v.offsetWidth - v.clientWidth : 0;
+  barDrag = v instanceof Element && v.classList.contains("view") && !v.hidden && bar > 0 &&
+    e.clientX >= v.getBoundingClientRect().right - bar ? v : null;
+  if (barDrag) held = null;
+}, { capture: true, passive: true });
+addEventListener("pointerup", barLifted, { capture: true, passive: true });
+addEventListener("pointercancel", barLifted, { capture: true, passive: true });
 addEventListener("pointermove", (e) => {
   if (e.buttons && downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) readerScrolls(250);
 }, { capture: true, passive: true });
@@ -20708,7 +20735,7 @@ for (const v of document.querySelectorAll(".view")) {
   v.tabIndex = -1;
   v.addEventListener("scroll", () => {
     if (v.hidden) return;
-    if (performance.now() < purposeUntil) { fitRoom(v); readerLeaves(v); return; }
+    if (performance.now() < purposeUntil || barDrag === v) { fitRoom(v); readerLeaves(v); return; }
     const from = v.scrollTop;
     if (held?.v === v) hold(held);
     else backToReader(v);
