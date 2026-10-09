@@ -3332,6 +3332,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	if named != nil {
 		spaces = &nsTidy{named: named, sse: sse}
 	}
+	// a Grok model's 2500.0 in a call's arguments, which Codex turns away
+	// (grok_integral.go, #1431); any other model's reply goes as it came
+	var ints *intTidy
+	if (proto == provider.Responses || proto == provider.Chat || proto == provider.Anthropic) && (grokModel(model) || grokModel(upstream)) {
+		ints = &intTidy{proto: proto, sse: sse}
+	}
 	buf := make([]byte, 32<<10)
 	var rerr error
 	for {
@@ -3354,6 +3360,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			if spaces != nil {
 				out = spaces.write(out)
 			}
+			if ints != nil {
+				out = ints.write(out)
+			}
 			if sigs != nil {
 				out = sigs.write(out)
 			}
@@ -3372,6 +3381,9 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	// what's held at the end goes through the filters after the one
 	// that held it
 	sign := func(out []byte) []byte {
+		if ints != nil {
+			out = ints.write(out)
+		}
 		if sigs != nil {
 			return sigs.write(out)
 		}
@@ -3402,6 +3414,13 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 	}
 	if spaces != nil {
 		w.Write(sign(spaces.flush()))
+	}
+	if ints != nil {
+		out := ints.flush()
+		if sigs != nil {
+			out = sigs.write(out)
+		}
+		w.Write(out)
 	}
 	if sigs != nil {
 		w.Write(sigs.flush())
@@ -4100,6 +4119,9 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
+	// a Grok model's 2500.0 in a call's arguments, which Codex turns away
+	// (grok_integral.go, #1431)
+	request.Grok = grokServed(wiresOf(r.Context()), p, model)
 	if from == provider.Anthropic {
 		// Claude Code's auto mode classifier, on a model that reasons
 		// whatever it is told (#250)
@@ -4414,7 +4436,11 @@ func relayEvents(events <-chan Event, sw *sseWriter, enc streamEncoder, see func
 func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage) streamEncoder {
 	enc := makeEncoder(proto, w, r)
 	if len(usage) > 0 && usage[0] != nil {
-		return &usageEncoder{streamEncoder: enc, usage: usage[0]}
+		enc = &usageEncoder{streamEncoder: enc, usage: usage[0]}
+	}
+	if r.Grok {
+		// outside usageEncoder, which reads its encoder's reply id
+		enc = &wholeEncoder{streamEncoder: enc}
 	}
 	return enc
 }
@@ -4434,6 +4460,9 @@ func makeEncoder(proto provider.Protocol, w *sseWriter, r *Request) streamEncode
 
 func render(proto provider.Protocol, res Result, r *Request) []byte {
 	model := r.Model
+	if r.Grok {
+		res = wholeResult(res)
+	}
 	switch proto {
 	case provider.Chat:
 		return renderChat(res, model)

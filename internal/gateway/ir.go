@@ -193,6 +193,10 @@ type Request struct {
 	// Namespaced are the tools a Responses client offered inside a
 	// namespace, by the flat name the model is offered them under.
 	Namespaced map[string]nsTool
+	// Grok is set when the model asked is one of Grok's, whose calls'
+	// arguments reach the client with their zero fractions dropped
+	// (grok_integral.go).
+	Grok bool
 }
 
 // nsTool is a tool as a Responses client knows it: by its namespace and its

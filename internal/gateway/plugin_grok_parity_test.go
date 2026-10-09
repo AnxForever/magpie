@@ -214,3 +214,15 @@ func TestGrokPluginGetsAgentMessageAsUser(t *testing.T) {
 	}
 	checkAgentMessageSent(t, sent[0])
 }
+
+// A Grok model the Grok plugin serves writes Codex's integers as floats
+// too; Codex reads them as integers, as from a relay
+// (TestGrokCallsGiveCodexIntegers), streamed in deltas or whole.
+func TestGrokPluginCallsGiveCodexIntegers(t *testing.T) {
+	c := integralCases(t)[0]
+	t.Setenv("FAKE_GROK", "1")
+	pid := besideFake(t, "grok", responsesCall(c.tool, c.args, someCuts(c.args)["by byte"]))
+	for _, stream := range []bool{true, false} {
+		checkResponses(t, c, askGrok(t, "/v1/responses", codexShellTurn(pid+"/grok-4.7", stream)), stream)
+	}
+}
