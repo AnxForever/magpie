@@ -1678,9 +1678,11 @@ async function loadCLIs(again = 0) {
 }
 
 // updateCLI updates one agent's CLI; "" when it went well, else why not.
-// Quiet (Update all) leaves the saying to the caller.
+// Quiet (Update all) leaves the saying to the caller. Each version it went
+// from and to is said once (37FlowAI on X: "Pi 从 v1.0x 更新到 v1.10").
 async function updateCLI(a, btn, quiet = false) {
   if (cliBusy.has(a.id)) return t("{agent} is already being updated", { agent: a.name });
+  const from = cliInfo[a.id]?.version;
   cliBusy.add(a.id);
   if (btn) paintCLIButton(btn, cliInfo[a.id] || {}, true); // in place: what was clicked stays
   else paintCLI(a.id);
@@ -1688,7 +1690,9 @@ async function updateCLI(a, btn, quiet = false) {
   try {
     const c = await api("agents/cli/" + encodeURIComponent(a.id), {});
     cliInfo[a.id] = c;
-    if (!quiet) status(t("{agent} updated to {v}", { agent: a.name, v: c.version }), "ok");
+    if (cliAll && quiet) cliAll.changed.push(versionChange(a.name, from, c.version));
+    if (!quiet) status(from && from !== c.version ? t("{agent} updated: {from} → {v}", { agent: a.name, from, v: c.version })
+      : t("{agent} updated to {v}", { agent: a.name, v: c.version }), "ok");
     return "";
   } catch (e) {
     if (!quiet) status(e.message, "err", 12000);
@@ -1702,6 +1706,10 @@ async function updateCLI(a, btn, quiet = false) {
   }
 }
 
+// "Pi 1.0.9 → 1.1.0", or the name and the version now when the one before
+// isn't known or is the same
+const versionChange = (name, from, to) => from && to && from !== to ? `${name} ${from} → ${to}` : [name, to].filter(Boolean).join(" ");
+
 // ---------- Update all (#727) ----------
 // With two or more agents' CLIs behind, a line above the list updates them
 // all, one after another (two global npm installs at once can trip over
@@ -1710,7 +1718,7 @@ async function updateCLI(a, btn, quiet = false) {
 // window coming back), saying how the run went or what is left, so the
 // list under it never jumps for a click — Update all's or a row's pill's.
 
-let cliAll = null; // { n, done, now, failed: [{ name, msg }] } once Update all is clicked
+let cliAll = null; // { n, done, now, failed: [{ name, msg }], changed: ["Pi 1.0.9 → 1.1.0"] } once Update all is clicked
 
 const updatable = () => (state?.agents || []).filter((a) => cliInfo[a.id]?.update && !cliBusy.has(a.id));
 
@@ -1739,10 +1747,9 @@ function paintUpdateAll(fresh = false) {
     b.append(svg(CLI_SPIN, 11, 1.8), el("span", "", t("Updating…")));
     parts.push(b);
   } else if (cliAll) {
-    const ok = cliAll.n - cliAll.failed.length;
-    say.textContent = !cliAll.failed.length ? t("{n} agents updated", { n: ok })
-      : t("{ok} of {n} agents updated · {failed} didn't: {names}", { ok, n: cliAll.n, failed: cliAll.failed.length, names: cliAll.failed.map((f) => f.name).join(", ") });
-    say.title = cliAll.failed.map((f) => f.msg).join("\n");
+    say.textContent = updatedSay();
+    // one line, cut short when narrow: every change and error in full here
+    say.title = [...cliAll.changed, ...cliAll.failed.map((f) => f.msg)].join("\n");
   } else {
     // what is behind now, the ones being updated by their own pill too
     const behind = (state?.agents || []).filter((a) => cliInfo[a.id]?.update || cliBusy.has(a.id));
@@ -1765,7 +1772,7 @@ async function updateAllCLIs() {
   if (cliAll && cliAll.done < cliAll.n) return;
   const ups = updatable();
   if (!ups.length) return;
-  cliAll = { n: ups.length, done: 0, now: ups[0].name, failed: [] };
+  cliAll = { n: ups.length, done: 0, now: ups[0].name, failed: [], changed: [] };
   for (const a of ups) {
     cliAll.now = a.name;
     paintUpdateAll();
@@ -1774,8 +1781,17 @@ async function updateAllCLIs() {
     cliAll.done++;
   }
   paintUpdateAll();
-  if (!cliAll.failed.length) status(t("{n} agents updated", { n: cliAll.n }), "ok");
+  if (!cliAll.failed.length) status(updatedSay(), "ok");
   else status(cliAll.failed.map((f) => f.msg).join(" · "), "err", 12000);
+}
+
+// how an Update all went, with each agent's versions from and to
+function updatedSay() {
+  const ok = cliAll.n - cliAll.failed.length, list = cliAll.changed.join(", ");
+  if (!cliAll.failed.length) return t("{n} agents updated: {list}", { n: ok, list });
+  const names = cliAll.failed.map((f) => f.name).join(", ");
+  return ok ? t("{ok} of {n} agents updated: {list} · {failed} didn't: {names}", { ok, n: cliAll.n, list, failed: cliAll.failed.length, names })
+    : t("{ok} of {n} agents updated · {failed} didn't: {names}", { ok, n: cliAll.n, failed: cliAll.failed.length, names });
 }
 
 // ---------- installing the agents not here (#727) ----------
