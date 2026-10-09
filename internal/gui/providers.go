@@ -51,6 +51,9 @@ type modelJSON struct {
 	// provider's price rate
 	Price *catalog.Price `json:"price,omitempty"`
 	List  *catalog.Price `json:"list,omitempty"`
+	// RemoteList says the list price is what the other magpie counts the
+	// model at, as its list told (a Remote magpie's), not models.dev's
+	RemoteList bool `json:"remoteList,omitempty"`
 }
 
 type providerJSON struct {
@@ -545,7 +548,7 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 			}
 		}
 		if pr, ok := p.ListPrice(m.ID); ok {
-			j.List = &pr
+			j.List, j.RemoteList = &pr, p.RemotePriced(m.ID)
 		} else if pr, ok := provider.MakerPrice(m.ID); ok {
 			j.List = &pr
 		}

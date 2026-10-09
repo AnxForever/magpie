@@ -935,8 +935,12 @@ var makerCatalogs = sync.OnceValue(func() []string {
 // it, else as its maker's does (#224): a subscription (Codex's ChatGPT
 // account, Copilot) or a relay with no models.dev id of its own is priced
 // at gpt-6-astra's or gemini-3.8-flash's maker's price, as a Claude
-// account is at Anthropic's.
+// account is at Anthropic's. A remote magpie's is what that magpie counts
+// the model at, as its list says (remotePrice).
 func (p Provider) ListPrice(model string) (catalog.Price, bool) {
+	if pr, ok := p.remotePrice(model); ok {
+		return pr, true
+	}
 	if p.clineFreeModel(model) || p.kiloFreeModel(model) {
 		// served at no cost: not at the price of the model it is free of
 		return catalog.Price{}, true
@@ -1016,6 +1020,29 @@ func EffectivePriceIn(s settings.Settings, providerID, model string) (catalog.Pr
 		pr = pr.Times(p.PriceRate)
 	}
 	return pr, ok
+}
+
+// EntryPriceIn is what a call to an entry of the catalog costs the user,
+// as the usage pages count it: its model's EffectivePriceIn, or a group's
+// when every member costs the same, none in a fast mode, since which of
+// them answers isn't known beforehand. find is GroupFinder's.
+func EntryPriceIn(st settings.Settings, find func(string) (Group, []Member, bool), e Entry) (catalog.Price, bool) {
+	if e.Group == "" {
+		return EffectivePriceIn(st, e.Provider.ID, e.Model)
+	}
+	_, ms, ok := find(e.ID)
+	if !ok || len(ms) == 0 {
+		return catalog.Price{}, false
+	}
+	var first catalog.Price
+	for i, m := range ms {
+		pr, ok := EffectivePriceIn(st, m.Provider.ID, m.Model)
+		if !ok || m.Fast || i > 0 && !pr.Same(first) {
+			return catalog.Price{}, false
+		}
+		first = pr
+	}
+	return first, true
 }
 
 // PriceRateOK says what is wrong with a provider's price rate, "" when

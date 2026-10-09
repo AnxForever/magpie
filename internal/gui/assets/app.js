@@ -9524,7 +9524,10 @@ function renderModels(p) {
       const shown = (n) => String(Math.round(n * 1e6) / 1e6);
       const listTier = m.list?.tiers?.[0];
       const priceBox = el("div", "mprice");
-      priceBox.title = t("What {id} costs, in US dollars per million tokens, as the Usage page counts it; empty: its list price, shown greyed. A price set here isn't multiplied by the provider's price rate", { id: m.id });
+      // a Remote magpie's model is listed at what that magpie counts it at
+      priceBox.title = m.remoteList
+        ? t("What {id} costs, in US dollars per million tokens, as the Usage page counts it; empty: what the other magpie counts it at, shown greyed. A price set here isn't multiplied by the provider's price rate", { id: m.id })
+        : t("What {id} costs, in US dollars per million tokens, as the Usage page counts it; empty: its list price, shown greyed. A price set here isn't multiplied by the provider's price rate", { id: m.id });
       priceBox.append(el("span", "", t("Price, $ / 1M tokens")));
       const typed = draft.priceTyped?.[id];
       const cell = (value, placeholder, k, label) => {
