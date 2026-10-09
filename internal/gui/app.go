@@ -513,6 +513,9 @@ func Run(version string, showMain bool, link string) error {
 			h.Import(u)
 		}
 	})
+	// GTK 3 with no font DPI set would lay every page out at a negative
+	// width (#1371); give it one before the first webview is made.
+	fontDPI()
 	return h.app.Run()
 }
 
