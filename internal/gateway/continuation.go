@@ -13,7 +13,8 @@ package gateway
 // went wrong, so there the reply ends with the error, as it used to.
 // Only a reply no tool call of has begun goes on: a call's arguments
 // can't be prefilled, so one begun ends the reply as it used to. A
-// refusal isn't asked again.
+// refusal isn't asked again, and a model that turned the prefill away
+// isn't asked to go on (prefill.go).
 
 import (
 	"context"
@@ -247,6 +248,10 @@ func (s *Server) streamTranslated(w http.ResponseWriter, r *http.Request, p prov
 	sw := newSSEWriter(w)
 	enc := encoder(from, sw, request, u)
 	cont := &continuation{mode: prefillHow(p, to, model)}
+	if !s.fits(p.ID, prefillRefused(model), to) {
+		// the model turned a prefill away before (prefill.go, #1447)
+		cont.mode = ""
+	}
 	var failed, failedCode string
 	var failedStatus int
 	var cut, errSent bool
@@ -301,6 +306,9 @@ func (s *Server) streamTranslated(w http.ResponseWriter, r *http.Request, p prov
 	}
 	var serr error
 	for again := 0; ; again++ {
+		// what cut the reply, which it ends with if the model turns the
+		// continuation's prefill away
+		cutBy, cutCode, cutErr := failed, failedCode, serr
 		failed, failedCode, failedStatus, cut, serr = "", "", 0, false, nil
 		var held func() // what a textCallSee of this try holds back
 		req := request
@@ -322,6 +330,13 @@ func (s *Server) streamTranslated(w http.ResponseWriter, r *http.Request, p prov
 			b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 			res.Body.Close()
 			failed, failedStatus = p.Explain(p.Name+": "+provider.APIError(b, res.Status), res.StatusCode, b), res.StatusCode
+			if cont.resume && refusesPrefill(res.StatusCode, b) {
+				// a model that takes no prefill (forwardTranslated
+				// remembers it): the reply ends with what cut it, as a
+				// reply that can't go on does, not with the refusal of
+				// an ask the client never made (#1447)
+				failed, failedCode, serr = cutBy, cutCode, cutErr
+			}
 			if wrongEndpoint(res.StatusCode, b) {
 				failed += wrongAPINote(p, model, res, b)
 			}

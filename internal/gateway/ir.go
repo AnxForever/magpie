@@ -190,6 +190,12 @@ type Request struct {
 	// part, an assistant message the model goes on from, not a turn
 	// answered.
 	Resume bool
+	// LastIsTurn is set on a request from a client whose API reads a
+	// conversation ending with the assistant's message as a turn already
+	// said, to answer after (OpenAI's Chat and Responses), not one to go
+	// on from (Anthropic's prefill): to a model that takes no prefill it
+	// is asked with a user turn after it (prefill.go).
+	LastIsTurn bool
 	// Namespaced are the tools a Responses client offered inside a
 	// namespace, by the flat name the model is offered them under.
 	Namespaced map[string]nsTool
