@@ -540,6 +540,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>Agents name a plugin’s model as <code>&lt;id&gt;/&lt;model&gt;</code>, where the id is the plugin’s <code>auth.provider</code>.</li>
       <li>When the id is taken in magpie, by a built-in subscription, a preset (<code>google</code>, <code>openai</code>, <code>anthropic</code>, …) or <code>magpie</code> itself, the plugin’s provider is named <code>&lt;id&gt;-plugin</code>. Pick an id that is only yours.</li>
       <li>The community’s plugins for magpie’s deprecated built-in subscriptions are the exception. They use the built-in’s id (<code>cursor</code>, <code>zed</code>, …) and take it over once the user moves onto the plugin, so agents keep working unchanged.</li>
+      <li>When two installed plugins sign in to the same id, such as a published plugin and your own copy of it, one of them serves it: the one picked for it, otherwise the one added last. Both stay in <span class="ui">Plugins → Installed</span>, and each row says which one serves the provider. <span class="ui">Use for …</span> on the other row, or <code>magpie plugin use &lt;name&gt; &lt;id&gt;</code>, makes the pick.</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">Testing</a></h2>

@@ -530,6 +530,20 @@ A provider id magpie already has (google, openai, anthropic) is
 `<id>-plugin`. In the app, Settings → Plugins adds and removes them, and
 the providers they sign in to are in Add provider → From plugins.
 
+Sometimes two installed plugins sign in to the same provider id, for
+example a third-party plugin and your own copy of it. One of them serves
+that id: the one you picked, or else the one added last. Both plugins stay
+listed, and each row in Plugins › Installed says which one serves the
+provider. The other row has **Use for <provider>**, which switches the
+provider to it. `magpie plugin` prints the same thing, and
+
+```sh
+magpie plugin use ~/dev/my-acme-auth acme   # this plugin serves acme from now on
+```
+
+makes the pick. Each plugin can still be switched off or removed on its
+own.
+
 A package is pi's when its `package.json` has a `pi` manifest, the
 `pi-package` keyword, or depends on `@earendil-works/pi-coding-agent`.
 magpie installs pi beside it and loads it with pi's own loader; the

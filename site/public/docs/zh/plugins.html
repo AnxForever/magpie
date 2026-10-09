@@ -540,6 +540,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>agent 用 <code>&lt;id&gt;/&lt;model&gt;</code> 指代插件的模型，id 就是插件的 <code>auth.provider</code>。</li>
       <li>这个 id 在 magpie 里已被占用时，比如内置订阅、预设（<code>google</code>、<code>openai</code>、<code>anthropic</code> 等）或 <code>magpie</code> 本身，插件的供应商会叫 <code>&lt;id&gt;-plugin</code>。请选一个只属于你的 id。</li>
       <li>社区为 magpie 已弃用的内置订阅做的插件是例外。它们用内置订阅的 id（<code>cursor</code>、<code>zed</code> 等），用户迁移到插件后就接管这个 id，agent 无需任何改动。</li>
+      <li>两个已安装的插件登录同一个 id 时（比如已发布的插件和你自己的副本），只由其中一个提供：选定的那个，否则是后添加的那个。两个插件都留在<span class="ui">插件 → 已安装</span>里，各自那一行会写明由哪个提供。在另一行点<span class="ui">用于 …</span>，或运行 <code>magpie plugin use &lt;名字&gt; &lt;id&gt;</code>，即可改选。</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">测试</a></h2>

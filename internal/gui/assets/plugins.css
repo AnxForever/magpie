@@ -84,6 +84,11 @@ button.pm-chip:disabled { cursor: default; opacity: .6; }
    of the line (yetone: 这些配色有点丑，一点都不优雅精致) */
 .pm-chip.warn { gap: 5px; background: none; box-shadow: inset 0 0 0 1px var(--line); color: var(--fg-2); font-weight: 400; }
 .pm-chip.warn .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); flex: none; }
+/* a provider two installed plugins sign in to: a line that wraps, never clipped */
+.pm-row .sub.pm-clash { display: block; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+.pm-clash .dot { display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 0; border-radius: 50%; background: var(--faint); vertical-align: middle; }
+.pm-row .sub.pm-clash.warn { color: var(--amber); }
+.pm-clash.warn .dot { background: currentColor; }
 .pm-foot .pm-check { display: inline-flex; align-items: center; gap: 5px; }
 .pm-foot .pm-check .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 /* what a plugin is reads as the line's other facts do (stars, version):

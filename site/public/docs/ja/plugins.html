@@ -540,6 +540,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li>エージェントはプラグインのモデルを <code>&lt;id&gt;/&lt;model&gt;</code> と呼びます。id はプラグインの <code>auth.provider</code> です。</li>
       <li>その id が magpie ですでに使われている場合（組み込みサブスクリプション、プリセット（<code>google</code>、<code>openai</code>、<code>anthropic</code>、…）、<code>magpie</code> 自身）、プラグインのプロバイダは <code>&lt;id&gt;-plugin</code> という名前になります。自分だけの id を選んでください。</li>
       <li>例外は、magpie の非推奨の組み込みサブスクリプション向けのコミュニティプラグインです。これらは組み込みの id（<code>cursor</code>、<code>zed</code>、…）を使い、ユーザーがプラグインに移行するとそれを引き継ぐので、エージェントは変更なしで動き続けます。</li>
+      <li>インストール済みの 2 つのプラグインが同じ id にサインインする場合（公開プラグインと自分のコピーなど）、提供するのは 1 つだけです。選んだ方、選んでいなければ後から追加した方です。どちらも <span class="ui">プラグイン → インストール済み</span> に残り、各行にどちらが提供しているかが表示されます。もう一方の行の <span class="ui">… に使う</span>、または <code>magpie plugin use &lt;名前&gt; &lt;id&gt;</code> で切り替えられます。</li>
     </ul>
 
     <h2 id="test"><a class="anchor" href="#test">テスト</a></h2>
