@@ -13,7 +13,7 @@ import (
 // (titles, the router's classifier, search and vision stand-ins) go
 // without them, as their replies are magpie's to read.
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
-	r = withGatewaySession(w, r)
+	withGatewaySession(w, r)
 	w, recorded := recordConversation(w, r, from, body)
 	defer recorded()
 	run := middleware.Begin(middleware.Info{Protocol: string(from), Model: modelOf(body), Stream: streamOf(body), Path: r.URL.Path, Agent: agentOf(r)})

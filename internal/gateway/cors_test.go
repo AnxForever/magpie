@@ -151,6 +151,7 @@ func TestCORSKeyThroughTheServer(t *testing.T) {
 		r.RemoteAddr = "127.0.0.1:50123"
 		r.Header.Set("Origin", "http://localhost:3000")
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set(SessionHeader, "browser-chat")
 		if key != "" {
 			r.Header.Set("Authorization", "Bearer "+key)
 		}
@@ -163,8 +164,8 @@ func TestCORSKeyThroughTheServer(t *testing.T) {
 		if w.Code != want || w.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
 			t.Errorf("key %q: %d %v %s", key, w.Code, w.Header(), w.Body)
 		}
-		if key != "" && (w.Header().Get(SessionHeader) == "" || w.Header().Get("Access-Control-Expose-Headers") != SessionHeader) {
-			t.Error("browser client cannot reuse the gateway session identity")
+		if key != "" && (w.Header().Get(SessionHeader) != "browser-chat" || w.Header().Get("Access-Control-Expose-Headers") != SessionHeader) {
+			t.Error("browser client cannot read the session its conversation is recorded under")
 		}
 	}
 }

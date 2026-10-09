@@ -3,7 +3,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -19,28 +18,13 @@ import (
 
 const conversationBodyMax = 8 << 20
 
-type gatewaySessionKey struct{}
-
-// withGatewaySession assigns unidentified recorded requests a content identity.
-// Keep it out of the input headers so routing still uses the client's context.
-func withGatewaySession(w http.ResponseWriter, r *http.Request) *http.Request {
-	id := sessionOf(r.Header)
-	if id == "" && settings.Load().GatewayConversations {
-		id = "request-" + rand.Text()
-		r = r.WithContext(context.WithValue(r.Context(), gatewaySessionKey{}, id))
-	}
-	if id != "" {
+// withGatewaySession tells the client the session its conversation is
+// recorded under. Only a session the client named is recorded: magpie never
+// makes one up, as text under an id nothing lists can't be read (#1355).
+func withGatewaySession(w http.ResponseWriter, r *http.Request) {
+	if id := sessionOf(r.Header); id != "" {
 		w.Header().Set(SessionHeader, id)
 	}
-	return r
-}
-
-func gatewaySessionOf(r *http.Request) string {
-	if id := sessionOf(r.Header); id != "" {
-		return id
-	}
-	id, _ := r.Context().Value(gatewaySessionKey{}).(string)
-	return id
 }
 
 func init() {
@@ -75,7 +59,7 @@ func (w *conversationWriter) WriteHeader(status int) {
 // recordConversation wraps the client-facing path, outside middleware and
 // translation, so retries never become duplicate assistant replies.
 func recordConversation(w http.ResponseWriter, r *http.Request, proto provider.Protocol, body []byte) (http.ResponseWriter, func()) {
-	id := gatewaySessionOf(r)
+	id := sessionOf(r.Header)
 	generation := sessions.GatewayRecordingGeneration()
 	if !settings.Load().GatewayConversations || id == "" {
 		return w, func() {}

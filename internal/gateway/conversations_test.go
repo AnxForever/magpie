@@ -5,12 +5,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/sessions"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
 )
 
@@ -60,6 +63,7 @@ func TestGatewayConversationCodexDirectRelay(t *testing.T) {
 	r := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"direct question"}`))
 	r.Header.Set("Authorization", "Bearer chatgpt-token")
 	r.Header.Set("User-Agent", "codex/1")
+	r.Header.Set("session_id", "codex-thread")
 	w := httptest.NewRecorder()
 	New().Handler().ServeHTTP(w, r)
 	id := w.Header().Get(SessionHeader)
@@ -67,42 +71,15 @@ func TestGatewayConversationCodexDirectRelay(t *testing.T) {
 	if w.Code != 200 || err != nil || tr.Captured != 1 || len(tr.Parts) != 2 || tr.Parts[1].Text != "direct answer" {
 		t.Fatalf("direct relay missing from Sessions: status=%d id=%q transcript=%+v error=%v", w.Code, id, tr, err)
 	}
-	if id == "" {
-		t.Fatal("recorded direct relay should expose its session identity")
-	}
-	if _, ok := usage.GatewaySessionByID("codex", id, nil); ok {
-		t.Fatal("generated request identity must stay out of the session ledger")
+	if id != "codex-thread" {
+		t.Fatalf("recorded direct relay should expose Codex's session, got %q", id)
 	}
 }
 
-func TestGatewayConversationIdentityKeepsRoutingContext(t *testing.T) {
-	fresh(t)
-	if err := sessions.SetGatewayRecording(true, false); err != nil {
-		t.Fatal(err)
-	}
-	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	input := []byte(`{"messages":[{"role":"user","content":"same prompt"}]}`)
-	before := convOf(r.Header, input)
-	r = withGatewaySession(httptest.NewRecorder(), r)
-	if gatewaySessionOf(r) == "" {
-		t.Fatal("recording identity missing")
-	}
-	if r.Header.Get(SessionHeader) != "" || convOf(r.Header, input) != before {
-		t.Fatal("automatic ledger identity changed routing conversation")
-	}
-	forward := httptest.NewRequest("POST", "/", nil)
-	passOnCaller(r.Context(), forward)
-	if forward.Header.Get(SessionHeader) != "" {
-		t.Fatal("recording identity forwarded to remote Magpie")
-	}
-	r.Header.Set("session_id", "native")
-	r.Header.Set(SessionHeader, "override")
-	if gatewaySessionOf(r) != "override" || nativeSessionOf(r.Header) != "native" {
-		t.Fatal("client identities lost precedence")
-	}
-}
-
-func TestGatewayConversationAutomaticRequestSession(t *testing.T) {
+// Text is recorded only under a session the client named, so every recorded
+// conversation is one the Sessions page lists and can open. A request with no
+// session is not recorded at all, and magpie makes up no id for it (#1355).
+func TestGatewayConversationNeedsTheClientsSession(t *testing.T) {
 	fresh(t)
 	serveOn(t, "fake", "k", []string{"m1"}, archiveVendor{})
 	_, secrets := newCaller(t, "NAS client")
@@ -122,45 +99,67 @@ func TestGatewayConversationAutomaticRequestSession(t *testing.T) {
 		}
 		return w
 	}
-	if got := post("", "").Header().Get(SessionHeader); got != "" {
-		t.Fatalf("recording off generated session %q", got)
-	}
 	if err := sessions.SetGatewayRecording(true, false); err != nil {
 		t.Fatal(err)
 	}
-	first := post("", "").Header().Get(SessionHeader)
-	second := post("", "").Header().Get(SessionHeader)
-	if first == "" || second == "" || first == second {
-		t.Fatalf("recorded requests need distinct IDs: %q %q", first, second)
+	if got := post("", "").Header().Get(SessionHeader); got != "" {
+		t.Fatalf("a request with no session was given %q", got)
 	}
-	if _, ok := usage.GatewaySessionByID("review-client", first, nil); ok {
-		t.Fatal("generated identity entered Sessions")
-	}
-	usage.Visit(time.Time{}, func(r usage.Record) {
-		if r.Session != "" {
-			t.Errorf("generated identity entered ledger: %q", r.Session)
-		}
-	})
-	tr, err := sessions.GatewayTranscript("review-client", first)
-	if err != nil || tr.Captured != 1 {
-		t.Fatalf("recorded request missing: %+v %v", tr, err)
-	}
-	for range 2 {
-		if got := post(SessionHeader, first).Header().Get(SessionHeader); got != first {
-			t.Fatalf("session continuity lost: %q", got)
-		}
-	}
-	tr, err = sessions.GatewayTranscript("review-client", first)
-	if err != nil || tr.Captured != 3 || len(tr.Parts) != 6 {
-		t.Fatalf("reused session content missing: %+v %v", tr, err)
+	if entries, err := os.ReadDir(filepath.Join(settings.Dir(), "gateway-conversations")); len(entries) != 0 {
+		t.Fatalf("a request with no session was recorded where no Sessions row can open it: %v %v", entries, err)
 	}
 	if got := post("session_id", "native-session").Header().Get(SessionHeader); got != "native-session" {
 		t.Fatalf("native identity replaced: %q", got)
 	}
-	generated := post("", "").Header().Get(SessionHeader)
-	tr, err = sessions.GatewayTranscript("review-client", generated)
-	if err != nil || tr.Captured != 1 || len(tr.Parts) != 2 {
-		t.Fatalf("automatic session transcript missing: %+v %v", tr, err)
+	for range 2 {
+		if got := post(SessionHeader, "s1").Header().Get(SessionHeader); got != "s1" {
+			t.Fatalf("session continuity lost: %q", got)
+		}
+	}
+	tr, err := sessions.GatewayTranscript("review-client", "s1")
+	if err != nil || tr.Captured != 2 || len(tr.Parts) != 4 {
+		t.Fatalf("named session content missing: %+v %v", tr, err)
+	}
+	if _, ok := usage.GatewaySessionByID("review-client", "s1", nil); !ok {
+		t.Fatal("a recorded session has no Sessions row to open it from")
+	}
+}
+
+// A session id is the client's own, whatever it starts with: one named
+// "request-…" is listed, counted and readable like any other (#1355).
+func TestGatewayConversationClientRequestPrefixedSession(t *testing.T) {
+	fresh(t)
+	serveOn(t, "fake", "k", []string{"m1"}, archiveVendor{})
+	if err := sessions.SetGatewayRecording(true, false); err != nil {
+		t.Fatal(err)
+	}
+	const id = "request-7f3a"
+	s := New()
+	for range 2 {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"fake/m1","messages":[{"role":"user","content":"hello"}]}`))
+		r.Header.Set("User-Agent", "review-client/1")
+		r.Header.Set(SessionHeader, id)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("relay changed: %d %s", w.Code, w.Body)
+		}
+	}
+	calls := 0
+	usage.Visit(time.Time{}, func(r usage.Record) {
+		if r.Session == id {
+			calls++
+		}
+	})
+	if calls != 2 {
+		t.Fatalf("the ledger kept %d of 2 calls under the client's session %q", calls, id)
+	}
+	g, ok := usage.GatewaySessionByID("review-client", id, nil)
+	if !ok || g.ID != id {
+		t.Fatalf("the client's session %q is missing from Sessions: %+v", id, g)
+	}
+	if tr, err := sessions.GatewayTranscript("review-client", id); err != nil || tr.Captured != 2 {
+		t.Fatalf("the client's session text is missing: %+v %v", tr, err)
 	}
 }
 

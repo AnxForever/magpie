@@ -2,14 +2,12 @@
 
 The Sessions API combines file-backed native sessions with a read-only
 projection of gateway usage records. A gateway session identity is exactly
-`AgentOf(record.Agent) + record.Session`. Client conversation requests without a
-session header receive a unique `request-…` identity when recording is enabled.
-The response returns `X-Magpie-Session`; clients can send that value on later
-requests to continue the same recorded session. Listed browser origins can
-read this header through CORS. When recording is disabled, unidentified
-requests receive no generated identity or response header. Generated
-`request-…` identities are excluded from usage and Sessions projections.
-Without reuse, each unidentified recorded request is a separate session: prompt text,
+`AgentOf(record.Agent) + record.Session`, where the session is the one the
+client sent (`X-Magpie-Session`, or its own session header), whatever it starts
+with. The response returns that id in `X-Magpie-Session`; listed browser
+origins can read this header through CORS. magpie never makes up an id for a
+request without one, so such a request has no session and its text is not
+recorded: text kept under an id nothing lists couldn't be opened. Prompt text,
 caller keys and network addresses are never used to guess conversation ownership.
 Older ledger records without `Session` remain excluded. The projection is
 computed from the usage ledger and is not persisted. Window projections and
@@ -46,16 +44,13 @@ administrator view, not per-caller-key access control.
 
 [`recordConversation`](../../internal/gateway/conversations.go) wraps
 `serveAgent` outside protocol translation and gateway middleware. It records
-one client-facing exchange, not each retry. Both explicit and generated
-identities are recorded, using the same `usage.AgentOf` identity as the usage
-projection. Codex's direct `/backend-api/codex/responses` relay is captured too.
+one client-facing exchange, not each retry, only under the session the client
+named, using the same `usage.AgentOf` identity as the usage projection, so
+every recorded conversation has a Sessions row that opens it. Codex's direct `/backend-api/codex/responses` relay is captured too.
 Internal helper calls, token counting, embeddings, model listings, and compaction
 paths that do not pass through these entry points are not recorded.
-Generated identities live in request context, preserving the original headers
-used by routing and prompt-cache affinity. Automatically assigned identities
-are neither written to the usage ledger nor forwarded to remote Magpie instances.
-Reused `request-…` headers are also excluded from the ledger and retain OTel
-agent-level deduplication when no native session header exists. The existing protocol
+Recording adds no header and changes none, so routing and prompt-cache
+affinity see the request as the client sent it. The existing protocol
 readers handle Chat, Anthropic, Responses and Gemini; streaming replies use the
 existing decoders, with completed Responses items retaining custom tool calls.
 Only content actually sent through the gateway is available. Images are shown
@@ -90,9 +85,7 @@ preventing an in-flight request from refilling a cleared store even if recording
 is enabled again before that request completes.
 
 `GET /api/sessions/transcript` still prefers a matching native session. Otherwise
-it reads a known gateway session's last 128 retained exchanges. Generated
-recording identities do not create rows in Sessions, including for agents whose
-native files provide their own sessions. A full exact
+it reads a known gateway session's last 128 retained exchanges. A full exact
 previous-history prefix is omitted from the next request, while repeated new
 messages are preserved. System/tool-definition context is separately collapsed
 when unchanged. Compacted, edited or incremental contexts may repeat material;
@@ -103,7 +96,8 @@ The page invalidates pending transcript reads on reload or clear. A completed
 read updates the current open transcript after redraw, and an older response
 cannot replace content fetched after clearing the store.
 
-Verification: `TestGatewayConversation*`, `TestGatewaySessionHistoryAndCalendar`,
+Verification: `TestGatewayConversation*` (`TestGatewayConversationNeedsTheClientsSession`
+and `TestGatewayConversationClientRequestPrefixedSession` for the two rules above), `TestGatewaySessionHistoryAndCalendar`,
 `TestGatewaySessionsNativeWinsBeforeLimits`,
 `TestGatewayStatsRebaseNativeCalendar`, and `TestCORSKeyThroughTheServer`; browser
 `gateway-conversations.test.cjs`, `sessions-talk.test.cjs`, and locale checks.

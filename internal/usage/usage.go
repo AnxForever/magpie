@@ -109,8 +109,7 @@ type Record struct {
 	Stop string `json:"stop,omitempty"`
 	// Session is the conversation the call was part of, as its agent names
 	// it (X-Magpie-Session, or the session header Claude Code, Codex or
-	// OpenCode sends), or a gateway-generated identity for an unidentified
-	// conversation request: several sessions on one model told apart.
+	// OpenCode sends): several sessions on one model told apart
 	Session string `json:"session,omitempty"`
 	// NativeSession retains the client header when X-Magpie-Session overrides it.
 	NativeSession string `json:"native_session,omitempty"`
@@ -680,7 +679,7 @@ func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[
 			}
 			g.add(r, pr)
 		}
-		if r.Session != "" && !strings.HasPrefix(r.Session, "request-") {
+		if r.Session != "" {
 			g := sessions[id+"|"+r.Session]
 			if g == nil {
 				g = &Group{ID: r.Session, Agent: id}
@@ -753,7 +752,7 @@ func Vias(since time.Time) map[string][]Via {
 func buildVias(snapshot *logSnapshot, since time.Time) map[string][]Via {
 	out := map[string][]Via{}
 	snapshot.visit(since, func(r Record) {
-		if r.IsRejected() || r.Session == "" || strings.HasPrefix(r.Session, "request-") || r.Model == "" {
+		if r.IsRejected() || r.Session == "" || r.Model == "" {
 			return
 		}
 		k := AgentOf(r.Agent) + "|" + r.Session

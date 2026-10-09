@@ -109,8 +109,8 @@ func TestOTelSessionDedupOnlyUnkeyedLoopback(t *testing.T) {
 		session, override, kind string
 		dedup                   bool
 	}{
-		{"generated recording identity", "127.0.0.1:1234", "", "", "request-recorded", "", true},
-		{"native with generated override", "127.0.0.1:1234", "", "session", "request-recorded", "", true},
+		{"unseen request- session only", "127.0.0.1:1234", "", "", "request-recorded", "", false},
+		{"visible native with request- override", "127.0.0.1:1234", "", "session", "request-recorded", "", true},
 		{"loopback", "127.0.0.1:1234", "", "", "", "", true},
 		{"IPv6 loopback", "[::1]:1234", "", "", "", "", true},
 		{"LAN", "192.168.1.5:1234", "key", "", "", "", false},

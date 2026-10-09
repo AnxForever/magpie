@@ -25,7 +25,6 @@ func TestGatewaySessionsRequiresExplicitIdentityAndKeepsModels(t *testing.T) {
 	Append(Record{Time: at, Agent: "codex", Session: "s-1", Provider: "p", Model: "m1", Input: 10, Output: 2, Status: 200})
 	Append(Record{Time: at.Add(time.Minute), Agent: "codex", Session: "s-1", Provider: "p", Model: "m2", Input: 3, Output: 4, Status: 200})
 	Append(Record{Time: at, Agent: "codex", Provider: "p", Model: "m1", Input: 999, Output: 999, Status: 200})
-	Append(Record{Time: at, Agent: "codex", Session: "request-old-generated", Provider: "p", Model: "m1", Input: 999, Status: 200})
 	got := GatewaySessions(time.Time{}, nil)
 	if len(got) != 1 || got[0].ID != "s-1" || len(got[0].Models) != 2 || got[0].Input != 13 || got[0].Output != 6 {
 		t.Fatalf("sessions=%+v", got)
@@ -55,15 +54,20 @@ func TestGatewaySessionsCacheRefreshAndOwnership(t *testing.T) {
 	}
 }
 
-func TestGeneratedSessionsExcludedFromUsage(t *testing.T) {
+// magpie makes up no session ids, so one starting "request-" is the
+// client's own and is counted like any other (#1355).
+func TestClientRequestPrefixedSessionsCount(t *testing.T) {
 	resetUsageTest(t)
-	Append(Record{Time: Clock(), Agent: "pi", Session: "request-old", Provider: "p", Model: "m", Input: 10, Status: 200})
+	Append(Record{Time: Clock(), Agent: "pi", Session: "request-mine", Provider: "p", Model: "m", Input: 10, Status: 200})
 	summary := Summarize(All)
-	if len(summary.Sessions) != 0 || summary.Totals.Input != 10 {
-		t.Fatalf("generated session polluted usage: %+v", summary)
+	if len(summary.Sessions) != 1 || summary.Sessions[0].ID != "request-mine" {
+		t.Fatalf("the client's session is missing from Usage: %+v", summary.Sessions)
 	}
-	if got := Vias(time.Time{}); len(got) != 0 {
-		t.Fatalf("generated session polluted routing: %+v", got)
+	if got := Vias(time.Time{}); len(got["pi|request-mine"]) != 1 {
+		t.Fatalf("the client's session is missing from Routing: %+v", got)
+	}
+	if _, ok := GatewaySessionByID("pi", "request-mine", nil); !ok {
+		t.Fatal("the client's session is missing from Sessions")
 	}
 }
 

@@ -3,7 +3,6 @@ package usage
 import (
 	"slices"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -66,7 +65,7 @@ func GatewaySessions(since time.Time, nativeKeys map[string]bool) []GatewaySessi
 }
 
 func GatewaySessionByID(agent, id string, nativeKeys map[string]bool) (GatewaySession, bool) {
-	if id == "" || strings.HasPrefix(id, "request-") {
+	if id == "" {
 		return GatewaySession{}, false
 	}
 	agent = AgentOf(agent)
@@ -183,7 +182,7 @@ func buildGatewaySessions(snapshot *logSnapshot, since time.Time, nativeKeys map
 	daily := map[dayKey]*GatewayDayUsage{}
 	perSession := map[key]map[dayKey]*GatewayDayUsage{}
 	snapshot.visit(since, func(r Record) {
-		if r.IsRejected() || r.Session == "" || strings.HasPrefix(r.Session, "request-") {
+		if r.IsRejected() || r.Session == "" {
 			return
 		}
 		a := AgentOf(r.Agent)
