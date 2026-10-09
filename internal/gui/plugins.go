@@ -281,8 +281,12 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 		// each one's own picture as the page can show it, kept here as an
 		// installed plugin's is (a data URI isn't sent on to the page)
 		repos := append([]plugin.Tagged(nil), plugin.TaggedRepos(r.Context())...)
+		said := make([]string, len(repos))
 		for i := range repos {
-			repos[i].Icon = provider.RepoIcon(repos[i].Icon)
+			said[i] = repos[i].Icon
+		}
+		for i, ic := range provider.RepoIcons(said, 3*time.Second) {
+			repos[i].Icon = ic
 		}
 		writeJSON(rw, map[string]any{"repos": repos, "topic": plugin.Topic})
 	})
