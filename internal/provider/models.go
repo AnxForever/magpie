@@ -945,15 +945,56 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 		// served at no cost: not at the price of the model it is free of
 		return catalog.Price{}, true
 	}
-	for _, m := range pricedNames(model) {
-		if pr, ok := catalog.PricedBy(p.Catalogs(), m); ok {
+	names := pricedNames(model)
+	if p.kimiCodeMember() {
+		if id, ok := kimiCodeAPI[strings.ToLower(strings.TrimSpace(model))]; ok {
+			names = append(names, id)
+		}
+	}
+	for _, m := range names {
+		if pr, ok := catalog.PricedBy(priceCatalogs(p.Catalogs()), m); ok {
 			return pr, true
 		}
-		if pr, ok := catalog.PricedBy(makerCatalogs(), m); ok {
+		if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
 			return pr, true
 		}
 	}
 	return catalog.Price{}, false
+}
+
+// membershipCatalogs are models.dev catalogs of a membership's own
+// endpoints that list every model at $0: what the membership charges per
+// token, not what the model costs (#1370, maicent: the Usage page counted
+// 937K tokens of Kimi Code's kimi-for-coding at ¥0.000). No price is read
+// from them, so a call there is priced at its model's API price, as a
+// Claude or Codex account's is, or left unpriced when it has none.
+var membershipCatalogs = []string{"kimi-code-plan-global", "kimi-code-plan-cn"}
+
+// priceCatalogs are cs without the membershipCatalogs.
+func priceCatalogs(cs []string) []string {
+	return slices.DeleteFunc(slices.Clone(cs), func(c string) bool { return slices.Contains(membershipCatalogs, c) })
+}
+
+var makerPriceCatalogs = sync.OnceValue(func() []string { return priceCatalogs(makerCatalogs()) })
+
+// kimiCodeMember is whether p is served at a Kimi Code membership's
+// endpoints, by its catalog.
+func (p Provider) kimiCodeMember() bool {
+	return slices.ContainsFunc(p.Catalogs(), func(c string) bool { return slices.Contains(membershipCatalogs, c) })
+}
+
+// kimiCodeAPI is the Kimi API model a Kimi Code model id is, as Kimi
+// Code's docs name it (https://www.kimi.com/code/docs/en/, 2026-10-09):
+// k3 is K3, k3-256k "K3 256K context version … the same results as K3",
+// kimi-for-coding-highspeed "K2.7 Code HighSpeed". Kimi's API prices both
+// per token (https://platform.kimi.ai/docs/pricing/chat: kimi-k3 $3 in,
+// $15 out, $0.30 cached; kimi-k2.7-code-highspeed $1.90, $8, $0.38).
+// kimi-for-coding is "K2.8 Preview", which the API doesn't sell, so it has
+// no API price and stays unpriced.
+var kimiCodeAPI = map[string]string{
+	"k3":                        "kimi-k3",
+	"k3-256k":                   "kimi-k3",
+	"kimi-for-coding-highspeed": "kimi-k2.7-code-highspeed",
 }
 
 // MakerPrice is a model's list price as the first vendor among the presets
@@ -961,7 +1002,7 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 // gone since.
 func MakerPrice(model string) (catalog.Price, bool) {
 	for _, m := range pricedNames(model) {
-		if pr, ok := catalog.PricedBy(makerCatalogs(), m); ok {
+		if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
 			return pr, true
 		}
 	}
@@ -1106,11 +1147,22 @@ func pricedNames(model string) []string {
 func PricedName(model string) string {
 	n := pricedNames(model)
 	for _, name := range n {
-		if _, ok := catalog.PricedBy(makerCatalogs(), name); ok {
+		if _, ok := catalog.PricedBy(makerPriceCatalogs(), name); ok {
 			return name
 		}
 	}
 	return n[len(n)-1]
+}
+
+// PricedNameFor is PricedName for a call to that provider: a Kimi Code
+// membership's k3 is priced as the API's kimi-k3 (kimiCodeAPI).
+func PricedNameFor(providerID, model string) string {
+	if p, ok := byIDOrWas(providerID); ok && p.kimiCodeMember() {
+		if id, ok := kimiCodeAPI[strings.ToLower(strings.TrimSpace(model))]; ok {
+			return id
+		}
+	}
+	return PricedName(model)
 }
 
 // Chosen reports whether a model is exposed.

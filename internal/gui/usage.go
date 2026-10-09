@@ -261,7 +261,7 @@ func ledgerPage(p usage.Period, f usage.Filter, offset, limit int) ledgerJSON {
 			lr.Access = access[r.Provider]
 		}
 		if r.Priced {
-			if model := provider.PricedName(r.Model); model != r.Model {
+			if model := provider.PricedNameFor(r.Provider, r.Model); model != r.Model {
 				lr.PricingModel = model
 			}
 		}
