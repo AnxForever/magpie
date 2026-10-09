@@ -471,6 +471,10 @@ func buildAnthropic(r *Request, model string) []byte {
 	if len(r.Metadata) > 0 {
 		out["metadata"] = r.Metadata
 	}
+	if len(r.Safeguards) > 0 && anthropicModel.MatchString(model) {
+		// auto mode's review, which Claude alone does (automode.go)
+		out["safeguards"] = r.Safeguards
+	}
 	if len(r.Tools) > 0 || r.WebSearch {
 		var tools []map[string]any
 		for _, t := range r.Tools {
@@ -591,6 +595,8 @@ func decodeAnthropic(data string, emit func(Event)) error {
 			Thinking    string `json:"thinking"`
 			Signature   string `json:"signature"`
 			StopReason  string `json:"stop_reason"`
+			// auto mode's review of the reply's calls (automode.go)
+			SafeguardResults json.RawMessage `json:"safeguard_results"`
 		} `json:"delta"`
 		Usage aUsage `json:"usage"`
 		Error struct {
@@ -628,7 +634,11 @@ func decodeAnthropic(data string, emit func(Event)) error {
 		if ev.Delta.StopReason != "" {
 			emit(Event{Kind: KStop, Stop: stopFromAnthropic(ev.Delta.StopReason)})
 		}
-		emit(Event{Kind: KUsage, Usage: ev.Usage.usage()})
+		var review json.RawMessage
+		if r := ev.Delta.SafeguardResults; len(r) > 0 && string(r) != "null" {
+			review = r
+		}
+		emit(Event{Kind: KUsage, Usage: ev.Usage.usage(), SafeguardResults: review})
 	case "error":
 		emit(Event{Kind: KError, Text: ev.Error.Message, Code: refusedCode(data)})
 	}

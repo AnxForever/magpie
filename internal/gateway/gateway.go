@@ -2871,12 +2871,19 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// generate route reads it from the body
 		body = withoutFields(body, "model")
 	}
+	var betas []string
 	if to == provider.Anthropic {
 		body = s.bodyBetas(p, body)
 		body = s.withoutRefusedShapes(p, body)
 		// what every path to an Anthropic endpoint sends, relayed or
 		// built, with the model named as the vendor names it
 		body = adaptiveThinking(body)
+		asked := askedBetas(in)
+		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
+			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
+		}
+		// auto mode's review goes to Claude alone (automode.go)
+		betas, body = s.serverReview(p, asked, body)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.Base(to)+path, bytes.NewReader(body))
 	if err != nil {
@@ -2902,12 +2909,8 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 				}
 			}
 		}
-		asked := askedBetas(in)
-		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
-			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
-		}
-		if bs := s.betas(p, asked); len(bs) > 0 {
-			req.Header.Set("anthropic-beta", strings.Join(bs, ","))
+		if len(betas) > 0 {
+			req.Header.Set("anthropic-beta", strings.Join(betas, ","))
 		} else {
 			req.Header.Del("anthropic-beta")
 		}
