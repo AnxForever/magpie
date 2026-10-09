@@ -114,6 +114,10 @@ type providerJSON struct {
 	// a Zhipu or Z.ai key's team, for a team's GLM Coding Plan (#236):
 	// set, if empty, for those providers alone, which the editor asks it of
 	ZhipuTeam *provider.ZhipuTeam `json:"zhipuTeam,omitempty"`
+	// a Volcengine account's access key, which its plan's windows are
+	// read with (provider.TakesVolcAccessKey): whether the provider takes
+	// one, its ID, and whether a Secret is saved; never the Secret itself
+	AccessKey *accessKeyJSON `json:"accessKey,omitempty"`
 	// ModelTest is why its models can't each be sent a test request, ""
 	// when they can (provider.ModelTest): the editor says so on a chip's
 	// right-click rather than offer no menu
@@ -199,6 +203,13 @@ type moveJSON struct {
 
 // stepPlanJSON: whether a StepFun provider's platform sign-in is kept, and
 // where and how the user gets one
+// accessKeyJSON is a provider's Volcengine access key as the editor sees
+// it: the ID, and whether a Secret is saved, never the Secret.
+type accessKeyJSON struct {
+	ID        string `json:"id"`
+	SecretSet bool   `json:"secretSet"`
+}
+
 type stepPlanJSON struct {
 	Site        string `json:"site"`
 	SignedIn    bool   `json:"signedIn"`
@@ -293,6 +304,9 @@ type presetJSON struct {
 	// ZhipuTeam: a key of it may be on a team's GLM Coding Plan, whose
 	// organization and project the editor offers to take
 	ZhipuTeam bool `json:"zhipuTeam,omitempty"`
+	// AccessKey: a Volcengine Ark plan, whose windows are read with the
+	// account's access key, which the editor offers to take
+	AccessKey bool `json:"accessKey,omitempty"`
 	// a partner's tagline by language, and the languages it is listed in
 	Notes map[string]string `json:"notes,omitempty"`
 	Langs []string          `json:"langs,omitempty"`
@@ -447,6 +461,9 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 		if p.ZhipuTeam != nil {
 			*out.ZhipuTeam = *p.ZhipuTeam
 		}
+	}
+	if provider.TakesVolcAccessKey(p) || p.AccessKeyID != "" || p.SecretAccessKey != "" {
+		out.AccessKey = &accessKeyJSON{ID: p.AccessKeyID, SecretSet: p.SecretAccessKey != ""}
 	}
 	if site := provider.StepFunSite(p); site != "" {
 		out.StepPlan = &stepPlanJSON{site, provider.StepFunSignedIn(site), provider.StepFunSignInURL(site), provider.StepFunBookmarklet()}
@@ -658,8 +675,9 @@ func providersState() providersJSON {
 		s.Presets = append(s.Presets, presetJSON{PresetDef: pa.PresetDef, Added: have[pa.ID], Notes: pa.Notes, Langs: pa.Langs, New: !have[pa.ID] && !provider.PartnerNoticed(pa.ID)})
 	}
 	for _, pr := range provider.Presets() {
-		team := provider.TakesZhipuTeam(provider.Provider{Chat: pr.Chat, Responses: pr.Responses, Anthropic: pr.Anthropic})
-		s.Presets = append(s.Presets, presetJSON{PresetDef: pr, Added: have[pr.ID], ZhipuTeam: team})
+		bases := provider.Provider{Chat: pr.Chat, Responses: pr.Responses, Anthropic: pr.Anthropic}
+		team := provider.TakesZhipuTeam(bases)
+		s.Presets = append(s.Presets, presetJSON{PresetDef: pr, Added: have[pr.ID], ZhipuTeam: team, AccessKey: provider.TakesVolcAccessKey(bases)})
 	}
 	cat := provider.Catalog()
 	s.Gateway = gatewayJSON{URL: gateway.URL(), Open: gateway.OpenToAnyone(), Models: len(cat), Calls: []gateway.Call{}, Groups: []gwGroupJSON{}}
@@ -864,6 +882,11 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// ClearBalanceToken drops the saved balance token, which a
 			// blank one in the form otherwise keeps
 			ClearBalanceToken bool `json:"clearBalanceToken"`
+			// AccessKeyID is a Volcengine access key's ID, "" for none; a
+			// save that leaves it out keeps it. Its Secret (SecretAccessKey)
+			// is kept when sent blank, unless ClearAccessKey drops it.
+			AccessKeyID    *string `json:"accessKeyID"`
+			ClearAccessKey bool    `json:"clearAccessKey"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
 			// CopyOf, with New, is the provider the new one is a copy of
@@ -1013,6 +1036,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if pr, err := provider.FromPreset(in.Preset); err == nil && in.Chat == "" && in.Responses == "" && in.Anthropic == "" && in.Gemini == "" {
 				pr.Key, pr.Models, pr.Fallback, pr.Headers, pr.BalanceToken, pr.Contexts = in.Key, in.Models, in.Fallback, in.Headers, in.BalanceToken, in.Contexts
 				pr.ZhipuTeam = in.ZhipuTeam
+				pr.SecretAccessKey = in.SecretAccessKey
 				pr.Searches = in.Searches
 				pr.PinUpstream = in.PinUpstream
 				pr.Unredacted = in.Unredacted
@@ -1079,6 +1103,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.Key, moreKeys = ks[0], ks[1:]
 				}
 			}
+			if req.AccessKeyID != nil {
+				in.AccessKeyID = strings.TrimSpace(*req.AccessKeyID)
+			}
+			in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
 			var old *provider.Provider
 			if req.New {
 				// a second one of a preset, or a name already in use, is
@@ -1146,6 +1174,14 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				// a Zhipu key's team likewise: {} clears it
 				if in.ZhipuTeam == nil && old != nil {
 					in.ZhipuTeam = old.ZhipuTeam
+				}
+				// a Volcengine access key likewise: its ID kept when left
+				// out, its Secret when sent blank, unless the form dropped it
+				if req.AccessKeyID == nil && old != nil {
+					in.AccessKeyID = old.AccessKeyID
+				}
+				if in.SecretAccessKey == "" && old != nil && !req.ClearAccessKey {
+					in.SecretAccessKey = old.SecretAccessKey
 				}
 				if in.Key == "" && old != nil {
 					in.Key = old.Key
@@ -1222,6 +1258,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 			}
 			provider.ForgetBalances()
+			if old == nil || old.AccessKeyID != in.AccessKeyID || old.SecretAccessKey != in.SecretAccessKey {
+				// the plan's windows are read afresh with the new access key
+				provider.ForgetPlanQuotas()
+			}
 			// a new key means a new vendor list is worth a try; keep it short
 			if p, err := provider.Find(in.ID); err == nil && p.Ready() && (old == nil || old.Key != p.Key) {
 				ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)

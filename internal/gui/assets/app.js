@@ -8265,6 +8265,33 @@ function drawEditor(p, presetID) {
     ed.append(...field(t("Team project ID"), proj, t("Only for a key on a team's GLM Coding Plan: both are in {p}'s console, under the team's organization and project. With them the Usage page shows the team's 5-hour and weekly windows.", { p: pr?.name || p.name })));
   }
 
+  // Volcengine Ark tells a Coding or Agent Plan's windows only to the
+  // account's access key, never to the plan's key (#1427); the saved
+  // Secret is never sent back here, only that one is saved
+  const access = p ? p.accessKey : pr?.accessKey ? { id: "", secretSet: false } : null;
+  if (access) {
+    if (draft.accessKeyID === undefined) draft.accessKeyID = access.id || "";
+    const ak = input(draft.accessKeyID, t("AccessKey ID"));
+    ak.classList.add("volc-ak");
+    ak.oninput = () => { draft.accessKeyID = ak.value.trim(); };
+    const saved = access.secretSet && !draft.clearAccessKey;
+    const sk = input(draft.secretAccessKey || "", saved ? t("saved · paste a new one to replace it") : t("Secret Access Key"), "password");
+    sk.classList.add("volc-sk");
+    sk.oninput = () => { draft.secretAccessKey = sk.value.trim(); };
+    sk.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape") cancelEdit(); };
+    const pair = el("div", "pair");
+    pair.append(sk);
+    if (saved) {
+      const side = el("div", "side");
+      const drop = el("button", "text", t("Remove"));
+      drop.onclick = () => { draft.clearAccessKey = true; draft.accessKeyID = ""; draft.secretAccessKey = ""; ak.value = ""; sk.value = ""; sk.placeholder = t("Secret Access Key"); drop.remove(); };
+      side.append(drop);
+      pair.append(side);
+    }
+    ed.append(...field(t("AccessKey ID"), ak, ""));
+    ed.append(...field(t("Secret Access Key"), pair, t("The plan's 5-hour, weekly and monthly windows are told only to the account's access key (Volcengine console → API Access Keys), not to the plan's API key. Give it here for the Usage page to show them; it is used for nothing else.")));
+  }
+
   // a relay that offers several regional endpoints, or a vendor whose plans
   // are served at their own: one selector, and the provider's base URLs follow it
   let refreshEndpoints = () => {}, onRegion = () => {};
@@ -8501,6 +8528,14 @@ function drawEditor(p, presetID) {
       const org = (draft.zhipuTeam.org || "").trim(), project = (draft.zhipuTeam.project || "").trim();
       if (!org !== !project) { ed.querySelector(org ? ".team-project" : ".team-org")?.focus({ preventScroll: true }); return editorError(t("Team plan: give both the organization ID and the project ID"), "warn"); }
       body.zhipuTeam = org ? { org, project } : {};
+    }
+    if (access) {
+      // the Secret is sent only when a new one is typed: blank keeps the
+      // saved one, unless it was removed
+      body.accessKeyID = draft.accessKeyID || "";
+      if (draft.secretAccessKey) body.secretAccessKey = draft.secretAccessKey;
+      else if (draft.clearAccessKey) body.clearAccessKey = true;
+      if (body.accessKeyID && !body.secretAccessKey && !(access.secretSet && !draft.clearAccessKey)) { ed.querySelector(".volc-sk")?.focus({ preventScroll: true }); return editorError(t("Give the access key's Secret too"), "warn"); }
     }
     if (isNew && custom && !body.name) { name.focus(); return editorError(t("Give it a name"), "warn"); }
     if (isNew && custom && !body.chat && !body.anthropic && !body.responses && !body.decide) { url.focus(); return editorError(t("A base URL is needed"), "warn"); }
