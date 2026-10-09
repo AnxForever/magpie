@@ -6900,6 +6900,18 @@ function providerDirty() {
   return !!draft && draft === providerDraftRef && (providerDraftValue() !== providerDraftBase ||
     (active?.matches(".editor .mprice input") && active.value !== active.defaultValue));
 }
+// backdropClick(el, on) says whether a click on el is one on its backdrop:
+// pressed and let go both where on(e) says the backdrop is. A press inside
+// the dialog let go out over the backdrop, a selection dragged out of a
+// field (#1373), clicks the two's nearest shared ancestor, the backdrop, so
+// the click's own target can't tell it apart. Every dialog that closes from
+// its backdrop asks this.
+function backdropClick(el, on = (e) => e.target === el) {
+  let down = false, up = false;
+  el.addEventListener("pointerdown", (e) => { down = on(e); up = false; }, true);
+  el.addEventListener("pointerup", (e) => { up = down && on(e); }, true);
+  return (e) => up && on(e);
+}
 let confirmationPending = null;
 function confirmAction(title, message, action) {
   if (confirmationPending) return Promise.resolve(false);
@@ -6927,10 +6939,12 @@ function confirmAction(title, message, action) {
     cancel.onclick = () => finish(false);
     accept.onclick = () => finish(true);
     dialog.addEventListener("cancel", (event) => { event.preventDefault(); finish(false); });
-    dialog.addEventListener("click", (event) => {
+    // the dialog's ::backdrop is the dialog itself, outside its box
+    const onBackdrop = backdropClick(dialog, (event) => {
       const rect = dialog.getBoundingClientRect();
-      if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) finish(false);
+      return event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
     });
+    dialog.addEventListener("click", (event) => { if (onBackdrop(event)) finish(false); });
     // Keep the underlying editor's Escape handlers from seeing this dialog.
     dialog.addEventListener("keydown", (event) => {
       event.stopPropagation();
@@ -7649,7 +7663,10 @@ function closeModal() {
   }, () => {});
   return done;
 }
-$("#modal").onclick = (e) => { if (e.target === e.currentTarget) cancelEdit(); };
+// the providers page's dialog; the library and a confirmation that borrow it
+// ask the same of its backdrop
+const modalBackdrop = backdropClick($("#modal"));
+$("#modal").onclick = (e) => { if (modalBackdrop(e)) cancelEdit(); };
 
 // ---------- sliding thumb ----------
 // Pills (the nav, every segmented control) have one thumb that glides to the
@@ -14707,7 +14724,7 @@ function closeConfirmAsk() {
 // the dialog is the providers page's: while this asks, its backdrop and
 // Escape closes only the confirmation (in the panel it would hide the window)
 $("#modal").addEventListener("click", (e) => {
-  if (confirmAsk && e.target === e.currentTarget) { e.stopImmediatePropagation(); closeConfirmAsk(); }
+  if (confirmAsk && modalBackdrop(e)) { e.stopImmediatePropagation(); closeConfirmAsk(); }
 }, true);
 document.addEventListener("keydown", (e) => {
   if (!confirmationPending && confirmAsk && e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); closeConfirmAsk(); }
