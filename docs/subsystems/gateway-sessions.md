@@ -32,7 +32,14 @@ Implementation: [`internal/usage/gateway_sessions.go`](../../internal/usage/gate
 
 The Sessions page offers an explicit, default-off recording switch. Confirmation
 discloses that prompts, replies and tool results can contain private files and
-code. `Settings.GatewayConversations` is machine-local consent:
+code. The switch is a card above the session list that says what is kept and
+where (this computer only, up to 7 days and 256 MiB). It shows only where it
+applies: on an agent whose list has gateway sessions (`gateway` on a
+`/api/sessions/manage` row), in gateway mode, or while recording is on or text
+is kept. Its "Delete saved conversations…" shows while
+`/api/sessions/manage`'s `recorded` says some text is kept
+(`sessions.HasGatewayConversations`, true when the folder can't be read), and
+asks in magpie's own dialog first. `Settings.GatewayConversations` is machine-local consent:
 `settings.SetGatewayConversations` updates it under the settings file lock.
 Other Settings saves retain the latest stored consent under that lock, so an
 older snapshot cannot re-enable recording after it is stopped. `KeepOwn`

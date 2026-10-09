@@ -99,7 +99,7 @@
     fitObserver?.disconnect();
     if (page.querySelector(".sm-agent-pick.open")) closeProtoMenu();
     page.classList.toggle("loading", !data?.sessions && !failed);
-    page.replaceChildren(head(), recordingControls(), body());
+    page.replaceChildren(head(), body());
     const wrap = page.querySelector(".sm-switch");
     const tabs = wrap.querySelector(".sm-agents");
     const pick = wrap.querySelector(".sm-agent-pick");
@@ -135,45 +135,62 @@
     load(name);
   }
 
-  function recordingControls() {
-    const bar = el("div", "bar sm-recording");
-    if (typeof data?.recording !== "boolean") return bar;
-    const label = el("label", "sm-record-label");
-    const toggle = el("input");
-    toggle.type = "checkbox";
-    toggle.checked = data.recording;
-    toggle.disabled = recordingBusy;
-    toggle.setAttribute("role", "switch");
-    toggle.setAttribute("aria-label", t("Record gateway conversations"));
-    toggle.onchange = async () => {
-      const on = toggle.checked;
-      toggle.checked = data.recording;
-      if (on && !await confirmAction(t("Record gateway conversations"), t("Prompts, replies and tool results may contain private code and files. Store them on this server for up to 7 days (256 MiB total)? Recognized secrets are masked, but this is not a privacy guarantee."), t("Enable"))) return;
+  // The gateway conversations setting (#1355): a card above the list, shown
+  // only where it applies — when this agent has sessions seen through the
+  // gateway, in gateway mode, or once recording is on or text is kept. A
+  // switch that says what it keeps and where, and, while there is kept
+  // text, a delete that says what it deletes and asks first in magpie's own
+  // dialog (lee on Discord: a bare checkbox and a lone trash icon under the
+  // tabs read as stray controls).
+  const recordingApplies = () => typeof data?.recording === "boolean"
+    && (data.recording || data.recorded || (typeof gatewayMode !== "undefined" && gatewayMode) || !!data.sessions?.some((s) => s.gateway));
+
+  function recordingCard() {
+    const on = data.recording;
+    const card = el("div", "list row sm-record" + (on ? " on" : ""));
+    const sw = el("button", "lib-switch sm-record-switch" + (on ? " on" : ""));
+    sw.type = "button";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(on));
+    sw.disabled = recordingBusy;
+    sw.append(el("i"));
+    const words = el("div", "sm-record-words");
+    const name = el("span", "sm-record-name", t("Record gateway conversations"));
+    name.id = "smRecordName";
+    sw.setAttribute("aria-labelledby", name.id);
+    words.append(name, el("span", "sm-record-sub", t(on
+      ? "On: what agents send through the gateway, and the replies, are kept on this computer only, for up to 7 days (256 MiB), to read under each gateway session"
+      : "Off: gateway sessions show only what they used. Turned on, their text is kept on this computer only, for up to 7 days (256 MiB)")));
+    sw.onclick = async (e) => {
+      e.stopPropagation();
+      if (sw.disabled) return;
+      if (!on && !await confirmAction(t("Record gateway conversations"), t("Prompts, replies and tool results may contain private code and files. Store them on this server for up to 7 days (256 MiB total)? Recognized secrets are masked, but this is not a privacy guarantee."), t("Enable"))) return;
       recordingBusy = true;
-      toggle.disabled = true;
+      sw.disabled = true;
       try {
-        const result = await api("sessions/recording", { on });
+        const result = await api("sessions/recording", { on: !on });
         data.recording = result.recording;
       } catch (err) { status(err.message, "err"); }
       finally { recordingBusy = false; draw(); }
     };
-    label.append(toggle, el("span", "", t("Record gateway conversations")));
-    const clear = el("button", "copy sm-record-clear");
-    clear.type = "button";
-    clear.title = t("Stop recording and clear saved conversations");
-    clear.setAttribute("aria-label", clear.title);
-    clear.disabled = recordingBusy;
-    clear.append(svg(TRASH, 13, 1.4));
-    clear.onclick = async () => {
-      if (!await confirmAction(t("Stop recording and clear saved conversations"), t("Delete all locally recorded gateway conversation content? Usage totals and native session files are kept."), t("Delete"))) return;
-      recordingBusy = true;
-      clear.disabled = true;
-      try { await api("sessions/recording", { clear: true }); talks.clear(); await load(); }
-      catch (err) { status(err.message, "err"); }
-      finally { recordingBusy = false; draw(); }
-    };
-    bar.append(label, el("span", "grow"), clear);
-    return bar;
+    card.append(sw, words);
+    if (data.recorded) {
+      const clear = el("button", "text sm-record-clear");
+      clear.type = "button";
+      clear.disabled = recordingBusy;
+      clear.append(svg(TRASH, 13, 1.4), el("span", "", t("Delete saved conversations…")));
+      clear.onclick = async (e) => {
+        e.stopPropagation();
+        if (!await confirmAction(t("Stop recording and clear saved conversations"), t("Delete all locally recorded gateway conversation content? Usage totals and native session files are kept."), t("Delete"))) return;
+        recordingBusy = true;
+        clear.disabled = true;
+        try { await api("sessions/recording", { clear: true }); talks.clear(); await load(); }
+        catch (err) { status(err.message, "err"); }
+        finally { recordingBusy = false; draw(); }
+      };
+      card.append(clear);
+    }
+    return card;
   }
 
   function head() {
@@ -240,6 +257,7 @@
       return box;
     }
     if (trashOn) { box.append(...trash()); return box; }
+    if (recordingApplies()) box.append(recordingCard());
     if (!data.agents.length) {
       const e = el("div", "empty-state");
       e.append(el("b", "", t("No sessions yet")), el("span", "", t("Claude Code's, Codex's, Hermes's, OpenCode's and Pi's sessions on this computer show up here, by the folder they ran in.")));

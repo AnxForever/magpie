@@ -199,6 +199,24 @@ func SetGatewayRecording(on, clear bool) error {
 	return nil
 }
 
+// HasGatewayConversations says whether any gateway conversation text is kept,
+// so the Sessions page offers to delete it only when there is something to
+// delete. A folder that can't be read counts as holding some: the reader can
+// still ask to clear it.
+func HasGatewayConversations() bool {
+	errFound := errors.New("found")
+	err := filepath.WalkDir(gatewayDir(), func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			return errFound
+		}
+		return nil
+	})
+	return err != nil && !errors.Is(err, os.ErrNotExist)
+}
+
 // PruneGatewayConversations removes expired date buckets even while recording is
 // off. Reads enforce the exact cutoff too, between periodic cleanup passes.
 func PruneGatewayConversations(now time.Time) error {

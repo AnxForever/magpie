@@ -32,6 +32,8 @@ type manageAgentJSON struct {
 type managedJSON struct {
 	sessions.Managed
 	Via []usage.Via `json:"via,omitempty"`
+	// Gateway: seen only through magpie's gateway, with no file of its own
+	Gateway bool `json:"gateway,omitempty"`
 }
 
 type trashedJSON struct {
@@ -92,8 +94,11 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 			Trash     []trashedJSON     `json:"trash"`
 			TrashDir  string            `json:"trashDir"`
 			Recording bool              `json:"recording"`
+			// Recorded: some gateway conversation text is kept, to delete
+			Recorded bool `json:"recorded"`
 		}{Agents: []manageAgentJSON{}, Sessions: []managedJSON{}, Terminal: runtime.GOOS == "darwin" && !isWeb(w),
-			Trash: trashJSON(looks), TrashDir: tilde(sessions.TrashDir()), Recording: settings.Load().GatewayConversations}
+			Trash: trashJSON(looks), TrashDir: tilde(sessions.TrashDir()), Recording: settings.Load().GatewayConversations,
+			Recorded: sessions.HasGatewayConversations()}
 		want := r.URL.Query().Get("agent")
 		counts := map[string]*manageAgentJSON{}
 		for _, a := range sessions.Agents() {
@@ -167,7 +172,7 @@ func sessionManageRoutes(mux *http.ServeMux, w Windows) {
 					continue
 				}
 				s := gatewaySession(g)
-				out.Sessions = append(out.Sessions, managedJSON{Managed: sessions.Managed{Session: s}, Via: vias[s.Agent+"|"+s.ID]})
+				out.Sessions = append(out.Sessions, managedJSON{Managed: sessions.Managed{Session: s}, Via: vias[s.Agent+"|"+s.ID], Gateway: true})
 			}
 			sort.SliceStable(out.Sessions, func(i, j int) bool {
 				return out.Sessions[i].Last.After(out.Sessions[j].Last)
