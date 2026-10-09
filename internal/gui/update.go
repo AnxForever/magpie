@@ -32,8 +32,8 @@ type updater struct {
 	err    string
 	bundle string      // the .app to replace, "" when not in one or stuck
 	stuck  string      // why the .app or binary can't be replaced where it is (update.Stuck, exeStuck)
-	exe    string      // off the Mac: the binary to replace, "" when not writable
-	exeDir string      // off the Mac: the binary's folder, named when it is stuck there
+	exe    string      // not in a .app: the binary to replace, "" when not writable
+	exeDir string      // not in a .app: the binary's folder, named when it is stuck there
 	self   os.FileInfo // exe as this process started from it
 	retry  bool        // error: the download failed, and may be tried again
 	mirror string      // error: the mirror the failed download came through (#893)
@@ -102,15 +102,7 @@ func updateDue(s settings.Settings, last, now time.Time) bool {
 }
 
 func (u *updater) start() {
-	if b := update.Bundle(); b != "" {
-		if u.stuck = update.Stuck(b); u.stuck == "" {
-			u.bundle = b
-		}
-	} else if runtime.GOOS != "darwin" {
-		if exe, err := update.Executable(); err == nil {
-			u.placeExe(exe)
-		}
-	}
+	u.place(runtime.GOOS, update.GUI)
 	go func() {
 		time.Sleep(5 * time.Second) // let the app settle first
 		for {
@@ -125,7 +117,32 @@ func (u *updater) start() {
 	}()
 }
 
-// placeExe takes exe, off the Mac, as the binary an update replaces, or
+// bundleOf and executable are update.Bundle and update.Executable; tests
+// stand in for them.
+var (
+	bundleOf   = update.Bundle
+	executable = update.Executable
+)
+
+// place takes what an update replaces on goos: the .app the binary is in,
+// else the binary itself. On a Mac that is the terminal build too (gui
+// false: magpie-cli-darwin, or `magpie web` from it), which has no .app to
+// be in and which `magpie update` replaces the same way; before, its page
+// only ever offered the release page. The app's own binary copied out of
+// its .app isn't replaced by the terminal build.
+func (u *updater) place(goos string, gui bool) {
+	if b := bundleOf(); b != "" {
+		if u.stuck = update.Stuck(b); u.stuck == "" {
+			u.bundle = b
+		}
+	} else if goos != "darwin" || !gui {
+		if exe, err := executable(); err == nil {
+			u.placeExe(exe)
+		}
+	}
+}
+
+// placeExe takes exe as the binary an update replaces, or
 // says why it can't be (stuck).
 func (u *updater) placeExe(exe string) {
 	u.exeDir = filepath.Dir(exe)
