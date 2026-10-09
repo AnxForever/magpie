@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yetone/magpie/internal/testenv"
 )
@@ -355,5 +356,111 @@ func TestUpdateWithBunBridgesSOCKS(t *testing.T) {
 		if v != socks {
 			t.Fatalf("npm is given %s", v)
 		}
+	}
+}
+
+// Grok Build from xAI's installer (xiaoxiaofeixz on Discord: Grok at
+// C:\Users\<user>\.grok\bin\grok.exe showed no newest version and no
+// update): install.sh's ~/.grok/bin/grok links to
+// ../downloads/grok-<platform>, which grok update replaces with
+// ../downloads/grok-<version>-<platform>; install.ps1 copies grok.exe into
+// ~\.grok\bin, and grok update copies the new one over it. The CLI is read
+// from there, not PATH, where grok may be Homebrew's regular-expression tool.
+func TestGrokInstalled(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GROK_HOME", "")
+	other := t.TempDir() // another grok on PATH
+	file(t, filepath.Join(other, exe("grok")), "MZ")
+	t.Setenv("PATH", other)
+
+	a := &Agent{ID: "grok", Name: "Grok Build"} // no Bin, as grok(home)
+	if _, ok := a.CLI(); ok {
+		t.Fatal("PATH's grok taken for Grok Build")
+	}
+
+	platform := "macos-aarch64"
+	if runtime.GOOS == "windows" {
+		platform = "windows-x86_64"
+	}
+	when := time.Date(2026, 10, 2, 9, 32, 0, 0, time.UTC)
+	// install puts the release at the path the CLI is run by; the same bytes
+	// and time for every release, as nothing but the path need tell them apart
+	var bin string
+	install := func(version string) {
+		t.Helper()
+		if runtime.GOOS == "windows" {
+			bin = filepath.Join(home, `.grok\bin\grok.exe`)
+			os.Remove(bin)
+			file(t, bin, "MZ")
+			os.Chtimes(bin, when, when)
+			return
+		}
+		name := "grok-" + platform
+		if version != "" {
+			name = "grok-" + version + "-" + platform
+		}
+		os.Chtimes(file(t, filepath.Join(home, ".grok/downloads", name), "MZ"), when, when)
+		bin = filepath.Join(home, ".grok/bin/grok")
+		os.Remove(bin)
+		link(t, "../downloads/"+name, bin)
+	}
+	install("")
+
+	served := map[string]string{"/stable": "1.0.50\n", "/alpha": "1.0.51-alpha.2\n"}
+	rel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v, ok := served[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(v))
+	}))
+	defer rel.Close()
+	says := "grok 1.0.46 (2765805b9442)"
+	oldRel, oldVer, oldRun := grokReleases, runVersion, runUpdate
+	grokReleases = []string{rel.URL + "/"}
+	runVersion = func(string) string { return says }
+	versions, latests = memo{}, memo{}
+	var ran [][]string
+	runUpdate = func(_ context.Context, u *updater) ([]byte, error) {
+		ran = append(ran, u.cmd)
+		install("1.0.50")
+		says = "grok 1.0.50 (c58f321264ba)"
+		return []byte("✓ grok v1.0.50 installed successfully!"), nil
+	}
+	t.Cleanup(func() {
+		grokReleases, runVersion, runUpdate = oldRel, oldVer, oldRun
+		versions, latests = memo{}, memo{}
+	})
+
+	c, ok := a.CLI()
+	if !ok || c.Version != "1.0.46" || c.Latest != "1.0.50" || !c.Update || c.Via != "self" || c.Command != exe("grok")+" update" {
+		t.Fatalf("before: %+v %v", c, ok)
+	}
+	if c, err := a.UpdateCLI(); err != nil || c.Version != "1.0.50" || c.Update {
+		t.Fatalf("after: %+v, %v", c, err)
+	}
+	if len(ran) != 1 || !reflect.DeepEqual(ran[0], []string{bin, "update"}) {
+		t.Errorf("ran %q", ran)
+	}
+
+	// grok's own update at launch (auto_update), not through magpie: the
+	// version is asked again
+	install("1.0.51")
+	says = "grok 1.0.51 (0a1b2c3d4e5f)"
+	if runtime.GOOS == "windows" {
+		later := when.Add(time.Hour) // the copy of a new download
+		os.Chtimes(bin, later, later)
+	}
+	if v := a.InstalledVersion(); v != "1.0.51" {
+		t.Errorf("after grok's own update: %q", v)
+	}
+
+	// on the alpha channel (grok update --alpha), the newest is alpha's
+	file(t, filepath.Join(home, ".grok", "config.toml"), "[cli]\ninstaller = \"internal\"\nchannel = \"alpha\"\n")
+	if c, _ := a.CLI(); c.Latest != "1.0.51-alpha.2" {
+		t.Errorf("alpha: %+v", c)
 	}
 }
