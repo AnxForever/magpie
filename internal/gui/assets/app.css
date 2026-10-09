@@ -2141,6 +2141,13 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc .aq-track.capped { position: relative; overflow: visible; }
 .acc .aq-track.capped i { overflow: hidden; }
 .acc .aq-cap { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--accent); }
+/* a window's meter sets its own cap (willz on Discord): a button that
+   looks as the meter does, and the window's own cap beside its figure */
+.acc .aq-win { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.acc .aq-set { padding: 1px 4px; margin: -1px -4px; border-radius: 4px; cursor: default; }
+.acc .aq-set:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.acc .aq-set:hover, .acc .aq-set.open { background: var(--pill-hover); }
+.acc .aq-own { color: var(--accent); font-weight: 500; }
 .acc .aq-w b { color: var(--fg-2); font-weight: 600; font-variant-numeric: tabular-nums; }
 .acc .aq-w.full b, .acc .aq-w.full .aq-r { color: var(--fg); }
 .acc .aq-w.full .aq-track i { background: var(--fg); }

@@ -449,7 +449,7 @@ func codexAccounts(r *http.Request, model string) (string, bool) {
 	// through routing, which holds it there, even alone: relayed as it
 	// came, nothing would
 	if ok && p.Account != nil && p.Account.Agent == "codex" {
-		if share, _ := provider.HoldShare(p, "codex", p.Account.User); share > 0 {
+		if provider.HoldCaps(p, "codex", p.Account.User).Holds() {
 			return id, true
 		}
 	}

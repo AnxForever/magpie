@@ -1018,6 +1018,10 @@ Codex and most other subscriptions read every
 account from the vendor this way. A Codex account is also known from each
 reply ChatGPT sends magpie for it, which says what the account has used:
 an account near its usage cap is held from the next turn on (#1295). A
+usage cap is set on the account's row for each of its windows, and a
+window can have one of its own, set from its meter: a five-hour window at
+50% and a weekly one at 40%, or no cap on one window. The account is held
+while any window is past its own. A
 usage cap is still a stop on what magpie has read, not a guarantee: a turn
 already under way can take an account past it, so a 99% cap doesn't
 promise 1% is left. Claude is different: magpie never asks
