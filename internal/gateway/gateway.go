@@ -872,10 +872,14 @@ func (s *Server) model(w http.ResponseWriter, r *http.Request) {
 // unprefixed is the model magpie serves by an id Claude Desktop was given
 // for it (claudeLooking): anthropic/magpie-<number>, mythos-magpie-<number>,
 // magpie-<number>.anthropic.<Claude model>, or, as it listed them
-// before, "anthropic/" put in front of magpie's id. An id that is magpie's
-// as it stands (a provider named anthropic) is left alone.
+// before, "anthropic/" put in front of magpie's id — or by its flat
+// spelling (unflat). An id that is magpie's as it stands (a provider named
+// anthropic) is left alone.
 func unprefixed(id string) string {
 	if real, ok := aliased(id); ok {
+		return real
+	}
+	if real := unflat(id); real != id {
 		return real
 	}
 	rest, ok := strings.CutPrefix(id, "anthropic/")
@@ -4370,7 +4374,25 @@ func validateModel(model string) (string, error) {
 	if p, m, ok := strings.Cut(model, "/"); ok && (p == "" || m == "") {
 		return "", errors.New("invalid request: expected provider/model with both parts nonempty")
 	}
-	return model, nil
+	return unflat(model), nil
+}
+
+// unflat is the catalog id a flat one stands for (provider.Unflat): MiniMax
+// Code asks for "bb-codex~gpt-6.1-sol", as its SubAgents can't name a model
+// with a slash in it (#1387). The request goes on as the catalog id, so its
+// key's models, its routing, the middleware and the usage row see that. An
+// id that resolves as it is stays as it is.
+func unflat(id string) string {
+	if !strings.Contains(id, provider.FlatSep) || strings.Contains(id, "/") {
+		return id
+	}
+	if _, _, ok := provider.Resolve(id); ok {
+		return id
+	}
+	if real, ok := provider.Unflat(id); ok {
+		return real
+	}
+	return id
 }
 
 // requestModel checks the envelope without restricting vendor-specific fields.
