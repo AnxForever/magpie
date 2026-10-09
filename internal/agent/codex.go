@@ -80,6 +80,10 @@ func codex(home string) *Agent { return codexIn(here(home)) }
 
 // codexIn is Codex as it lives at a place: this machine's home, or a WSL
 // distro's (see wsl.go).
+// codexRunning is whether a Codex runs here, whose list a change reaches
+// only once it restarts; a var so tests can say.
+var codexRunning = func() bool { return Running(`(^|/)codex( |$)`) }
+
 // codexEfforts are the effort control's choices for a model among ms:
 // Default first, with the level Codex takes for it when none is set, as
 // the catalog entry it reads says it, then the model's levels.
@@ -956,10 +960,16 @@ func codexIn(at place) *Agent {
 		// model request they open
 		Reached: func(since time.Time) (time.Time, string, bool) { return codexReached(dir, since) },
 		// the app-server behind the Codex app (and every codex TUI) builds
-		// its model list once, at start-up.
+		// its model list once, at start-up. Codex 0.162's TUI attaches to a
+		// background app-server it starts once and leaves running (its
+		// daemon_auto_start, on by default on every OS), so closing every
+		// codex session keeps the old list: a new one shows Codex's own
+		// models until that daemon is restarted, while the desktop app's
+		// own app-server, restarted with the app, has magpie's (TJHHHH,
+		// luci). magpie doesn't restart it: that ends its sessions.
 		Notice: func() string {
-			if Running(`(^|/)codex( |$)`) {
-				return "Codex builds its model list at start-up — restart the Codex app (and open codex sessions) to see this."
+			if codexRunning() {
+				return "Codex builds its model list at start-up — restart the Codex app, open codex sessions and the app-server they share (" + provider.CodexDaemonRestart + ") to see this."
 			}
 			return ""
 		},
