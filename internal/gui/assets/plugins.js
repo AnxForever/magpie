@@ -432,7 +432,8 @@
 
   // a repository's author put it here, nobody reviewed it: said on its card
   function unofficial() {
-    const u = el("span", "pm-chip warn", t("Unofficial"));
+    const u = el("span", "pm-chip warn");
+    u.append(el("span", "dot"), el("span", "", t("Unofficial")));
     u.title = t("Tagged {topic} on GitHub by its author. Nobody at magpie has read it: read its code before you install it", { topic });
     return u;
   }
