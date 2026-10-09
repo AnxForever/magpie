@@ -361,6 +361,7 @@ func Run(version string, showMain bool, link string) error {
 
 	onDock = func(s settings.Settings) { h.dock(s, h.MainShown()) }
 	dockOnFullscreen()
+	watchHide()
 	// The Dock icon opens the window, or goes to it where it is open. Wails
 	// would show every hidden window on it, the panel too, so the hook
 	// answers first and stops it.
