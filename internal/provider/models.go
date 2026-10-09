@@ -1263,12 +1263,13 @@ func providerEntries() []Entry {
 func buildEntries() []Entry {
 	var out []Entry
 	s := settings.Load()
+	gone := retiredNow() // its vendor said it is retired (retired.go)
 	for _, p := range All() {
 		if !p.On() || p.DecideOnly() { // a dedicated decision API only routes
 			continue
 		}
 		for _, m := range p.Exposed() {
-			if !p.isDecision(m) {
+			if !p.isDecision(m) && !gone[p.ID+"/"+m.ID] {
 				out = append(out, entryFor(p, m, s))
 			}
 		}

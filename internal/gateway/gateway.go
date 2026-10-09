@@ -2040,6 +2040,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if hw.passing {
 			clientResponseID = call.Usage.ResponseID
 		}
+		if !hw.passing && modelRetired(hw.code(), hw.errBody()) {
+			// the vendor's list may still name it (OpenCode Zen's
+			// exo-free): it leaves the lists of this provider's models
+			provider.Retire(c.p.ID, c.model)
+		}
 		outgrew := false // a failure that didn't say so was the request's length
 		if !hw.passing && !hw.refused && hw.code() >= 400 {
 			if req, err := parse(from, attemptBody); err == nil {

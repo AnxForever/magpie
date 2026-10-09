@@ -66,6 +66,7 @@ func served(rest, key string, tokens int) {
 func servedCandidate(c candidate, tokens int) {
 	served(c.restKey(), c.restKey(), tokens)
 	provider.NoteServed(c.p, time.Now())
+	provider.Unretire(c.p.ID, c.model) // back in service, if it was said retired
 	if id := c.restID(); id != c.restKey() {
 		routed.Lock()
 		delete(routed.failures, id)

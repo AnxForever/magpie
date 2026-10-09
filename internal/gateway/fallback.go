@@ -717,12 +717,35 @@ var unservedWords = regexp.MustCompile(`(?i)model.{0,80}(not (supported|accessib
 // and its other models are asked as before. A refusal that also says
 // quota, credit or a rate limit is about the account, and rests it.
 func modelRefused(status int, body []byte) bool {
+	if modelRetired(status, body) {
+		return true
+	}
 	switch status {
 	case 400, 403, 404, 422:
 	default:
 		return false
 	}
 	return unservedWords.Match(body) && !quotaWords.Match(body) && !refusedWords.Match(body)
+}
+
+// retiredWords are how a vendor says the model is retired, though its
+// list may still name it: OpenCode Zen's 410 {"type":"error","error":
+// {"type":"ModelDeprecated","message":"Model exo-free has been
+// deprecated."}} (MOMO on Discord), OpenAI's "The model … has been
+// deprecated".
+var retiredWords = regexp.MustCompile(`(?i)"ModelDeprecated"|model_deprecated|model.{0,80}(has been|was|is now|is) (deprecated|retired|discontinued|decommissioned|sunset)`)
+
+// modelRetired says the vendor turned the request away because the model
+// is retired there: it leaves that provider's place in the lists
+// (provider.Retire), only it rests, and another provider of it, or the
+// group's next member, is asked. Not when it also says quota or credit.
+func modelRetired(status int, body []byte) bool {
+	switch status {
+	case 400, 404, 410, 422:
+	default:
+		return false
+	}
+	return retiredWords.Match(body) && !quotaWords.Match(body)
 }
 
 // refusedWords are how a vendor says it won't take requests from this
@@ -789,6 +812,9 @@ func retryable(status int, body []byte) bool {
 		// account of it: the agent is told, and compacts
 		return false
 	case status == 401, status == 402, status == 403, status == 404, status == 408, status == 429, status >= 500:
+		return true
+	case modelRetired(status, body):
+		// another provider of the model may still serve it
 		return true
 	case status >= 400 && provider.EdgeBlocked(body):
 		// the vendor's firewall blocked this address (Alibaba Cloud's 405
