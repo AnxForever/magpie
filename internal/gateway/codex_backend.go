@@ -114,8 +114,13 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 			// compaction still relays on: refused as its turns are (#967),
 			// with nothing asked of OpenAI — and refused when the sign-in
 			// can't be shown to be the key's, switched off or gone
-			if who, held := compactSigninHeld(r, model); held {
+			on := compactOn(r, model)
+			if who, held := compactSigninHeld(r, model, on); held {
 				writeError(w, provider.Responses, 403, compactHeldError(who, model))
+				return
+			}
+			if on != nil {
+				s.codexUpstreamOn(w, r, rest, body, on)
 				return
 			}
 			break // preserve native compaction's existing passthrough
@@ -366,10 +371,15 @@ func hasSealedAgentMessage(body []byte) bool {
 // auth_mode) spends no account the key's list governs, and is the one
 // allowance. A key held to some models alone (#882) still compacts as
 // it always did, its holds asked on /responses where its turns go.
-func compactSigninHeld(r *http.Request, model string) (access.Identity, bool) {
+func compactSigninHeld(r *http.Request, model string, on *provider.Provider) (access.Identity, bool) {
 	who, held := accountHolds(r)
 	if !held || provider.CodexAPIKeySignedIn() {
 		return who, false
+	}
+	if on != nil {
+		// compacted on another of Codex's accounts (compactOn): the key
+		// holds that one, not the sign-in
+		return who, !who.AllowsAccount(on.ID, on.AccountID())
 	}
 	p, _, ok := provider.Resolve("codex/" + model)
 	if !ok || p.Account == nil || p.Account.Agent != "codex" || !who.AllowsAccount(p.ID, p.AccountID()) {
@@ -386,6 +396,36 @@ func compactSigninHeld(r *http.Request, model string) (access.Identity, bool) {
 func compactHeldError(who access.Identity, model string) string {
 	return fmt.Sprintf("Native compaction for %s goes through the account Codex is signed in to, which the gateway key %q may not use; it may use %s. Native compaction has no other route: add the signed-in account to the key in magpie's Gateway page, or use one of magpie's models, whose compaction goes through a compaction_trigger on /responses and the key's accounts.",
 		model, who.KeyName, keyAccountNames(who))
+}
+
+// compactOn is the account a native compaction of one of Codex's own
+// models goes to in place of the ChatGPT sign-in it would relay on: one of
+// Codex's other accounts on in magpie while the sign-in is paused there
+// (#263, the user's own account kept for Codex's remote control, Computer
+// Use and the like, another doing the work). Its turns already go to the
+// others (codexAccounts, routing passing the paused one over); relayed as
+// it came, compaction alone still spent the paused account — and on
+// history the others sealed. The first not resting is taken, else the
+// first. nil keeps the relay to the sign-in: not paused, or nothing else
+// on, or Codex on an API key.
+func compactOn(r *http.Request, model string) *provider.Provider {
+	if model == "" || strings.Contains(model, "/") || apiKey(r.Header) || r.Header.Get(AccountHeader) != "" {
+		return nil
+	}
+	p, _, ok := provider.Resolve("codex/" + model)
+	if !ok || p.Account == nil || p.Account.Agent != "codex" || !p.OwnPaused() {
+		return nil
+	}
+	others := p.AlsoOn()
+	for i, o := range others {
+		if !resting(candidate{p: o, model: model, rest: o.ID}) {
+			return &others[i]
+		}
+	}
+	if len(others) > 0 {
+		return &others[0]
+	}
+	return nil
 }
 
 // codexAccounts is what a request for one of Codex's own models is served
@@ -446,6 +486,12 @@ func withModel(body []byte, model string) []byte {
 // codexUpstream relays a request as it came, the sign-in included, to where
 // Codex would have sent it.
 func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest string, body []byte) {
+	s.codexUpstreamOn(w, r, rest, body, nil)
+}
+
+// codexUpstreamOn is codexUpstream signed by the account on instead of
+// Codex's own sign-in, when on isn't nil (compactOn).
+func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest string, body []byte, on *provider.Provider) {
 	start := time.Now()
 	usage.Saw(agentOf(r))
 	if r.Method == http.MethodPost {
@@ -523,13 +569,32 @@ func (s *Server) codexUpstream(w http.ResponseWriter, r *http.Request, rest stri
 	autoReset := false // a Codex reset looked at, once
 	resetNote := ""    // what spending it did, for the request log
 	for tries := 0; ; tries++ {
-		req, err := http.NewRequestWithContext(provider.ViaSignedIn(r.Context(), "codex"), r.Method, u, bytes.NewReader(body))
+		ctx := provider.ViaSignedIn(r.Context(), "codex")
+		if on != nil {
+			ctx = on.Via(r.Context())
+		}
+		req, err := http.NewRequestWithContext(ctx, r.Method, u, bytes.NewReader(body))
 		if err != nil {
 			writeError(w, provider.Responses, 502, err.Error())
 			end(502, err.Error(), 0, 0)
 			return
 		}
 		copyHeaders(req.Header, r.Header)
+		if on != nil {
+			// the account's own token and id in place of the sign-in's;
+			// what Codex said it takes back stays as it said it
+			accept := req.Header.Values("Accept")
+			if err := on.Sign(ctx, req, provider.Responses, body); err != nil {
+				msg := "OpenAI (" + on.Account.User + "): " + err.Error()
+				writeError(w, provider.Responses, 502, msg)
+				end(502, msg, 0, 0)
+				return
+			}
+			req.Header.Del("Accept")
+			for _, v := range accept {
+				req.Header.Add("Accept", v)
+			}
+		}
 		// left to the transport, the reply comes back plain for the usage in it
 		req.Header.Del("Accept-Encoding")
 		if res, err = s.client.Do(req); err != nil {
