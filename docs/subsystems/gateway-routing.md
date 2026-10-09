@@ -67,9 +67,34 @@ served by a plugin are in [Provider and plugin ownership](provider-plugins.md).
 - Gemini's OpenAI-compatible API (AI Studio's, or a proxy in front of Gemini on this computer or the LAN: `geminiCompat`) is asked for the model's thoughts in `extra_body.google.thinking_config`. A 400 naming it (`refusesThinkingConfig`) marks the provider unfit for the field (`thinking_config`), and it is asked again with `reasoning_effort` alone. Gemini 3 can't stop thinking, so reasoning turned off goes at `minimal`, or at the model's lowest level where its levels are known and have no `minimal` (`geminiOffLevel`). Google's 400 for `minimal` (`geminiMinimalRefused`; gemini-3.8-flash's "Thinking level is unsupported: THINKING_LEVEL_MINIMAL") names thinking too, but isn't the field turned away: the model is marked as refusing reasoning off (`offRefused`) and asked again at its lowest level, and so from then on, still asked for its thoughts. Vertex AI's OpenAI-compatible API marks each streamed chunk of thoughts in the delta's `extra_content.google.thought`, and such a chunk is read as thinking.
 - A model's reply limit is published within the window beside it (#1438, `provider.OutputWithin`, `Entry.PublishedOutput`): `/v1/models`' `max_output_tokens` (`modelObject`), Cursor Private Inference's `capabilities.max_output_tokens` (`cursorLocalModel`), Muse Code's `limit.output` (`museModels`), the GUI's model and group rows (`providerInfo`, `providersState`), `magpie model output`, and every agent's file (`agent.maxTokens`, #338). The window and the output can come from different sources: Grok's backend lists grok-4.7's 256000 window, and models.dev fills its 500000 output (`catalog.Decorate` and `Provider.replyLimit` fill an output only where the vendor gives none). An unknown window or output is published as it is. The catalog keeps the unclamped `Entry.Output`, and a group's member is still asked for no more than that (`outputLimit`, `withMaxOutput`), so a request isn't lowered by the clamp. A limit the user set stays in their settings as they set it (`TestModelListsKeepOutputWithinTheWindow`).
 
+## Remote magpie APIs
+
+A remote provider serves the conversation, token-counting, System One,
+embeddings, rerank, image generation/edit and video creation/status/content
+APIs. Gemini clients enter through the local Gemini adapter and follow the
+same model routing as other conversation clients. Responses uses HTTP/SSE;
+its WebSocket route still answers 426. Discovery and older-peer behavior
+are described in [Providers and accounts](providers-accounts.md#remote-magpie).
+
+System One uses `RouteDecider` and `postDecide` in
+[`decide.go`](../../internal/gateway/decide.go), taking one provider prefix
+off at each hop and preserving the state, questions and vendor errors.
+[`embeddings.go`](../../internal/gateway/embeddings.go) relays retrieval
+bodies and options, [`draw.go`](../../internal/gateway/draw.go) sends images
+to the remote's images API, and [`video.go`](../../internal/gateway/video.go)
+wraps remote task ids for later polls and downloads. `passOnCaller` in
+[`remote_magpie.go`](../../internal/gateway/remote_magpie.go) supplies
+caller/session headers without replacing the outgoing User-Agent.
+Conversation forwarding preserves Claude Code and Codex client headers
+(including Codex's `originator`) so relays behind the remote can recognize
+them. Decision, retrieval and media requests set magpie's User-Agent at
+their own call sites, so the remote accepts their attribution. Vendors
+receive no caller labels.
+
 ## Verification
 
 ```sh
+go test -tags nogui ./internal/gateway -run 'TestRemoteMagpie'
 go test -tags nogui ./internal/gateway -run 'TestLoop|TestLongReplyThatDoesNotLoop|TestQuiet|TestSilentHeld|TestRotateSpreadsSessions|TestRouting|TestSmartRouting|TestFallback|TestNoFallbackForOtherErrors|TestLastFallbackErrorReachesTheAgent|TestRateLimitedSinksToTheBack|TestGroupRateLimitedSinks|TestAffinity|TestSeveralKeysOnTakeOverFromEachOther|TestModelNotInPlanRestsTheModelNotTheKey|TestSubscriptionAccountsTakeOver|TestGroup|TestTrace|TestImageTool|TestCodexNoCredits|TestWindowCapsHoldTheAccount|TestAccountCap|TestClaudeGoesOnMessagesWhereTheRelayHasThem|TestAutoRelaysOnTheClientsOwnAPI|TestSearchOfferedStaysOnTheClientsAPI|TestCodexSearchAnsweredOnResponses|TestAgentEffortOnCursorLocal|TestAzureCompactionWithoutMagpiesReasoning|TestCodexCompact|TestProtection|TestSearchedConversation|TestUnsearchedConversationUnchanged|TestNotAnAPIReply|TestAPIReplyUntouched|TestCodexBackendWebPage|TestSub2APIKeyLimitIsQuota|TestKeysWeighedByTheirWindows|TestGroupWeighsKeyWindows|TestKeyOutOfItsWindowRestsUntilReset|TestKeyPoolErrorDoesNotRestForWindow|TestKeyBackOnceItsWindowIsNotFull|TestRestingKeyReadAgainInAnOrderedGroup|TestClaudeAccountBackOnceItsWindowRenews|TestThinkingStreams|TestHeldThinkingKeepsTheAgentAlive|TestRefusalAfterThinkingFailsOver|TestGeminiEmptyRepliesAskedAgain|TestLocalUnredacted|TestCORS|TestForeignPagesRefused|TestGeminiThinkingOffAtItsLowest|TestGeminiThoughtsMarkedInExtraContent|TestClaudeSignInNotToldItsSignInFailed|TestSignInWriterReleasesA403|TestSignInBetaStaysWithMagpie|TestStructuredOutput|TestResponsesTextKeepsVerbosityBesideFormat|TestRefusedFormatToldInWords|RPM|TestQueued|TestCustomGeminiUpstream|TestWholeNums|TestGrokCalls|TestOnlyGrokCalls|TestGrokModel|TestGrokPluginCalls'
 go test -tags nogui ./internal/gateway -run 'TestCodexModelList|TestCodexModelsEtag'
 go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|TestRenewedAccountForgetsItsAllowance|TestDeclareSearch|TestNative|TestKeyAllowance|TestPlanKeyAllowance|TestClaudeAccountToldRenewed|TestPluginAccountToldRenewed|TestSkipsRedaction|TestSetRPM'
