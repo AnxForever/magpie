@@ -505,6 +505,11 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	if apiKey(r.Header) && rest != "/models" {
 		base = codexAPIBase
 	}
+	if r.Method == http.MethodPost && rest == "/responses" && base == provider.CodexBase {
+		// a replayed web search the request doesn't declare the tool for
+		// is refused by the ChatGPT backend (#1270), as on an account's
+		body = provider.DeclareSearch(body, strings.EqualFold(r.Header.Get("X-OpenAI-Internal-Codex-Responses-Lite"), "true"))
+	}
 	u := base + rest
 	if r.URL.RawQuery != "" {
 		u += "?" + r.URL.RawQuery
