@@ -10857,6 +10857,11 @@ function renderAccounts(a, p) {
   // can't be used till it is signed in again; another subscription's lapse
   // shows on its quota line only, as before
   const unusable = (l) => a.agent === "claude" && !!l.lapsed;
+  // a plugin's account whose sign-in its vendor refused (#1363: Grok after
+  // a restart): marked lapsed, or its allowance read saying so. Whatever
+  // else it is (in use, the agent's own), it keeps a way to sign in again
+  // and its Remove, and the reason never stands in their place.
+  const signedOut = (l) => !!sub?.plugin && !unusable(l) && (!!l.lapsed || SIGN_IN_GONE.test(quota?.[l.user]?.error || ""));
   const several = ls.filter((l) => !unusable(l) && ((l.active && !l.paused) || l.on)).length > 1;
   // kept signed in to one of the user's choosing (#524), the first is the
   // first in use in the order, which Make first sets without a sign-in
@@ -10913,6 +10918,7 @@ function renderAccounts(a, p) {
     if (held) row.append(capHeldNote(held, cap, several, direct));
     row.append(el("span", "grow"));
     if (unusable(l)) {
+      row.classList.add("signed-out");
       row.append(el("span", "using", t("Sign-in required")));
       const again = el("button", "text", t("Sign in again"));
       again.onclick = () => startSignIn(a.agent);
@@ -10923,6 +10929,15 @@ function renderAccounts(a, p) {
         forget.onclick = () => accountAction("login/forget", { agent: a.agent, user: l.user }, t("{user} removed", { user: l.user }));
         row.append(forget);
       }
+    } else if (signedOut(l)) {
+      row.classList.add("signed-out");
+      row.append(el("span", "using", t("Sign-in required")));
+      const again = el("button", "text", t("Sign in again"));
+      again.onclick = () => startSignIn(a.agent);
+      const forget = el("button", "text quiet", t("Remove"));
+      forget.title = l.own ? forgetOwnTitle(a) : t("magpie forgets this account's sign-in; the account itself is untouched");
+      forget.onclick = () => accountAction("login/forget", { agent: a.agent, user: l.user }, t("{user} removed", { user: l.user }));
+      row.append(again, forget);
     } else if (l.active && kept && l.user !== firstUser) {
       // signed in to, kept so, and tried at its place in the order
       const signed = el("span", "using", l.paused ? t("Paused") : t("Signed in"));
@@ -11201,6 +11216,10 @@ function loginUsageOf(agent) {
 // quotaError says why an allowance can't be read: a Google account with
 // no Cloud project named can't be used at all until one is, so that is
 // said outright; anything else is in the tooltip.
+// SIGN_IN_GONE: an allowance read saying the account's sign-in is gone,
+// as the gateway reads a plugin's (signInGone, plugin_usage.go)
+const SIGN_IN_GONE = /sign-in has (expired|lapsed)|sign in again/i;
+
 function quotaError(err) {
   if (/sign-in has expired/.test(err)) return t("Signed out — add this account again to use it");
   if (/no longer supported for Gemini Code Assist for individuals/.test(err)) return t("Google no longer serves personal accounts to Gemini CLI — hover for more");
