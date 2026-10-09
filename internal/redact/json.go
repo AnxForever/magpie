@@ -284,8 +284,9 @@ func jsonEscape(s string) string {
 // thoughts, Responses' encrypted reasoning) is checked by the vendor
 // against the text it wrote, so it goes back as written: the values
 // masked elsewhere in the request become their placeholders again, which
-// is what the vendor wrote where the agent reads the value (Restore), and
-// nothing else in it is touched. Masked by the rules instead, a value the
+// is what the vendor wrote where the agent reads the value (Restore), as
+// do the secrets masked before (knownSpans), and nothing else in it is
+// touched. Masked by the rules instead, a value the
 // vendor wrote as a placeholder in other words around it ("the password
 // is {{SECRET_…}}") went back as the value itself, and what the vendor
 // wrote of its own that looks like an email or a phone number went as a
@@ -312,18 +313,31 @@ func MaskJSON(body []byte, o Options) ([]byte, int) {
 		t, n := Mask(string(body), o)
 		return []byte(t), n
 	}
-	if len(signed) == 0 || len(seen) == 0 {
+	if len(signed) == 0 {
 		return out, total
 	}
-	remask := replacerOf(seen)
+	var remask *strings.Replacer
+	if len(seen) > 0 {
+		remask = replacerOf(seen)
+	}
 	out, _ = walk(out, func(path, key, s string) string {
 		if keepIn(path, key, s, args) || !under(path, signed) {
 			return s
 		}
-		t := remask.Replace(s)
-		if t != s {
-			total++
+		t := s
+		if remask != nil {
+			if t = remask.Replace(s); t != s {
+				total++
+			}
 		}
+		// and a secret masked before, though nothing else in this request
+		// has it now (the turn that brought it was compacted away): the
+		// vendor wrote its placeholder there too. Not personal data: a
+		// number or an address the vendor wrote of its own can be one
+		// masked in another conversation (13800138000 is in many), and
+		// masked, its text would no longer match its signature
+		t, n := apply(t, knownSpans(t, Options{Secrets: o.Secrets}), placeholder)
+		total += n
 		return t
 	})
 	return out, total
