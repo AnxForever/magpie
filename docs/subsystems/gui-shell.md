@@ -47,21 +47,33 @@ filter only when that request is excluded. Usage's purpose picker remains a
 single choice sent to the ledger API. See `purpose-filter.test.cjs` and
 `routing-purpose-state.test.cjs`.
 
-### Routing key folds
+### Routing key and account folds
 
-Three or more API keys of one provider standing next to each other for one
-model (same fixed effort, fallback and group-in-group heading) fold into one
-stage row, `li.rt-fold` in [`routing.js`](../../internal/gui/assets/routing.js)
-(`FOLD_AT`, `rebuild`). It shows the key count and the keys' state together:
-the key that is lit and what it is doing, how many are available and how
-many rest. Requests that land on a folded key fly to the fold (`shownRow`).
-Clicking it (or Enter / Space) shows each key in place, wired from the fold.
-Accounts and keys folds the same provider's keys into one `.rt-keys` row
-with their summed tally. Which folds are open is kept per reader in
-localStorage `magpie.routingKeysOpen` (`provider/model` on the stage,
-`provider/*` in the list). Display only: the gateway's order and choice of
-key don't change. Two keys stay two rows. See
-`routing-keys-fold.test.cjs`.
+Three or more API keys, or three or more accounts, of one provider standing
+next to each other for one model (same fixed effort, fallback and
+group-in-group heading) fold into one stage row, `li.rt-fold` in
+[`routing.js`](../../internal/gui/assets/routing.js) (`FOLD_AT`,
+`rebuild`). It shows the count and their state together: the one that is
+lit and what it is doing, how many are available and how many rest
+(`together`). Requests that land on a folded seat fly to the fold
+(`shownRow`). Clicking it (or Enter / Space) shows each in place, wired
+from the fold. Accounts and keys folds a provider's keys, and its accounts,
+into one `.rt-keys` row each with their summed tally.
+
+A group in the group's heading (`li.rt-sub`, `subNode`) folds the same way
+(`toggleSub`): folded, it says how many it routes to and what they do
+together, a request to any seat under it flies to the heading
+(`row.shut`), and its wire is the last one drawn (`wiresTo`).
+
+Keys start folded. Accounts and group-in-group headings start open when
+they hold fewer than `LONG` (6), folded otherwise (Aiirobyte on Discord: a
+group of many accounts took the page). What the reader opens is kept in
+localStorage `magpie.routingKeysOpen` and what they fold in
+`magpie.routingFolded` (`keepOpen`, `isOpen`), keyed `provider/model` for
+keys and `provider/model@` for accounts on the stage, `provider/*` and
+`provider/@` in the list, and `group/<id>` for a heading. Display only: the
+gateway's order and choice of seat don't change. Two stay two rows. See
+`routing-keys-fold.test.cjs` and `routing-group-fold.test.cjs`.
 
 ### Desktop fonts
 
