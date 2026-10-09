@@ -2027,6 +2027,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		if hw.failure != 0 { // the stream failed before any of it was sent
 			call.Status, call.Error = hw.failure, c.p.Name+": "+hw.failMsg
+			if hw.turnedAway {
+				// Antigravity's refusal said as the stream's error event:
+				// its words, and why, as its 429 is told (#1425)
+				call.Error = c.p.Name + ": " + provider.APIError([]byte(hw.failMsg), hw.failMsg)
+			}
+		}
+		if hw.turnedAway && !strings.HasSuffix(call.Error, antigravityTurnedAwayHint) {
+			call.Error += " — " + antigravityTurnedAwayHint
 		}
 		if hw.refused {
 			// the vendor's safety filter, with nothing said (#248)
@@ -2180,8 +2188,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// wrong with it and no usage is asked again (#666). Its own
 			// mates are asked last, not first: they carry the same system
 			// prompt, so each is turned away just the same before the group
-			// reaches a member that answers
-			try.Fail = failRefused
+			// reaches a member that answers. It is told as the agent's prompt
+			// turned away, as WorkBuddy's is, not a quota (#1425); and if
+			// nobody after it answers but with a quota of its own, that is
+			// what the agent is told, at a status it doesn't retry
+			if other == nil {
+				other = &Try{Status: turnedAwayStatus, Error: call.Error}
+			}
+			try.Fail = failPrompt
 			s.trace.update(tr, func(t *Route) {
 				t.Tries[len(t.Tries)-1] = try
 				if call.To != "" {
@@ -2363,8 +2377,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			skipped = append(skipped, c.label()+": "+call.Error)
 			continue
 		}
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && hw.failed() {
-			// nobody else is left: the same one again, after a moment
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !hw.turnedAway && hw.failed() {
+			// nobody else is left: the same one again, after a moment (not
+			// what Antigravity turned away: it turns it away again)
 			try.Fail, try.Again = failureOf(c, hw.code(), hw.errBody()), wait.Milliseconds()
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
@@ -2379,7 +2394,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			break
 		}
 		// (not for one account pinned: the others weren't asked)
-		if !autoReset && pin == "" && last && other == nil && hw.failed() && !hw.passing && failure(hw.code(), hw.errBody()) == failQuota {
+		if !autoReset && pin == "" && last && other == nil && hw.failed() && !hw.passing && !hw.turnedAway && failure(hw.code(), hw.errBody()) == failQuota {
 			// everyone is out of their allowance: a Codex or Claude account
 			// the user lets spend its resets by itself, its week used up,
 			// spends one and is asked again
@@ -2401,6 +2416,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// request it shouldn't send again as it is, not handed an empty
 			// reply it would ask again for, paying for each
 			failTo(w, kept, from, refusedStatus, call.Error)
+		} else if hw.turnedAway && hw.failed() {
+			// nobody is left to answer what Antigravity turned away: the
+			// agent is told why, at a status it doesn't retry, not the 429
+			// it would ask again for ten times over, each turned away the
+			// same (#1425). The account isn't at fault, and doesn't rest
+			call.Status = turnedAwayStatus
+			failTo(w, kept, from, call.Status, call.Error)
 		} else if f := failure(call.Status, []byte(call.Error)); other != nil && !hw.passing && call.Status >= 400 && (f == failQuota || f == failCredit) {
 			// the last one left is out of its allowance, but one before it
 			// failed otherwise: the agent is told that one's error, not
@@ -2468,6 +2490,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		} else if hw.refused {
 			try.Fail = failRefused
+		} else if hw.turnedAway {
+			// Antigravity turned the agent's system prompt away (#666), at
+			// whatever quota the account has: not a quota used up (#1425)
+			try.Fail = failPrompt
 		} else if promptRefused(call.Status, []byte(call.Error)) {
 			try.Fail = failPrompt
 		} else {
@@ -2750,11 +2776,13 @@ func markAntigravityTurnsAway(w http.ResponseWriter) {
 // its message, the Code Assist decoder keeping neither its code nor its
 // status. An error event of any other kind says something else and marks
 // nothing.
-func markAntigravityRefused(w http.ResponseWriter, p provider.Provider, system, said string) {
-	if said == "" || !antigravityRefuses(said) || accountAgent(p) != "antigravity" || !antigravityTurnsAway(system) {
-		return
+// It says whether it marked it.
+func markAntigravityRefused(w http.ResponseWriter, p provider.Provider, system, said string) bool {
+	if said == "" || !antigravityTurnedAway(p, system, said) {
+		return false
 	}
 	markAntigravityTurnsAway(w)
+	return true
 }
 
 // forward sends a request to the provider. On Anthropic's messages, a
@@ -4110,7 +4138,8 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		if wrongEndpoint(res.StatusCode, b) {
 			msg += wrongAPINote(p, model, res, b)
 		}
-		if res.StatusCode == http.StatusTooManyRequests && accountAgent(p) == "antigravity" && antigravityTurnsAway(request.System) {
+		turnedAway := res.StatusCode == http.StatusTooManyRequests && antigravityTurnedAway(p, request.System, string(b))
+		if turnedAway {
 			msg += " — " + antigravityTurnedAwayHint
 			markAntigravityTurnsAway(w)
 		}
@@ -4119,6 +4148,9 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		}
 		keepRetry(w.Header(), res.Header, b)
 		u.ErrType = provider.ErrorType(b)
+		if turnedAway {
+			u.ErrType = turnedAwayErrType
+		}
 		return writeError(w, from, res.StatusCode, msg), msg
 	}
 	dec := decoder(actual)
@@ -4155,8 +4187,12 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		return writeError(w, from, 502, msg), msg
 	}
 	if col.err != "" && !saidAnything(col.res.Parts) {
-		markAntigravityRefused(w, p, request.System, col.err)
-		return writeError(w, from, 502, p.Name+": "+col.err), col.err
+		said := col.err
+		if markAntigravityRefused(w, p, request.System, said) {
+			said += " — " + antigravityTurnedAwayHint
+			u.ErrType = turnedAwayErrType
+		}
+		return writeError(w, from, 502, p.Name+": "+said), said
 	}
 	if empty && !saidAnything(col.res.Parts) && answersNothing(col.res.Stop) {
 		msg := p.Name + ": " + emptyReply
