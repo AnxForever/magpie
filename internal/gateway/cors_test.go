@@ -10,6 +10,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -141,6 +142,9 @@ func TestCORSKeyThroughTheServer(t *testing.T) {
 	if err := settings.Save(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := sessions.SetGatewayRecording(true, false); err != nil {
+		t.Fatal(err)
+	}
 	srv := lanGuard(New().Handler())
 	for _, key := range []string{secret, ""} {
 		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(chatReq))
@@ -158,6 +162,9 @@ func TestCORSKeyThroughTheServer(t *testing.T) {
 		}
 		if w.Code != want || w.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
 			t.Errorf("key %q: %d %v %s", key, w.Code, w.Header(), w.Body)
+		}
+		if key != "" && (w.Header().Get(SessionHeader) == "" || w.Header().Get("Access-Control-Expose-Headers") != SessionHeader) {
+			t.Error("browser client cannot reuse the gateway session identity")
 		}
 	}
 }
