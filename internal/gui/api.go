@@ -1032,6 +1032,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.CodexTitles = cur.CodexTitles // set on its own (codex-titles below)
 		// and so is the model Codex's auto-review runs on (codex-auto-review)
 		in.CodexAutoReview = cur.CodexAutoReview
+		// and the model Codex's subagents are put on, set in Codex's row
+		in.CodexSubagentModel = cur.CodexSubagentModel
 		in.ChinaMirror = cur.ChinaMirror // the Plugins page's, set on its own
 		// which Codex accounts spend a reset by themselves, set on the Usage card
 		in.CodexAutoReset = cur.CodexAutoReset

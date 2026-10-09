@@ -311,6 +311,13 @@ type Settings struct {
 	// codex-auto-review or the conversation's model at low effort. ""
 	// leaves the list as it was.
 	CodexAutoReview string `json:"codexAutoReview,omitempty"`
+	// CodexSubagentModel is the model the gateway puts every subagent
+	// Codex spawns on (a request x-openai-subagent names collab_spawn),
+	// whatever model its lead asked for in spawn_agent: a model a ChatGPT
+	// account in magpie serves (provider/model), since a subagent's task
+	// is sealed for one (willz on Discord). "" leaves each on the model its
+	// lead asked for.
+	CodexSubagentModel string `json:"codexSubagentModel,omitempty"`
 	// FullContext has Codex and Claude Code told a model's whole context
 	// window. Off, a window above WorkingWindow is told as WorkingWindow,
 	// so they compact a long conversation there instead of sending ever
@@ -956,6 +963,10 @@ func Save(s Settings) error {
 	s.CodexAutoReview = strings.TrimSpace(s.CodexAutoReview)
 	if s.CodexAutoReview != "" && !strings.Contains(s.CodexAutoReview, "/") {
 		return fmt.Errorf("the model for Codex's auto-review must be a model's id such as openai/gpt-5-mini, not %q", s.CodexAutoReview)
+	}
+	s.CodexSubagentModel = strings.TrimSpace(s.CodexSubagentModel)
+	if s.CodexSubagentModel != "" && !strings.Contains(s.CodexSubagentModel, "/") {
+		return fmt.Errorf("the model for Codex's subagents must be a model's id such as codex/gpt-5.5, not %q", s.CodexSubagentModel)
 	}
 	s.Searcher = strings.TrimSpace(s.Searcher)
 	if s.SearchFirst = strings.TrimSpace(s.SearchFirst); s.SearchFirst == SearchFirstModel {

@@ -1313,6 +1313,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if m := s.codexMemoryStandIn(r, call.Agent, agent, call.Kind, asked); m != "" {
 		asked = m
 	}
+	// a Codex subagent on the model set for Codex's subagents, whatever
+	// its lead asked for (willz on Discord); one already put on it by the
+	// ChatGPT backend's route is recorded as asked for the model it was
+	subagent := subagentPickOf(r)
+	if subagent == nil {
+		subagent = codexSubagentPick(r, agent, call.Kind, call.Model)
+	}
+	if subagent.Moved() {
+		call.Model, asked = subagent.Asked, subagent.To
+	}
 	p, model, ok := provider.Resolve(asked)
 	if ok {
 		s.rememberCodexTurn(r, call.Agent, agent, call.Kind, asked)
@@ -1705,7 +1715,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		shown = nil // nobody else to stay away from
 	}
 	link := s.titlePrompts.observe(r, body, metadata, call.Kind, start)
-	tr := s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Affinity: shown, Order: pl.order, Left: pl.left})
+	tr := s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, call.Agent), TitleLink: link, Pinned: pin, Time: start, Agent: call.Agent, Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, call.Kind), Kind: call.Kind, For: call.For, Model: call.Model, Effort: requestEffort(from, body), Provider: p.ID, Group: group, Rule: hit, Nested: nested, SealedTask: sealedTask, LeadAccount: leadAccount, Subagent: subagent, Affinity: shown, Order: pl.order, Left: pl.left})
 	if telemetry != nil {
 		telemetry.routeID = tr.ID
 	}

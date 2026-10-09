@@ -1002,6 +1002,28 @@ func codexIn(at place) *Agent {
 				Options: func(map[string]string) []Option { return modelOptions(routed()) },
 			},
 			{
+				// the model magpie puts every subagent on, whatever the
+				// lead asked for in spawn_agent (willz on Discord): kept in
+				// magpie's settings, not Codex's config, since the gateway
+				// rewrites the subagent's request. Only a ChatGPT account's
+				// models are offered: a subagent's task is sealed for them
+				Key: "subagent_model", Label: "subagent model", Quiet: true,
+				Get: provider.CodexSubagentModel,
+				Set: provider.SetCodexSubagentModel,
+				Options: func(map[string]string) []Option {
+					var out []Option
+					for _, e := range provider.CodexSubagentModels() {
+						note := e.Provider.Name + " · via magpie"
+						if a := e.Provider.Account; a != nil && a.User != "" {
+							note = a.User + " · via magpie"
+						}
+						out = append(out, Option{Value: e.ID, Label: e.Name, Note: note, Icon: e.Provider.Icon,
+							Group: e.Provider.Name, Ref: e.ID, Context: e.Context})
+					}
+					return out
+				},
+			},
+			{
 				// [agents] default_subagent_reasoning_effort: unset, a
 				// subagent runs at the session's effort, or at its model's
 				// default when it has a model of its own

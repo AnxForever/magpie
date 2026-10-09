@@ -92,6 +92,17 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 				s.codexTitle(w, r, body, to)
 				return
 			}
+			// a subagent on one of Codex's own models, put on the model
+			// set for Codex's subagents, a ChatGPT account's in magpie;
+			// the request on the model asked for when it can't be, the
+			// trace saying why (codexUpstreamOn, serve)
+			if !strings.Contains(model, "/") {
+				pick := codexSubagentPick(r, agentOf(r), requestCallKind(r.Header, requestSessionMetadata(r.Header, body)), model)
+				r = withSubagentPick(r, pick)
+				if pick.Moved() {
+					body, model = withModel(body, pick.To), pick.To
+				}
+			}
 		}
 		// The namespace owns the route even if a model is not in the catalog.
 		// Unknown providers/groups must fail locally, never fall through to OpenAI.
@@ -540,7 +551,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		seat := Weighed{ID: "codex", Provider: "openai", Name: "OpenAI", Icon: "openai", Who: who, Kind: "account", Agent: "codex", Model: model}
 		link := s.titlePrompts.observe(r, body, metadata, kind, start)
 		captureTitle = link != nil && isTitleKind(kind)
-		tr = s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Provider: "openai",
+		tr = s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Provider: "openai", Subagent: subagentPickOf(r),
 			Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Effort: effort, Start: start}}})
 		promptRead := s.inspectPrompt(tr, provider.Responses, body)
 		end = func(status int, msg string, tokens, out int) {

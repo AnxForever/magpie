@@ -432,6 +432,10 @@
     }
   }
 
+  // the model a request went on: the one asked for, or the one set for
+  // Codex's subagents that magpie put a subagent on in its place
+  const wentOn = (r) => (r.subagent && !r.subagent.kept ? r.subagent.to : r.model);
+
   // why routing put the first where it did
   function firstWhy(r) {
     const f = r.order[0];
@@ -440,7 +444,7 @@
     if (r.sealedTask && r.leadAccount === f.id) return t("{who} goes first: it answered the parent agent and may be needed to read this encrypted task.", { who: w });
     if (r.order.length === 1) {
       if (f.rest) return t("{who} is the only one, so it's tried though it is resting.", { who: w });
-      return f.kind === "account" ? t("{who} is the only account on for {model} — nothing to choose between.", { who: w, model: r.model })
+      return f.kind === "account" ? t("{who} is the only account on for {model} — nothing to choose between.", { who: w, model: wentOn(r) })
         : t("{name} has one key on — nothing to choose between.", { name: f.name });
     }
     if (f.rest) return t("Every one is resting after a failure, so {who}, first in line, is tried all the same.", { who: w });
@@ -1572,7 +1576,7 @@
     const main = r.order.find((x) => !x.fallback);
     items.push([r.group
       ? t("{agent} asked for the routing group {name}: {members}", { agent: agentName(r.agent), name: r.group.name, members: treeText(r.group) })
-      : main && main.model !== r.model
+      : main && main.model !== r.model && wentOn(r) === r.model
       ? t("{agent} asked for {model}: {name} serves it, and the vendor is asked for {sent}", { agent: agentName(r.agent), model: r.model, name: main.name, sent: main.model })
       : t("{agent} asked for {model}", { agent: agentName(r.agent), model: r.model }) + " → " + (main?.name || r.provider), ""]);
     if (r.kind) items.push([kindWhy(r), "aside kind"]);
@@ -1710,6 +1714,11 @@
   const upstreamWhy = (tr) => t("The aggregator passed the request on to {upstream}, as its reply says: the provider that actually answered it.", { upstream: tr.upstream });
   function kindWhy(r) {
     const agent = agentName(r.agent);
+    // the model set for Codex's subagents in place of the lead's pick, or
+    // why the lead's pick stood
+    if (purposeOf(r.kind) === "kind:collab_spawn" && r.subagent) return r.subagent.kept
+      ? t("{agent} requested a subagent on {model} and it stayed there: its subagents are set to {to}, but {why}.", { agent, model: r.subagent.asked, to: r.subagent.to, why: t(r.subagent.kept) })
+      : t("{agent} requested a subagent on {model}; magpie put it on {to}, the model set for its subagents.", { agent, model: r.subagent.asked, to: r.subagent.to });
     if (purposeOf(r.kind) === "kind:collab_spawn") return r.group
       ? t("{agent} requested a subagent; magpie selects its model within this routing group.", { agent })
       : t("{agent} requested a subagent on {model}.", { agent, model: r.model });
