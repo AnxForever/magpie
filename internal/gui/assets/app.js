@@ -1022,6 +1022,27 @@ const STALE_HOW = {
   cli: ["A {agent} in a terminal, started {when}: quit it and start it again."],
 };
 
+// the folded row's words for the copies left on the old list (#1374): a
+// reopen of one kind doesn't end another, so "reopen Codex" sent the reader
+// to the app while the editor's Codex was the one left. One kind is named
+// with how it is reopened; more are counted, the row opened says which.
+const STALE_SHORT = {
+  app: "Connected · quit and reopen the {agent} app",
+  ide: "Connected · reload the editor's window",
+  daemon: "Connected · restart {agent}'s app-server",
+  embedded: "Connected · reopen {app}",
+  cli: "Connected · restart {agent} in the terminal",
+};
+function staleSaid(a) {
+  const copies = a.staleCopies || [];
+  if (!copies.length || copies.some((c) => !STALE_HOW[c.kind])) return { text: t("Connected · takes effect once {agent} is reopened", { agent: a.name }) };
+  // each copy whole, with its start, for the hover where the words are cut
+  const title = copies.map((c) => t(STALE_HOW[c.kind][0], { agent: a.name, when: ago(c.since), app: c.app || "" }).replace("{cmd}", STALE_HOW[c.kind][1] || "")).join("\n");
+  const kinds = new Set(copies.map((c) => c.kind + "\0" + (c.app || "")));
+  if (kinds.size > 1) return { text: t("Connected · {n} copies of {agent} to reopen", { n: copies.length, agent: a.name }), title };
+  return { text: t(STALE_SHORT[copies[0].kind], { agent: a.name, app: copies[0].app || "" }), title };
+}
+
 // connectLine: the dot and the words under an agent's name
 function connectLine(a, kind) {
   const line = el("div", "ag-st");
@@ -1064,7 +1085,11 @@ function connectLine(a, kind) {
   line.classList.add("on");
   if (staleNow(a)) {
     if (a.id === "claude") say(t("Connected · new sessions take it"));
-    else say(t("Connected · takes effect once {agent} is reopened", { agent: a.name }), "wait");
+    else {
+      const { text, title } = staleSaid(a);
+      say(text, "wait");
+      if (title) words.title = title;
+    }
     return line;
   }
   const fresh = newModels(a);
