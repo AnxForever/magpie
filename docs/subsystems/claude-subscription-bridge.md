@@ -102,6 +102,40 @@ The run goes on with the conversation as it told it. Its Claude Code still
 holds the context block and the notification. The client's next turn
 brings its own context.
 
+### Images the client took out (#1382)
+
+Hana replaces each image before the last reply with a line of text
+(`[图片已省略：…]`) in the tool result or user message that held it. Over
+Chat Completions, pi-ai sent a tool's images in a user message after the
+results ("Attached image(s) from tool result:" and the images); that
+message is gone, and each result's text has the line added to its end. So
+the step after one that read an image missed the run both ways: its tool
+results failed `follows`, and its next turn failed `turnKey` and
+`looseTurn.rewrote` (the message count changed).
+
+`lostMedia` (`claude_lost_media.go`) tells this rewrite by its shape, not
+by Hana's words. It compares the conversation the run had (kept as each
+part's hash, `heardRuns`) with the request's, a role's messages in a row
+at a time, and takes it when images or files were taken out and nothing
+else changed:
+
+- each image or file is still there, gone, or has text in its place;
+- a tool result has text added to its end only when it carried images, or
+  the images after the results went;
+- the text before those images goes with them only when a result before
+  it had text added;
+- at least one image or file was taken out.
+
+`follows` checks it when the hash misses (`toldRuns`, logged "tool results
+go on in their run, the images before them taken out by the client"), and
+`looseTurn.rewrote` when `cut` doesn't match; the looseTurn key no longer
+has the message count, which `cut` compares itself. The run's Claude Code
+still holds the images; it is told only what came since.
+
+A client that drops the images' message without adding text to a result
+goes on only when that message held images alone, no text. A tool result of an image alone (pi-ai's "(see attached image)")
+whose text is replaced by the line is not this shape, and starts anew.
+
 ## Files a run leaves
 
 - Its session: `<config>/projects/<work project>/<session>.jsonl`, for
@@ -160,9 +194,10 @@ carries none.
 ## Verification
 
 ```sh
-go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|LostMedia|ImagesTakenOut|RunLetGoWhenTheClientRewrote|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each
-rule that keeps another conversation out. `claude_resume_test.go`'s harness
+rule that keeps another conversation out; `claude_lost_media_test.go` does
+the same for images taken out, from Hana's request bodies. `claude_resume_test.go`'s harness
 stands in for Claude Code with a script that keeps sessions as it does.

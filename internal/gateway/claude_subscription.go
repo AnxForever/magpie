@@ -202,8 +202,10 @@ type subscriptionRun struct {
 
 	// told is the conversation as the client had it in its last request
 	// here (historyKey): tool results are the run's while the client's
-	// conversation goes on from that one.
-	told string
+	// conversation goes on from that one. toldRuns is it as lostMedia
+	// compares it, for a client that took its images out since (#1382).
+	told     string
+	toldRuns []heardRun
 
 	// An agent whose stream does not carry its tool calls in full (Cursor)
 	// learns of them here, as the MCP helper hands each one over, and opens
@@ -869,6 +871,9 @@ func nextTurn(req *Request, owner string) (string, []Message) {
 type looseTurn struct {
 	key  string
 	turn []turnWords
+	// runs is the turn as lostMedia compares it (#1382): sealed as a run
+	// keeps it, with its words as a request has it
+	runs []heardRun
 }
 
 // turnWords is a message of a turn as hashMessages reads it: its role,
@@ -878,8 +883,11 @@ type turnWords struct {
 	tools       bool
 }
 
-// newLooseTurn is msgs, which end with a reply, as looseTurn keeps them.
-func newLooseTurn(owner string, req *Request, msgs []Message) *looseTurn {
+// newLooseTurn is msgs, which end with a reply, as looseTurn keeps them
+// (sealed) or a request has them. The message count isn't in the key:
+// rewrote compares the turn's, which a client that took the images out of
+// it changed (lostMedia), and the earlier turns' are in their hash.
+func newLooseTurn(owner string, req *Request, msgs []Message, sealed bool) *looseTurn {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -891,9 +899,9 @@ func newLooseTurn(owner string, req *Request, msgs []Message) *looseTurn {
 		}
 	}
 	h := sha256.New()
-	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, req.WebSearch, req.Format.schema(), len(msgs), start)
+	fmt.Fprintf(h, "%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%t\x00%s\x00%d", owner, req.Model, req.Effort != "", req.ThinkOff, req.ToolChoice, req.System, req.WebSearch, req.Format.schema(), start)
 	hashMessages(h, msgs[:start], nil)
-	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil))}
+	l := &looseTurn{key: hex.EncodeToString(h.Sum(nil)), runs: heardRuns(msgs[start:], sealed)}
 	words := messageWords(msgs)
 	for i := start; i < len(msgs); i++ {
 		tools := false
@@ -905,11 +913,20 @@ func newLooseTurn(owner string, req *Request, msgs []Message) *looseTurn {
 	return l
 }
 
-// rewrote says turn is the one l kept as a client sends it back: the
-// same messages, calls and results, a user's message no more than cut (a
-// part of it taken out, but not all), and the reply's start (its end taken
-// out, but not all of it).
-func (l *looseTurn) rewrote(turn []turnWords) bool {
+// rewrote says now's turn is the one l kept as a client sends it back:
+// the same messages, calls and results, a user's message no more than cut
+// (a part of it taken out, but not all), and the reply's start (its end
+// taken out, but not all of it); or the same turn with images taken out
+// of it, and only those (lostMedia, #1382).
+func (l *looseTurn) rewrote(now *looseTurn) bool {
+	if l.cut(now.turn) {
+		return true
+	}
+	return len(now.runs) == len(l.runs) && lostMedia(l.runs, now.runs)
+}
+
+// cut is rewrote for a client that cut a user's message or the reply.
+func (l *looseTurn) cut(turn []turnWords) bool {
 	if len(turn) != len(l.turn) {
 		return false
 	}
@@ -955,7 +972,7 @@ func (b *subscriptionBridge) rewritten(req *Request, owner string) (*subscriptio
 	if key == "" {
 		return nil, nil
 	}
-	l := newLooseTurn(owner, req, req.Messages[:len(req.Messages)-len(since)])
+	l := newLooseTurn(owner, req, req.Messages[:len(req.Messages)-len(since)], false)
 	if l == nil {
 		return nil, nil
 	}
@@ -963,12 +980,12 @@ func (b *subscriptionBridge) rewritten(req *Request, owner string) (*subscriptio
 	var saved *savedSession
 	found := 0
 	for _, r := range b.idle {
-		if r.owner == owner && r.loose != nil && r.loose.key == l.key && r.loose.rewrote(l.turn) {
+		if r.owner == owner && r.loose != nil && r.loose.key == l.key && r.loose.rewrote(l) {
 			run, found = r, found+1
 		}
 	}
 	for _, s := range b.shelf {
-		if s.owner == owner && s.loose != nil && s.loose.key == l.key && s.loose.rewrote(l.turn) {
+		if s.owner == owner && s.loose != nil && s.loose.key == l.key && s.loose.rewrote(l) {
 			saved, found = s, found+1
 		}
 	}
@@ -1091,7 +1108,7 @@ func (r *subscriptionRun) ended(req *Request, said, stop string, ok bool) {
 	if keys := conversationKeys(r.owner, msgs); len(keys) > 0 {
 		conv = keys[len(keys)-1]
 	}
-	loose := newLooseTurn(r.owner, req, msgs)
+	loose := newLooseTurn(r.owner, req, msgs, true)
 	r.bridge.mu.Lock()
 	r.loose = loose
 	r.bridge.mu.Unlock()
@@ -1589,9 +1606,9 @@ func historyKey(msgs []Message) string {
 
 // heard keeps the conversation of the request the run now answers.
 func (r *subscriptionRun) heard(msgs []Message) {
-	key := historyKey(msgs)
+	key, runs := historyKey(msgs), heardRuns(msgs, true)
 	r.mu.Lock()
-	r.told = key
+	r.told, r.toldRuns = key, runs
 	r.mu.Unlock()
 }
 
@@ -1599,9 +1616,11 @@ func (r *subscriptionRun) heard(msgs []Message) {
 // one whole, then the reply and what came since. A client that rewrote it
 // meanwhile — Pi compacting between a tool call and its result, a rewind —
 // sends another, while the run's agent still holds the one it was told.
+// One whose client only took the images out of it (lostMedia, #1382) goes
+// on: the run's agent holds them, and nothing else changed.
 func (r *subscriptionRun) follows(msgs []Message) bool {
 	r.mu.Lock()
-	told := r.told
+	told, runs := r.told, r.toldRuns
 	r.mu.Unlock()
 	if told == "" {
 		return true // a run made in a test may have heard none
@@ -1611,6 +1630,10 @@ func (r *subscriptionRun) follows(msgs []Message) bool {
 	hashMessages(h, msgs, func(int) {
 		found = found || hex.EncodeToString(h.Sum(nil)) == told
 	})
+	if !found && runs != nil && lostMedia(runs, heardRuns(msgs, false)) {
+		log.Printf("claude: tool results go on in their run, the images before them taken out by the client")
+		return true
+	}
 	return found
 }
 
@@ -1640,30 +1663,12 @@ func hashMessages(h hash.Hash, msgs []Message, after func(i int)) {
 // hashMessages reads them.
 func messageWords(msgs []Message) []string {
 	out := make([]string, len(msgs))
-	n, calls := 0, map[string]int{} // a call's id → its place
-	for i, m := range msgs {
-		var b strings.Builder
-		for _, p := range m.Parts {
-			switch p.Kind {
-			case Text:
-				b.WriteString(p.Text + " ")
-			case ToolCall:
-				n++
-				calls[p.ID] = n
-				fmt.Fprintf(&b, "\x01call %s #%d ", p.Name, n)
-			case ToolResult:
-				k := "?"
-				if n, ok := calls[p.CallID]; ok {
-					k = fmt.Sprint(n)
-				}
-				fmt.Fprintf(&b, "\x01result #%s %s ", k, p.Text)
-			case File:
-				fmt.Fprintf(&b, "\x01file %s %d %s ", p.MediaType, len(p.Data), p.URL)
-			case Image:
-				fmt.Fprintf(&b, "\x01image %d %s ", len(p.Data), p.URL)
-			}
+	for i, parts := range messageParts(msgs) {
+		words := make([]string, len(parts))
+		for k, p := range parts {
+			words[k] = p.words
 		}
-		out[i] = strings.Join(strings.Fields(b.String()), " ")
+		out[i] = strings.Join(words, " ")
 	}
 	return out
 }
