@@ -42,6 +42,9 @@ type aBlock struct {
 	Signature string `json:"signature,omitempty"`
 	// a prompt-cache breakpoint: the prompt up to here is cached
 	CacheControl map[string]string `json:"cache_control,omitempty"`
+	// sealed: a redacted_thinking block as Anthropic wrote it, which goes
+	// back as it came (Part.Sealed, #1445)
+	sealed json.RawMessage
 }
 
 // MarshalJSON writes a thinking block's text even when it is empty.
@@ -51,6 +54,9 @@ type aBlock struct {
 // other block keeps its omitempty fields.
 func (b aBlock) MarshalJSON() ([]byte, error) {
 	type plain aBlock
+	if len(b.sealed) > 0 {
+		return b.sealed, nil
+	}
 	if b.Type != "thinking" {
 		return json.Marshal(plain(b))
 	}
@@ -131,7 +137,8 @@ func parseAnthropic(body []byte) (*Request, error) {
 			if err := json.Unmarshal(m.Content, &blocks); err != nil {
 				return nil, fmt.Errorf("invalid message content: %v", err)
 			}
-			for _, b := range blocks {
+			var raws []json.RawMessage // each block as the client sent it
+			for i, b := range blocks {
 				switch b.Type {
 				case "text":
 					msg.Parts = append(msg.Parts, Part{Kind: Text, Text: b.Text})
@@ -146,6 +153,16 @@ func parseAnthropic(body []byte) (*Request, error) {
 					msg.Parts = append(msg.Parts, Part{Kind: ToolResult, CallID: anthropicInID(b.ToolUseID), Text: out, Images: images, IsError: b.IsError})
 				case "thinking":
 					msg.Parts = append(msg.Parts, Part{Kind: Thinking, Text: b.Thinking, Signature: b.Signature})
+				case "redacted_thinking":
+					// Claude's reasoning its safety systems sealed: it
+					// goes back to Messages whole, and is nothing to
+					// another API (#1445)
+					if raws == nil {
+						_ = json.Unmarshal(m.Content, &raws)
+					}
+					if i < len(raws) {
+						msg.Parts = append(msg.Parts, Part{Kind: Thinking, Sealed: raws[i], SealedBy: sealAnthropic})
+					}
 				}
 			}
 		}
@@ -652,7 +669,9 @@ func buildAnthropic(r *Request, model string) []byte {
 				}
 				results = append(results, aBlock{Type: "tool_result", ToolUseID: p.CallID, Content: c, IsError: p.IsError})
 			case Thinking:
-				if p.Signature != "" {
+				if p.sealedBy(sealAnthropic) {
+					rest = append(rest, aBlock{Type: "redacted_thinking", sealed: p.Sealed})
+				} else if p.Signature != "" {
 					rest = append(rest, aBlock{Type: "thinking", Thinking: p.Text, Signature: p.Signature})
 				}
 			}
@@ -672,7 +691,7 @@ func buildAnthropic(r *Request, model string) []byte {
 	if n := len(msgs); n > 0 {
 		c := msgs[n-1].Content
 		for i := len(c) - 1; i >= 0; i-- {
-			if c[i].Type != "thinking" {
+			if c[i].Type != "thinking" && c[i].Type != "redacted_thinking" {
 				c[i].CacheControl = ephemeral
 				break
 			}
@@ -847,6 +866,9 @@ func decodeAnthropic(data string, emit func(Event)) error {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 			Text string `json:"text"`
+			// thinking
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
 		} `json:"content_block"`
 		Delta struct {
 			Type        string `json:"type"`
@@ -877,6 +899,24 @@ func decodeAnthropic(data string, emit func(Event)) error {
 		case "text":
 			if ev.ContentBlock.Text != "" {
 				emit(Event{Kind: KText, Text: ev.ContentBlock.Text})
+			}
+		case "thinking":
+			// a block of its own, even signed with no text in it, or
+			// right after another (#1445)
+			emit(Event{Kind: KThinkStart})
+			if ev.ContentBlock.Thinking != "" {
+				emit(Event{Kind: KThink, Text: ev.ContentBlock.Thinking})
+			}
+			if ev.ContentBlock.Signature != "" {
+				emit(Event{Kind: KSig, Text: ev.ContentBlock.Signature})
+			}
+		case "redacted_thinking":
+			// sealed whole: it goes on as it came, to Messages only
+			var whole struct {
+				Block json.RawMessage `json:"content_block"`
+			}
+			if json.Unmarshal([]byte(data), &whole) == nil && len(whole.Block) > 0 {
+				emit(Event{Kind: KSealed, Name: sealAnthropic, Text: string(whole.Block)})
 			}
 		}
 	case "content_block_delta":
@@ -973,12 +1013,15 @@ func stopToAnthropic(s string) string {
 
 // anthropicEncoder writes events as an Anthropic event stream.
 type anthropicEncoder struct {
-	id      string
-	w       *sseWriter
-	model   string
-	index   int
-	open    Kind // kind of the open content block, "" when none
-	args    bool // the open tool block got arguments
+	id    string
+	w     *sseWriter
+	model string
+	index int
+	open  Kind // kind of the open content block, "" when none
+	args  bool // the open tool block got arguments
+	// fresh: a thinking block began upstream (KThinkStart), to be opened
+	// apart from the one open with what it says first
+	fresh   bool
 	started bool
 	col     collector
 }
@@ -1077,10 +1120,20 @@ func (e *anthropicEncoder) openBlock(k Kind, block map[string]any) {
 		return
 	}
 	e.close()
-	e.args = false
+	e.args, e.fresh = false, false
 	block["type"] = map[Kind]string{Text: "text", Thinking: "thinking", ToolCall: "tool_use"}[k]
 	e.w.event("content_block_start", map[string]any{"type": "content_block_start", "index": e.index, "content_block": block})
 	e.open = k
+}
+
+// thinking makes the open block a thinking block: the one open, unless a
+// new one has begun since (KThinkStart).
+func (e *anthropicEncoder) thinking() {
+	if e.fresh {
+		e.close()
+		e.fresh = false
+	}
+	e.openBlock(Thinking, map[string]any{"thinking": ""})
 }
 
 func (e *anthropicEncoder) delta(d map[string]any) {
@@ -1100,15 +1153,31 @@ func (e *anthropicEncoder) event(ev Event) {
 		}
 		e.openBlock(Text, map[string]any{"text": ""})
 		e.delta(map[string]any{"type": "text_delta", "text": ev.Text})
+	case KThinkStart:
+		// opened with what it says first: one that says nothing isn't
+		e.fresh = true
+		e.col.add(ev)
+		return
 	case KThink:
 		if ev.Text == "" {
 			return
 		}
-		e.openBlock(Thinking, map[string]any{"thinking": ""})
+		e.thinking()
 		e.delta(map[string]any{"type": "thinking_delta", "thinking": ev.Text})
 	case KSig:
-		if e.open == Thinking {
+		// a block signed with no text goes as it came, signed (#1445)
+		if e.open == Thinking || e.fresh {
+			e.thinking()
 			e.delta(map[string]any{"type": "signature_delta", "signature": ev.Text})
+		}
+	case KSealed:
+		if ev.Name == sealAnthropic {
+			// a redacted_thinking block, whole as Anthropic wrote it
+			e.close()
+			e.fresh = false
+			e.w.event("content_block_start", map[string]any{"type": "content_block_start", "index": e.index, "content_block": json.RawMessage(ev.Text)})
+			e.w.event("content_block_stop", map[string]any{"type": "content_block_stop", "index": e.index})
+			e.index++
 		}
 	case KToolStart:
 		id := ev.ID
@@ -1171,13 +1240,23 @@ func (e *anthropicEncoder) finish() {
 
 // renderAnthropic is the non-streaming reply.
 func renderAnthropic(res Result, model string) []byte {
-	content := []map[string]any{}
+	content := []any{}
 	for _, p := range res.Parts {
 		switch p.Kind {
 		case Text:
+			if p.Text == "" && p.Signature != "" {
+				continue // only Gemini's signature, which is Gemini's
+			}
 			content = append(content, map[string]any{"type": "text", "text": p.Text})
 		case Thinking:
-			content = append(content, map[string]any{"type": "thinking", "thinking": p.Text, "signature": p.Signature})
+			switch {
+			case p.sealedBy(sealAnthropic):
+				content = append(content, p.Sealed)
+			case p.Text == "" && p.Signature == "":
+				// another API's sealed reasoning, nothing to Messages
+			default:
+				content = append(content, map[string]any{"type": "thinking", "thinking": p.Text, "signature": p.Signature})
+			}
 		case ToolCall:
 			id := p.ID
 			if id == "" {

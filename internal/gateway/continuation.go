@@ -195,7 +195,7 @@ func (c *continuation) request(orig *Request) *Request {
 func (c *continuation) emit(enc streamEncoder, ev Event) {
 	if c.resume {
 		switch ev.Kind {
-		case KThink, KSig:
+		case KThink, KSig, KThinkStart, KSealed:
 			return
 		case KText:
 			if ev.Text = c.unecho(ev.Text); ev.Text == "" {

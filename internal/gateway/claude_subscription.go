@@ -2105,11 +2105,23 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				unstreamed, blocks = whole.ID, 0
 			}
 			unstreamedStop = whole.StopReason
-			for _, c := range whole.Content {
+			var raws struct {
+				Content []json.RawMessage `json:"content"`
+			}
+			for i, c := range whole.Content {
 				index := blocks
 				blocks++
 				switch c.Type {
+				case "redacted_thinking":
+					// sealed whole, as Anthropic wrote it (#1445)
+					if raws.Content == nil {
+						_ = json.Unmarshal(envelope.Message, &raws)
+					}
+					if i < len(raws.Content) {
+						r.emit(Event{Kind: KSealed, Name: sealAnthropic, Text: string(raws.Content[i])})
+					}
 				case "thinking":
+					r.emit(Event{Kind: KThinkStart})
 					if c.Thinking != "" {
 						r.emit(Event{Kind: KThink, Text: c.Thinking})
 					}
@@ -2173,6 +2185,18 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 				}
 			case "text":
 				text(e.ContentBlock.Text)
+			case "thinking":
+				// a block of its own, signed with no text or not (#1445)
+				r.emit(Event{Kind: KThinkStart})
+			case "redacted_thinking":
+				var raw struct {
+					Event struct {
+						Block json.RawMessage `json:"content_block"`
+					} `json:"event"`
+				}
+				if json.Unmarshal(b, &raw) == nil && len(raw.Event.Block) > 0 {
+					r.emit(Event{Kind: KSealed, Name: sealAnthropic, Text: string(raw.Event.Block)})
+				}
 			}
 		case "content_block_delta":
 			switch e.Delta.Type {
