@@ -18610,7 +18610,7 @@ async function renderSync(v) {
     const hostOf = (u) => { try { return new URL(u).host; } catch { return u; } };
     // a bucket is named by its address, and the server it is on unless AWS
     const host = s3 ? [v.url, v.endpoint && hostOf(v.endpoint.includes("://") ? v.endpoint : "https://" + v.endpoint)].filter(Boolean).join(" · ") : hostOf(v.url);
-    status = v.error ? t("Couldn't sync: {error}", { error: v.error })
+    status = v.error ? t("Couldn't sync: {error}", { error: v.serverFile ? serverFileSaid(v.serverFile) : v.error })
       : v.last ? t("Synced {when} · {host}", { when: syncWhen(v.last), host }) : t("Not synced yet · {host}", { host });
     // the other kind's server, kept from before sync moved here
     if (v.other) status += " · " + t("{kind} settings kept", { kind: v.other.kind === "s3" ? "S3" : "WebDAV" });
@@ -18620,11 +18620,19 @@ async function renderSync(v) {
     ? [btn(t("Sync now"), async (e) => { e.target.classList.add("busy"); renderSync(await api("davsync/now", {}).catch((x) => ({ ...v, error: x.message }))); }),
        btn(t(syncOpen === "dav" ? "Close" : "Edit"), toggle("dav"))]
     : [btn(t(syncOpen === "dav" ? "Close" : "Set up"), toggle("dav"))]));
-  if (v.error) sub.classList.add("bad");
+  // a failure is shown whole: what the server sent and what to do don't
+  // fit one line
+  if (v.error) sub.classList.add("bad", "wraps");
   // usage that couldn't be shared is a line of its own, in red: beside
   // "Synced" in the same grey it read as part of a sync that went fine
   // (#1259)
   if (v.on && !v.error && v.usageError) sub.after(el("div", "sub bad wraps sync-usage-err", t("Couldn't share usage: {error}", { error: v.usageError })));
+  // the server's file isn't a backup a sync can read, and is a file: this
+  // computer's setup can go up in its place, the user choosing it
+  if (v.on && v.error && v.serverFile?.replace) {
+    row(t("Upload this computer's setup"), t("It replaces the file on the server. That file is kept in the sync folder first."),
+      btn(t("Upload…"), () => askUpload(v.serverFile)));
+  }
   if (v.notice) {
     const n = v.notice, r = el("div", "row pref sync-note");
     const lines = [];
@@ -18690,6 +18698,63 @@ function askRestore(v, parts) {
       if (r.error) return;
       if (r.brought?.length) refreshAfterSync();
       else status(t("This computer's setup is already the server's: nothing to restore"), "ok");
+    } catch (x) {
+      go.disabled = false;
+      go.classList.remove("busy");
+      err.textContent = x.message;
+    }
+  };
+  const cancel = el("button", "text", t("Cancel"));
+  cancel.onclick = (e) => { e.stopPropagation(); closeConfirmAsk(); };
+  bar.append(el("span", "grow"), cancel, go);
+  ed.append(bar);
+  confirmAsk = ed;
+  openModal(ed);
+  $("#modal").classList.add("lib");
+  cancel.focus({ preventScroll: true });
+}
+
+// serverFileSaid: what the server holds where the backup should be, in the
+// reader's language, from what davsync told of it (never its contents).
+function serverFileSaid(f) {
+  const size = fmtBytes(f.size || 0);
+  switch (f.what) {
+    case "empty": return t("the file on the server is empty (0 bytes)");
+    case "cut": return t("the file on the server is a magpie backup cut short ({size}): a write to it was interrupted", { size });
+    case "page": {
+      let s = f.title ? t("the server answered with a web page (“{title}”) instead of the file", { title: f.title }) : t("the server answered with a web page instead of the file");
+      if (f.moved) s += t(", after a redirect to {where}", { where: f.moved });
+      return s + t(": check the address is the server's WebDAV address, not its website");
+    }
+    case "xml": return t("the server answered with an XML document instead of the file: check the address is the server's WebDAV address");
+    case "format": return t("the file on the server is another app's (“{format}”), not a magpie backup", { format: f.format });
+    case "json": return t("the file on the server is a JSON file that isn't a magpie backup ({size})", { size });
+  }
+  return t("the file on the server isn't a magpie backup: it is {type} ({size})", { type: f.type || "?", size });
+}
+
+// askUpload asks before this computer's setup replaces a server file that
+// isn't a backup; the server's file is kept in the sync folder first.
+function askUpload(f) {
+  const ed = el("div", "editor restore-ask upload-ask");
+  const head = el("div", "ehead");
+  head.append(el("b", "", t("Replace the file on the server?")));
+  ed.append(head);
+  ed.append(el("p", "lib-confirm", t("This computer's setup goes up in place of the file on the server, and your other computers sync with it from then on.")));
+  if (f.what === "cut") ed.append(el("p", "lib-confirm", t("What another computer wrote into that file and has nowhere else is lost. If one of them synced it last, Sync now there may rebuild it instead.")));
+  ed.append(el("p", "lib-confirm", t("The file on the server is kept in the sync folder first.")));
+  const err = el("p", "editor-error", "");
+  ed.append(err);
+  const bar = el("div", "bar");
+  const go = el("button", "text primary danger-fill", t("Upload this computer's setup"));
+  go.onclick = async (e) => {
+    e.stopPropagation();
+    go.disabled = true;
+    go.classList.add("busy");
+    try {
+      const r = await api("davsync/upload", {});
+      closeConfirmAsk();
+      renderSync(r);
     } catch (x) {
       go.disabled = false;
       go.classList.remove("busy");
