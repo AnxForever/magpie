@@ -3145,6 +3145,7 @@ async function load(again) {
     tintPanel();
     tintTitleBar();
     renderAgents();
+    redrawSuffix();
     // Update all's outcome stays until the agents are read again
     if (cliAll && cliAll.done >= cliAll.n) cliAll = null;
     paintUpdateAll(true);
@@ -18166,7 +18167,8 @@ async function loadSettings() {
   if (window.bootPrefs?.omarchy && !barIcon) api("omarchy/widget").then((b) => { barIcon = b; renderBarIcon(); }).catch(() => {});
   const s = await api("settings");
   if (!prefsSettled(since) && prefs) return; // the save draws the page when it's in
-  prefs = s;
+  // the state's copy too, which the other pages draw from (#1433)
+  prefs = state.settings = s;
   // the WebDAV setup can have been changed from outside the window (magpie
   // webdav at the terminal): the page's copy of it is dropped, so the page
   // is drawn from a fresh read. Coming back to the window is safe with a
@@ -19109,13 +19111,33 @@ const IN_USE = "|*";
 // narrow menu cut "· routing group" short, and the setting wasn't found;
 // in one group's editor it read as that group's, PAMI on Discord);
 // drawn(mode) redraws the place it was picked in.
-function suffixMode(s = prefs || {}) { return s.plainNames ? "off" : s.plainOwnNames ? "own" : "on"; }
+// The mode is read from the state's settings, which startup reads before
+// any page is drawn, not from Settings' own read, which only opening
+// Settings makes: Routing and the provider editor said On over a saved Off
+// until Settings had been opened (#1433, ObsidianArch02).
+function suffixMode(s = state.settings || {}) { return s.plainNames ? "off" : s.plainOwnNames ? "own" : "on"; }
 function suffixSegs(drawn) {
-  const seg = segs([["off", t("Off")], ["own", t("Not on names I set")], ["on", t("On")]], suffixMode(), (v) =>
-    writingPrefs(api("settings/plain-names", { mode: v })).then((ns) => { prefs = ns; renderSettings(); drawn?.(v); })
+  const mode = suffixMode();
+  const seg = segs([["off", t("Off")], ["own", t("Not on names I set")], ["on", t("On")]], mode, (v) =>
+    writingPrefs(api("settings/plain-names", { mode: v })).then((ns) => { prefs = state.settings = ns; seg.dataset.mode = v; renderSettings(); drawn?.(v); })
       .catch((e) => { status(t(e.message), "err"); renderSettings(); drawn?.(suffixMode()); }));
   seg.classList.add("suffix-segs");
+  seg.dataset.mode = mode;
+  seg.drawnAgain = drawn;
   return seg;
+}
+// redrawSuffix draws each suffix choice in the page again when the
+// settings that came in say another mode than it was drawn with: a page
+// drawn before the state's first read (Routing's groups can come back
+// first) showed the default, On (#1433).
+function redrawSuffix() {
+  const mode = suffixMode();
+  for (const seg of document.querySelectorAll(".suffix-segs")) {
+    if (seg.dataset.mode === mode) continue;
+    const drawn = seg.drawnAgain;
+    seg.replaceWith(suffixSegs(drawn));
+    drawn?.(mode);
+  }
 }
 // suffixed: what an agent's list calls a model named name, by its
 // provider's or group's name by, under mode; own when the user gave it
