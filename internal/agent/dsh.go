@@ -1490,9 +1490,31 @@ func dshWiredOnce() string {
 		// of garbage a minute in a magpie at rest
 		return ""
 	}
-	files = append(files, dshHomePatch(dir)) // left as it is without magpie's route
 	var trouble []string
 	models := magpieModels("dsh")
+	// a profile dsh has just made — the desktop app's, opened for the first
+	// time while magpie runs — is its empty template: given magpie's route
+	// and start as the catalog sync would, rather than left listing dsh's
+	// own models alone until magpie's next start (star on Discord). One with
+	// entries of its own and no route is the user's, left to Reapply.
+	fill := []string{}
+	fresh := false
+	for _, f := range files {
+		_, items, err := dshRead(f)
+		switch {
+		case err != nil:
+		case len(items) == 0:
+			fill, fresh = append(fill, f), true
+		case dshWired(items):
+			fill = append(fill, f)
+		}
+	}
+	if fresh {
+		if err := dshFillNewProfiles(fill, models, gateway.URL()); err != nil {
+			trouble = append(trouble, "giving dsh's new profile magpie's route: "+dshWriteError(err))
+		}
+	}
+	files = append(files, dshHomePatch(dir)) // left as it is without magpie's route
 	for _, f := range files {
 		written, err := dshRouteAgain(f, models, gateway.URL())
 		if err != nil {
