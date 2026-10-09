@@ -12446,7 +12446,12 @@ function renderMove(p) {
     say("");
     b.textContent = onPlugin ? t("Moving back…") : t("Installing the plugin and checking each account…");
     try {
-      providers = await api("provider/" + (onPlugin ? "moveback" : "move"), { id: p.id });
+      // the models as the editor shows them picked, when changed and not
+      // saved: the reason a move fails says to untick one there (noting_ever)
+      const picks = !onPlugin && draft && editing === p.id ? chosenIds() : null;
+      const was = pickedOf(p);
+      const changed = picks && (picks.length !== was.length || picks.some((id) => !was.includes(id)));
+      providers = await api("provider/" + (onPlugin ? "moveback" : "move"), changed ? { id: p.id, models: picks } : { id: p.id });
       draft = null; // the provider changed under it
       renderProviders(); // the editor stays open, turned over, where it was
       const now = providers.providers.find((x) => x.id === p.id);

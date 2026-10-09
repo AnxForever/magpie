@@ -945,7 +945,19 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				return
 			}
 		case "move":
-			// a built-in subscription's accounts onto its community plugin
+			// a built-in subscription's accounts onto its community plugin,
+			// with the models the editor has picked kept first: a failed
+			// move says to untick one the plugin doesn't serve, and the
+			// editor's Try again is pressed with it unticked but not saved
+			// (noting_ever on X: deep-model unticked, and the move failed
+			// on it all the same)
+			if in.Models != nil {
+				var err error
+				if moved, err = agent.Reseat(func() error { return provider.SetModels(in.ID, in.Models) }); err != nil {
+					fail(rw, err)
+					return
+				}
+			}
 			ctx, cancel := moveContext(r)
 			defer cancel()
 			if err := moveProvider(ctx, in.ID); err != nil {
