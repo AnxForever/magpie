@@ -173,7 +173,12 @@ func codexIn(at place) *Agent {
 			// model is never given the tool, so a Codex on magpie can't draw
 			// (the request that names model/draws never happens at all).
 			// uses_openai_actor_authorization() is exactly this check.
-			edit.KV{Path: "http_headers", Value: edit.Raw(`{ "x-openai-actor-authorization" = "magpie" }`)},
+			// An Inline table: a config that holds the headers as their own
+			// [model_providers.magpie.http_headers] table, or as dotted keys,
+			// gets the header set there, the user's others kept; written
+			// inline beside that table it defined http_headers twice and
+			// every model switch failed (wztlink1013 on Discord).
+			edit.KV{Path: "http_headers", Value: edit.Inline{{Path: "x-openai-actor-authorization", Value: "magpie"}}},
 		)
 	}
 	hasProvider := func() bool {
