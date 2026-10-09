@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/codexcat"
@@ -1209,6 +1211,73 @@ func withoutBareReasoning(body []byte) []byte {
 			Enc  string `json:"encrypted_content"`
 		}
 		if json.Unmarshal(it, &t) == nil && t.Type == "reasoning" && t.Enc == "" {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	if len(kept) == len(items) {
+		return body
+	}
+	q["input"], _ = json.Marshal(kept)
+	b, err := json.Marshal(q)
+	if err != nil {
+		return body
+	}
+	return b
+}
+
+// reasoningTextRefused is how unfit remembers a provider turning away, for
+// model, reasoning items with their text in them (withoutReasoningText).
+func reasoningTextRefused(model string) string { return "reasoning text\x00" + model }
+
+// reasoningContentRefusal is OpenAI's refusal of a reasoning item with its
+// text in it, naming the item: "Invalid 'input[1].content': array too
+// long. Expected an array with maximum length 0, but got an array with
+// length 1 instead." (the ChatGPT backend's; a relay's may word the rest
+// otherwise, #1411)
+var reasoningContentRefusal = regexp.MustCompile(`input\[(\d+)\]\.content'?:? array too long`)
+
+// refusesReasoningText is a 400 refusing the reasoning text in a Responses
+// request: the item the refusal names is reasoning with text in it.
+func refusesReasoningText(status int, b, body []byte) bool {
+	if !badRequest(status) {
+		return false
+	}
+	m := reasoningContentRefusal.FindSubmatch(b)
+	if m == nil {
+		return false
+	}
+	it := gjson.GetBytes(body, "input."+string(m[1]))
+	return it.Get("type").String() == "reasoning" && len(it.Get("content").Array()) > 0
+}
+
+// withoutReasoningText is a Responses request without the reasoning items
+// that carry their text (content parts), as another vendor's model wrote
+// them: DeepSeek's, which a routing group handed Codex with its own
+// encrypted_content beside the text. OpenAI's API, the ChatGPT backend and
+// a relay in front of them take a reasoning item's content only empty, and
+// turn the whole request away over one (#1411); its seal is no more theirs
+// than its text, so the item goes, as codexInput leaves it out for one of
+// Codex's own models.
+func withoutReasoningText(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"reasoning"`)) {
+		return body
+	}
+	var q map[string]json.RawMessage
+	if json.Unmarshal(body, &q) != nil {
+		return body
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(q["input"], &items) != nil {
+		return body
+	}
+	kept := items[:0:0]
+	for _, it := range items {
+		var t struct {
+			Type    string            `json:"type"`
+			Content []json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(it, &t) == nil && t.Type == "reasoning" && len(t.Content) > 0 {
 			continue
 		}
 		kept = append(kept, it)

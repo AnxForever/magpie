@@ -2980,11 +2980,20 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// its reasoning goes back as text, never left out: DeepSeek
 			// refuses a request without it (#1104)
 			body = withReasoningText(body)
-		} else if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() || !s.fits(p.ID, bareReasoningRefused(model), proto) {
-			// reasoning magpie gave Codex, an id with nothing sealed in
-			// it, which they'd look up and not find (#1008), nor does an
-			// upstream that has turned it away before (#1044)
-			body = withoutBareReasoning(body)
+		} else {
+			if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() || !s.fits(p.ID, bareReasoningRefused(model), proto) {
+				// reasoning magpie gave Codex, an id with nothing sealed in
+				// it, which they'd look up and not find (#1008), nor does an
+				// upstream that has turned it away before (#1044)
+				body = withoutBareReasoning(body)
+			}
+			if strings.HasSuffix(p.Host(), "openai.com") || p.IsAzure() || p.Account != nil && p.Account.Agent == "codex" || !s.fits(p.ID, reasoningTextRefused(model), proto) {
+				// another vendor's reasoning with its text in it (a
+				// routing group's DeepSeek turn), which OpenAI and the
+				// ChatGPT backend take only empty, nor does an upstream
+				// that has turned it away before (#1411)
+				body = withoutReasoningText(body)
+			}
 		}
 		// Relays enforce OpenAI's item ID prefixes too, including during
 		// compaction. call_id stays unchanged so tool outputs remain paired.
@@ -3097,6 +3106,20 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// (#1271): asked once more with them folded to an object
 			if nb, changed := objectRootsBody(proto, body); changed {
 				refused = append(refused, rootUnionRefused(model))
+				body = nb
+				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+				}
+				continue
+			}
+		}
+		if len(fs) == 0 && len(ms) == 0 && proto == provider.Responses && !replay && refusesReasoningText(res.StatusCode, b, body) {
+			// and reasoning with its text in it, which a relay in front
+			// of OpenAI turns away as OpenAI does ("Invalid
+			// 'input[n].content': array too long", #1411): asked once
+			// more without it, and not sent it again
+			if nb := withoutReasoningText(body); !bytes.Equal(nb, body) {
+				refused = append(refused, reasoningTextRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
 					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
