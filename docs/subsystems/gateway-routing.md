@@ -92,6 +92,17 @@ them. Decision, retrieval and media requests set magpie's User-Agent at
 their own call sites, so the remote accepts their attribution. Vendors
 receive no caller labels.
 
+A custom provider (no account, no preset plan's videos) makes videos the
+same OpenAI way (#1446, `customVideomakers`), but only with the models its
+own fetched list marks `"kind": "video"` (`catalog.LiveVideomakers`); a
+name alone never makes a model a video maker. Start, poll and content go to
+`videoBase` (its Chat base, else its Responses base) `+ /videos`, with the
+vendor's own User-Agent and no caller headers. Its ids end with the key's
+fingerprint (`customVideoID`, `markedKey`), so a poll and its download go
+on the key that started the video. A gateway key's account and model holds
+apply to all three routes (`videoAsker`, `videoModelHeld`), and to Grok's
+and Volcengine's polls and downloads as well.
+
 ## Verification
 
 ```sh
