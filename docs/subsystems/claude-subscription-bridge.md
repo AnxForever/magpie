@@ -27,7 +27,15 @@ cache.
 2. `subscriptionBridge.unshelve`: the saved session of a run let go past
    `idleMost` (`b.shelf`, at most `shelfMost`), which a new Claude Code
    starts from with `--resume`, told the turn's messages alone.
-3. `retire`, then a new run told the whole conversation.
+3. `retire`, then a new run told the whole conversation. When it has
+   replies in it, the turns already answered are wrapped in
+   `<conversation_history>`, with a note that the images and files in them
+   were sent with those messages, and the turn to answer (from the message
+   after the last reply that calls no tool, `historyEnd`) in
+   `<current_turn>` (#1365). Told as one stretch of Human:/Assistant: text,
+   earlier images read as just sent. A first turn, or messages with no
+   reply among them, are told as before. `start` logs "a new Claude Code
+   is told the whole conversation" with the message and image counts.
 
 ## A turn the client gives up on (`letGo`, #780, #1365)
 
@@ -152,7 +160,7 @@ carries none.
 ## Verification
 
 ```sh
-go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn' -count=1
+go test -tags nogui ./internal/gateway/ -run 'ClaudeRewritten|ClaudeSessionTempFiles|ClaudeLetGo|ClaudeSessionFiles|ClaudeOldSessions|ClaudeSubscriptionReplySaysTheAllowance|ClaudeAllowanceHeaders|ClaudeForksAnsweringTheLeadsCalls|ClaudeTurnGivenUpOn|ClaudeToolResultsGivenUpOn|ClaudePromptMarksEarlierTurns' -count=1
 ```
 
 `claude_rewritten_test.go` has a case for each relaxation and one for each

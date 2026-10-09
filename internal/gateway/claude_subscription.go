@@ -553,6 +553,19 @@ func (b *subscriptionBridge) start(ctx context.Context, req *Request, model, con
 	}
 	if from != nil {
 		args = append(args, "--resume", from.session)
+	} else if hasReply(req.Messages) {
+		// no run had the conversation: this one is told it whole, in one
+		// message, its earlier turns marked as such (renderClaudePrompt)
+		images := 0
+		for _, m := range req.Messages {
+			for _, p := range m.Parts {
+				if p.Kind == Image {
+					images++
+				}
+				images += len(p.Images)
+			}
+		}
+		log.Printf("claude: a new Claude Code is told the whole conversation: %d messages, %d images, the last turn marked as the one to answer", len(req.Messages), images)
 	}
 	cmd := binary.command(context.Background(), args...)
 	cmd.Dir = work
@@ -2277,7 +2290,19 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		text.Reset()
 	}
 	offered := offeredTools(req.Tools)
-	for _, m := range req.Messages {
+	// A conversation with replies in it is told in two parts: the turns
+	// already answered, and the one to answer now (from the user message
+	// after the last reply that calls no tool, as nextTurn splits it). Told
+	// as one stretch of Human:/Assistant: text, the images of earlier turns
+	// read as just sent, and the model answered them again (#1365).
+	split := historyEnd(req.Messages)
+	for i, m := range req.Messages {
+		if split > 0 && i == 0 {
+			text.WriteString(historyOpen)
+		}
+		if split > 0 && i == split {
+			text.WriteString(historyClose)
+		}
 		label := "Human"
 		if m.Role == "assistant" {
 			label = "Assistant"
@@ -2286,7 +2311,33 @@ func renderClaudePrompt(req *Request) ([]map[string]any, error) {
 		blocks = renderParts(blocks, &text, m.Parts, offered)
 		text.WriteString("\n\n")
 	}
+	if split > 0 {
+		text.WriteString("</current_turn>")
+	}
 	return closeBlocks(blocks, &text), nil
+}
+
+// historyOpen and historyClose wrap the turns a run started anew is told
+// were answered already, before the turn it is to answer (renderClaudePrompt).
+const (
+	historyOpen = "<conversation_history>\nThe conversation so far, each turn of it answered already. " +
+		"Images and files in it were sent with those earlier messages: none of them is new, and none needs answering again.\n\n"
+	historyClose = "</conversation_history>\n\n<current_turn>\nThe turn to answer now:\n\n"
+)
+
+// historyEnd is where the turn to answer begins in msgs: the message after
+// the last reply that calls no tool. 0 when there is no such reply, or
+// nothing after it, and the messages are told as one turn.
+func historyEnd(msgs []Message) int {
+	for j := len(msgs) - 1; j >= 0; j-- {
+		if msgs[j].Role == "assistant" && !callsTool(msgs[j]) {
+			if j == len(msgs)-1 {
+				return 0
+			}
+			return j + 1
+		}
+	}
+	return 0
 }
 
 // bridgeName is the name the run's Claude Code has a tool of the caller's
