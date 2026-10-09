@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -214,6 +215,11 @@ func TestLoopGuardLeavesOrdinaryRepliesAlone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// app.js and i18n.js run to megabytes; 256K of each is still thousands
+		// of lines, many times the window, and keeps -race on CI quick
+		if len(b) > 256<<10 {
+			b = b[:bytes.LastIndexByte(b[:256<<10], '\n')+1]
+		}
 		texts[f] = string(b)
 	}
 	var log, list, csv, hex, rules strings.Builder
@@ -345,7 +351,7 @@ func askStream(t *testing.T, url, body string) string {
 	}()
 	select {
 	case <-done:
-	case <-time.After(20 * time.Second):
+	case <-time.After(time.Minute):
 		t.Fatal("the stream never ended")
 	}
 	return out.String()
@@ -458,6 +464,10 @@ func TestLongReplyThatDoesNotLoopGoesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ~1000 lines of real Go, several times the guard's window, and small
+	// enough that -race on a loaded CI runner streams it well inside
+	// askStream's bound (all of gateway.go took over 20s on macOS CI)
+	src = src[:bytes.LastIndexByte(src[:40<<10], '\n')+1]
 	for _, x := range loopAsks {
 		t.Run(x.name, func(t *testing.T) {
 			v := &loopingVendor{reasoning: string(src), letGo: make(chan bool, 1)}
