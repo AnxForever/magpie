@@ -1350,7 +1350,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			turnedAway()
 			return
 		}
-		msg := fmt.Sprintf("magpie knows no model %q", call.Model)
+		msg := unknownModel(call.Model, "")
 		if g, ok := provider.DisabledGroup(asked); ok {
 			call.Error = "group switched off"
 			msg = fmt.Sprintf("the routing group %s is switched off in Magpie, so %q is not served; switch it on again on Magpie's Routing page to use it", g.Name, call.Model)
@@ -1358,10 +1358,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// a group of its own with nothing in it now — its patterns
 			// match no model served (#766) — said so, not the whole list
 			msg = emptyGroupError(g)
-		} else if ids := provider.IDs(); len(ids) > 0 {
-			msg += "; it has " + strings.Join(ids, ", ")
-		} else {
-			msg += "; add a provider in magpie first"
 		}
 		writeError(w, from, 404, msg)
 		turnedAway()

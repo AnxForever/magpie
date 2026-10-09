@@ -48,7 +48,7 @@ func (s *Server) retrieve(path, operation string) http.HandlerFunc {
 		usage.Saw(agentOf(r))
 		p, model, ok := resolveRetrievalModel(asked)
 		if !ok {
-			msg := fmt.Sprintf("magpie knows no model %q", asked)
+			msg := unknownModel(asked, "")
 			if off, isOff := provider.SwitchedOff(asked); isOff {
 				msg = switchedOff(off, asked)
 			}
