@@ -419,7 +419,7 @@
     } else by.append(el("span", "", l.npm?.publisher || l.package));
     who.append(by);
     if (l.github) c.classList.add("gh");
-    top.append(logo(l.icon, false, kindOf(l)), who, actionFor(l.package, l.name, l));
+    top.append(logo(l.icon || l.npm?.icon, false, kindOf(l)), who, actionFor(l.package, l.name, l));
     const sum = el("p", "pm-sum", summary(l));
     const meta = el("div", "pm-meta");
     meta.append(kindChip(kindOf(l)));
@@ -864,7 +864,7 @@
     if (mw && !e.off && !ask) who.append(mwLine(mw));
     if (ag && !e.off && !ask) who.append(agentLine(ag));
     if (mw && !e.off && !ask && editing?.pkg === pkg) who.append(optionsEditor(e));
-    r.append(logo(l?.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.inMagpieOnly && e.isAgent && !e.isMiddleware ? "ag" : ""), who);
+    r.append(logo(l?.icon || l?.npm?.icon || subs[0]?.icon || ag?.icon, false, e.middlewareOnly ? "mw" : e.inMagpieOnly && e.isAgent && !e.isMiddleware ? "ag" : ""), who);
     const val = el("div", "val");
     const b = busy.get(pkg) || busy.get(e.spec);
     if (e.latest && e.version && newer(e.latest, e.version) && !e.off) {
@@ -1064,7 +1064,7 @@
     const local = isPath(l.package) || isGit(l.package);
     const ed = el("div", "editor pm-detail");
     const hd = el("div", "ehead pm-dhead");
-    hd.append(logo(l.icon, true, kindOf(l)));
+    hd.append(logo(l.icon || l.npm?.icon, true, kindOf(l)));
     const who = el("div", "pm-who");
     const nm = el("div", "pm-name");
     nm.append(el("b", "", l.name));

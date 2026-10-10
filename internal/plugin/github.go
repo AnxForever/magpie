@@ -222,9 +222,7 @@ func askTagged(ctx context.Context) ([]Tagged, error) {
 			t.Package, t.Version = pj.Name, pj.Version
 			// a picture, as host.js's iconOf takes one: magpie checks and
 			// keeps it before the page shows it (the GUI's /api/plugins/github)
-			if ic := strings.TrimSpace(pj.Magpie.Icon); len(ic) <= 3<<19 && (strings.HasPrefix(strings.ToLower(ic), "https://") || strings.HasPrefix(strings.ToLower(ic), "data:image/")) {
-				t.Icon = ic
-			}
+			t.Icon = ownIcon(pj.Magpie.Icon)
 			if pj.Main == "" && len(pj.Exports) == 0 {
 				switch {
 				case strings.TrimSpace(pj.Magpie.Middleware) != "":

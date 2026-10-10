@@ -253,7 +253,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>OpenCode は <code>magpie</code> オブジェクトを無視するので、OpenCode プラグインに追加しても安全です。</p>
     <div class="table-wrap"><table>
       <tr><th>フィールド</th><th>意味</th></tr>
-      <tr><td><code>magpie.icon</code></td><td>プロバイダの画像：<code>https://</code> URL または <code>data:image/…</code> URI、最大 1 MB。SVG、PNG など。</td></tr>
+      <tr><td><code>magpie.icon</code></td><td>プロバイダの画像。「発見」のプラグインのカードにも表示されます（npm から、GitHub のものはリポジトリから読み込み）：<code>https://</code> URL または <code>data:image/…</code> URI、最大 1 MB。SVG、PNG など。</td></tr>
       <tr><td><code>magpie.maxConcurrency</code></td><td>各アカウントが同時に受けるリクエスト数。1 から 1000 の整数。ユーザーがプロバイダに設定した上限が優先されます。</td></tr>
     </table></div>
     <p>同じフィールドは <code>auth</code> フックにも設定でき（<code>auth.icon</code>、<code>auth.maxConcurrency</code>）、そちらが <code>package.json</code> より優先されます。</p>

@@ -242,7 +242,30 @@ func pluginListings(ctx context.Context) []pluginListingJSON {
 		}
 		out = append(out, j)
 	}
+	ns := make([]*plugin.NPM, len(out))
+	for i := range out {
+		ns[i] = out[i].NPM
+	}
+	// at once: a picture still being fetched shows on the next ask
+	npmIcons(ns, 0)
 	return out
+}
+
+// npmIcons puts the picture each package gives (magpie.icon) as the page
+// can show it, kept here as a GitHub-tagged plugin's is: a data URI or an
+// https URL isn't sent on to the page. One not kept by wait is left out.
+func npmIcons(ns []*plugin.NPM, wait time.Duration) {
+	said := make([]string, len(ns))
+	for i, n := range ns {
+		if n != nil {
+			said[i] = n.Icon
+		}
+	}
+	for i, ic := range provider.RepoIcons(said, wait) {
+		if ns[i] != nil {
+			ns[i].Icon = ic
+		}
+	}
 }
 
 // pluginMarketJSON is the plugin market: the plugins magpie suggests, what npm
@@ -279,6 +302,11 @@ func pluginMarketState(ctx context.Context, w Windows) pluginMarketJSON {
 		n := info[l.Package]
 		m.Listings = append(m.Listings, pluginListingJSON{Listing: l, NPM: &n})
 	}
+	ns := make([]*plugin.NPM, len(m.Listings))
+	for i := range m.Listings {
+		ns[i] = m.Listings[i].NPM
+	}
+	npmIcons(ns, 3*time.Second)
 	for i, e := range m.State.Plugins {
 		if !plugin.IsGit(e.Spec) {
 			m.State.Plugins[i].Latest = info[plugin.Name(e.Spec)].Version
@@ -319,7 +347,17 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 				names = append(names, n)
 			}
 		}
-		writeJSON(rw, map[string]any{"npm": plugin.Info(r.Context(), names)})
+		info := plugin.Info(r.Context(), names)
+		keys := make([]string, 0, len(info))
+		ns := make([]*plugin.NPM, 0, len(info))
+		for k, n := range info {
+			keys, ns = append(keys, k), append(ns, &n)
+		}
+		npmIcons(ns, 3*time.Second)
+		for i, k := range keys {
+			info[k] = *ns[i]
+		}
+		writeJSON(rw, map[string]any{"npm": info})
 	})
 	// the whole market at once, npm's answers and all
 	mux.HandleFunc("GET /api/plugins/market", func(rw http.ResponseWriter, r *http.Request) {
