@@ -10,12 +10,13 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // magpie accounts lists, switches and forgets a plugin's accounts by its
 // provider's id, as a built-in subscription's.
 func TestAccountsOfAPlugin(t *testing.T) {
-	bun := pathBun(t)
+	bun := testenv.Bun(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
