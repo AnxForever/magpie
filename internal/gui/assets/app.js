@@ -12335,6 +12335,16 @@ function renderKeyAccounts(p) {
     };
     row.append(dot, name);
     if (k.name) row.append(el("span", "plan mono", k.masked));
+    // each key copies its own (#1480): with several, the editor has no
+    // API key field to show one in
+    const cp = el("button", "copy");
+    cp.title = t("Copy");
+    cp.append(svg(COPY_ICON, 12, 1.5));
+    cp.onclick = async (e) => {
+      e.stopPropagation();
+      try { copy((await api("provider/key", { id: p.id, account: k.id })).key, k.name || k.masked, cp); } catch (err) { status(err.message, "err"); }
+    };
+    row.append(cp);
     // one the gateway passes over after a failure: why, and until when
     if (k.rest && new Date(k.rest.until) > Date.now()) {
       const r = el("span", "key-rest", t("Resting · {why} · back at {time}", { why: (k.rest.status ? k.rest.status + " " : "") + t(KEY_FAIL[k.rest.why] || "failed"), time: new Date(k.rest.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }));

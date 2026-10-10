@@ -1328,7 +1328,18 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 		case "key":
 			// the saved key, for the editor's Show button; it never
-			// leaves this machine (the panel is served on loopback)
+			// leaves this machine (the panel is served on loopback).
+			// With Account, the key of that id: each of several keys'
+			// rows copies its own (#1480).
+			if req.Account != "" {
+				k, err := provider.KeyOf(in.ID, req.Account)
+				if err != nil {
+					fail(rw, err)
+					return
+				}
+				writeJSON(rw, map[string]string{"key": k})
+				return
+			}
 			p, err := provider.Find(in.ID)
 			if err != nil {
 				fail(rw, err)
