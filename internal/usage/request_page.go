@@ -743,14 +743,14 @@ func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, 
 // days are read from it.
 func buildRequestBlocks(p Period, f Filter, offset, limit int, now time.Time, gateways, chunks, others []*rowChunk, names map[string]string) RequestPage {
 	skip := visibleLocal(chunks)
-	since := p.Since(now)
+	since, until := p.Since(now), p.Until(now)
 	matched := matchedBlocks(gateways, chunks, skip, since, true)
 	all := append(append(slices.Clone(gateways), chunks...), others...)
 	visit := func(fn func(rowRef, Row)) {
 		for _, c := range all {
 			for i, pr := range c.Rows {
 				ref := rowRef{c, i}
-				if pr.Time.Before(since) || skip[ref] || matched[ref] {
+				if pr.Time.Before(since) || after(until, pr.Time) || skip[ref] || matched[ref] {
 					continue
 				}
 				fn(ref, c.row(i))

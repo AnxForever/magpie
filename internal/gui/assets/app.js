@@ -13044,7 +13044,7 @@ async function loadUsage(asked) {
   renderUsageLoading();
   if (!asked) loadQuotas();
   const p = period, read = ++usageRead;
-  const next = await api("usage?period=" + p);
+  const next = await api("usage?period=" + encodeURIComponent(p));
   if (read !== usageRead || view !== "usage" || usageTab !== "usage" || period !== p) return;
   usage = next;
   renderUsage();
@@ -13086,10 +13086,167 @@ function renderPeriod(loading) {
   for (const [id, name] of PERIODS) {
     const b = el("button", "opt" + (id === period ? " on" : ""), t(name));
     b.disabled = !!loading;
-    b.onclick = () => { for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b); slide(seg, "period"); period = id; ledDay = ""; ledOffset = 0; loadUsage().catch((e) => status(e.message, "err")); };
+    b.onclick = () => { for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b); slide(seg, "period"); pickPeriod(id); };
     seg.append(b);
   }
+  // days of the reader's own (#1492): the last opt names them once picked,
+  // and opens the range menu to pick them, or others
+  const range = periodDays(period);
+  const b = el("button", "opt range-opt" + (range ? " on" : ""));
+  b.type = "button";
+  b.disabled = !!loading;
+  b.setAttribute("aria-haspopup", "dialog");
+  b.setAttribute("aria-expanded", "false");
+  b.setAttribute("aria-label", range ? t("Days picked: {days}", { days: rangeName(range) }) : t("Pick days"));
+  b.append(svg("M3 4.5h10v8.5H3zM3 7h10M5.5 3v3M10.5 3v3", 12, 1.4), el("span", "", range ? rangeName(range) : t("Custom")));
+  if (range) b.title = t("Days picked: {days}", { days: rangeName(range) });
+  b.onclick = () => {
+    if (b.classList.contains("open")) return closeProtoMenu();
+    openRangeMenu(b, range, (from, to) => {
+      for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b);
+      b.lastChild.textContent = rangeName({ from, to });
+      b.title = t("Days picked: {days}", { days: rangeName({ from, to }) });
+      b.setAttribute("aria-label", b.title);
+      slide(seg, "period");
+      pickPeriod(from + ".." + to);
+    });
+  };
+  seg.append(b);
   slide(seg, "period");
+}
+
+function pickPeriod(id) {
+  period = id; ledDay = ""; ledOffset = 0;
+  loadUsage().catch((e) => status(e.message, "err"));
+}
+
+// A period of picked days is "2026-10-01..2026-10-07", both included, in
+// this computer's time zone, as the backend reads it (usage.RangeOf).
+// periodDays is its two days, or null for a preset.
+function periodDays(p) {
+  const m = /^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/.exec(p || "");
+  return m ? { from: m[1], to: m[2] } : null;
+}
+const dayKeyOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const dayOfKey = (k) => new Date(k + "T12:00:00");
+// rangeName says picked days short: "Oct 1 – Oct 7", the year only when it
+// isn't this one, one day alone as itself
+function rangeName({ from, to }) {
+  const year = new Date().getFullYear();
+  const name = (k) => dayOfKey(k).toLocaleDateString(intlLang() || "en", { month: "short", day: "numeric", ...(dayOfKey(k).getFullYear() !== year ? { year: "numeric" } : {}) });
+  return from === to ? name(from) : name(from) + " – " + name(to);
+}
+// noCallsIn is what an empty page says of the period it is on
+function noCallsIn(p) {
+  if (periodDays(p)) return "No calls on the days picked.";
+  return { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[p] || "No calls yet.";
+}
+
+// openRangeMenu is the app's own menu for picking days (#1492): a few
+// spans a click away, and a month to pick the first day on, then the last.
+// Days after today can't be picked. choose gets the two days, in order.
+function openRangeMenu(anchor, current, choose) {
+  closeProtoMenu();
+  const today = dayKeyOf(new Date());
+  let start = null; // the first day clicked, waiting for the last
+  let shown = dayOfKey(current?.to || today);
+  shown = new Date(shown.getFullYear(), shown.getMonth(), 1, 12);
+  const box = el("div", "pop proto-menu range-menu");
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-label", t("Pick days"));
+  const head = el("div", "pm-head");
+  const quick = el("div", "rm-quick");
+  const span = (from, to) => ({ from: dayKeyOf(from), to: dayKeyOf(to) });
+  const now = new Date();
+  now.setHours(12, 0, 0, 0);
+  const back = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return d; };
+  const quicks = [
+    ["Yesterday", span(back(1), back(1))],
+    ["This month", span(new Date(now.getFullYear(), now.getMonth(), 1, 12), now)],
+    ["Last month", span(new Date(now.getFullYear(), now.getMonth() - 1, 1, 12), new Date(now.getFullYear(), now.getMonth(), 0, 12))],
+    ["90 days", span(back(89), now)],
+  ];
+  for (const [name, r] of quicks) {
+    const b = el("button", "rm-span" + (current && current.from === r.from && current.to === r.to ? " on" : ""), t(name));
+    b.type = "button";
+    b.title = rangeName(r);
+    b.onclick = (e) => { e.stopPropagation(); closeProtoMenu(); choose(r.from, r.to); };
+    quick.append(b);
+  }
+  const nav = el("div", "rm-nav");
+  const prev = el("button", "rm-step"), next = el("button", "rm-step"), month = el("span", "rm-month");
+  prev.type = next.type = "button";
+  prev.setAttribute("aria-label", t("Previous month"));
+  next.setAttribute("aria-label", t("Next month"));
+  prev.append(svg("M10 4 6 8l4 4", 12, 1.6));
+  next.append(svg("m6 4 4 4-4 4", 12, 1.6));
+  nav.append(prev, month, next);
+  const grid = el("div", "rm-grid");
+  grid.setAttribute("role", "grid");
+  box.append(head, quick, nav, grid);
+  const draw = (focusDay) => {
+    head.textContent = start ? t("Now the last day") : t("Pick the first day, then the last");
+    month.textContent = shown.toLocaleDateString(intlLang() || "en", { year: "numeric", month: "long" });
+    next.disabled = dayKeyOf(new Date(shown.getFullYear(), shown.getMonth() + 1, 1, 12)) > today;
+    const cells = [];
+    // the weekdays, Monday first, as the app's weeks are
+    for (let i = 0; i < 7; i++) cells.push(el("span", "rm-wd", new Date(2024, 0, 1 + i, 12).toLocaleDateString(intlLang() || "en", { weekday: "narrow" })));
+    const first = new Date(shown);
+    const lead = (first.getDay() + 6) % 7;
+    for (let i = 0; i < lead; i++) cells.push(el("span", "rm-pad"));
+    const lo = start || current?.from, hi = start ? null : current?.to;
+    for (let d = new Date(first); d.getMonth() === shown.getMonth(); d.setDate(d.getDate() + 1)) {
+      const k = dayKeyOf(d);
+      const b = el("button", "rm-day", String(d.getDate()));
+      b.type = "button";
+      b.dataset.day = k;
+      b.setAttribute("aria-label", d.toLocaleDateString(intlLang() || "en", { year: "numeric", month: "long", day: "numeric" }));
+      if (k === today) b.classList.add("today");
+      if (lo && (k === lo || k === hi)) b.classList.add("end");
+      if (lo && hi && k > lo && k < hi) b.classList.add("in");
+      b.disabled = k > today;
+      b.onclick = (e) => {
+        e.stopPropagation();
+        if (!start) { start = k; draw(k); return; }
+        const [from, to] = start <= k ? [start, k] : [k, start];
+        closeProtoMenu();
+        choose(from, to);
+      };
+      cells.push(b);
+    }
+    grid.replaceChildren(...cells);
+    (focusDay && grid.querySelector(`[data-day="${focusDay}"]`))?.focus({ preventScroll: true });
+  };
+  const turn = (by) => (e) => { e.stopPropagation(); shown = new Date(shown.getFullYear(), shown.getMonth() + by, 1, 12); draw(); };
+  prev.onclick = turn(-1);
+  next.onclick = turn(1);
+  draw();
+  document.body.append(box);
+  placeMenu(box, anchor);
+  anchor.classList.add("open");
+  anchor.setAttribute("aria-expanded", "true");
+  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) closeProtoMenu(); };
+  const scroll = (e) => { if (!box.contains(e.target)) closeProtoMenu(); };
+  // Escape closes; arrows walk the days, a week up or down
+  const keys = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeProtoMenu(); anchor.focus({ preventScroll: true }); return; }
+    const at = document.activeElement?.dataset?.day;
+    const by = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+    if (!at || !by || !box.contains(document.activeElement)) return;
+    e.preventDefault(); e.stopPropagation();
+    const d = dayOfKey(at);
+    d.setDate(d.getDate() + by);
+    const k = dayKeyOf(d);
+    if (k > today) return;
+    if (d.getMonth() !== shown.getMonth() || d.getFullYear() !== shown.getFullYear()) shown = new Date(d.getFullYear(), d.getMonth(), 1, 12);
+    draw(k);
+  };
+  document.addEventListener("mousedown", outside, true);
+  document.addEventListener("keydown", keys, true);
+  document.addEventListener("scroll", scroll, true);
+  addEventListener("resize", closeProtoMenu);
+  protoMenu = { box, anchor, outside, keys, scroll, done: null };
+  (grid.querySelector(".rm-day.end") || grid.querySelector(".rm-day.today") || quick.firstChild).focus({ preventScroll: true });
 }
 
 function renderUsageLoading() {
@@ -13514,12 +13671,16 @@ function creditDays(sub) {
   const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const today = new Date();
   today.setHours(12, 0, 0, 0);
-  // the period's days, the first from when counting began for All
-  let n = { today: 1, "7d": 7, "30d": 30 }[period];
-  if (!n) n = Math.min(120, Math.max(1, Math.round((today - new Date(since + "T12:00:00")) / 864e5) + 1));
+  // the period's days, the first from when counting began for All, a
+  // picked range's own (#1492), its last 120 at most
+  const range = periodDays(period);
+  const last = range ? dayOfKey(range.to) : today;
+  let n = range ? Math.round((last - dayOfKey(range.from)) / 864e5) + 1 : { today: 1, "7d": 7, "30d": 30 }[period];
+  if (!n) n = Math.round((today - new Date(since + "T12:00:00")) / 864e5) + 1;
+  n = Math.min(120, Math.max(1, n));
   const list = [];
   for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(today);
+    const d = new Date(last);
     d.setDate(d.getDate() - i);
     list.push({ day: key(d), date: d, used: by.get(key(d)) || 0, known: key(d) >= since });
   }
@@ -13529,7 +13690,7 @@ function creditDays(sub) {
   const head = el("div", "cd-head");
   const name = el("span", "", t("Credits used per day"));
   name.title = t("Counted from magpie's readings of the vendor's meter, since {date}: what is used while magpie isn't reading it is counted on the day it next does", { date: dayName(new Date(since + "T12:00:00")) });
-  head.append(name, el("b", "", n === 1 ? t("{n} today", { n: num(sum) }) : t("{n} in {days} days", { n: num(sum), days: n })));
+  head.append(name, el("b", "", n > 1 ? t("{n} in {days} days", { n: num(sum), days: n }) : range && range.to !== key(today) ? t("{n} on {date}", { n: num(sum), date: dayName(last) }) : t("{n} today", { n: num(sum) })));
   box.append(head);
   if (n > 1) {
     const bars = el("div", "cd-bars");
@@ -15214,7 +15375,7 @@ function renderUsage() {
   $("#usageAccountsHead").hidden = $("#usageAccounts").hidden = empty || !u.accounts?.length;
   if (empty) {
     stats.classList.add("empty");
-    const none = { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[period];
+    const none = noCallsIn(period);
     stats.append(el("div", "none", t(none) + " " + t("Point an agent at a catalog model and use it; every call through the gateway is counted here.")));
     $("#usageNote").textContent = "";
     return;
@@ -16468,7 +16629,7 @@ function renderLedger() {
   if (!l.total) {
     wrap.classList.add("none");
     const filtered = ledPurpose || ledDay || ledRoute || ledAgent || ledProvider || ledAccount || ledComputer || ledCallerKey || ledModel || ledVia || ledFailed || ledQuery.trim();
-    const none = { today: "No calls today.", "7d": "No calls in the last 7 days.", "30d": "No calls in the last 30 days.", all: "No calls yet." }[period];
+    const none = noCallsIn(period);
     wrap.replaceChildren(el("div", "led-none", filtered ? t("No requests match these filters.") : t(none)));
     ledFit();
     ledHScroll();
@@ -21292,7 +21453,7 @@ function refreshUsage(now = false) {
         else if (usage && performance.now() - quotasAsked > 60e3) { quotasAsked = performance.now(); loadQuotas(); }
         if (usage) {
           const p = period, read = ++usageRead;
-          const u = await api("usage?period=" + p);
+          const u = await api("usage?period=" + encodeURIComponent(p));
           if (read === usageRead && view === "usage" && usageTab === "usage" && p === period) {
             if (JSON.stringify(u) !== JSON.stringify(usage)) { usage = u; renderUsage(); }
             // this read claimed the newest one: a pick it superseded had put the

@@ -584,8 +584,14 @@ func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[
 		normalizedKeys[id] = true
 	}
 	historicalKeys = normalizedKeys
+	// a picked range's own days alone: its chart can start on the Monday
+	// before its first, and it ends before now (#1492)
+	from, until := p.Since(now), p.Until(now)
 	visit := func(fn func(Record)) {
 		read(func(r Record) {
+			if r.Time.Before(from) || after(until, r.Time) {
+				return
+			}
 			if next, ok := renamed[r.Provider]; ok {
 				r.Provider = next
 			}
@@ -594,9 +600,7 @@ func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[
 	}
 	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
 	s.Since, s.Bucket, s.Series = timeline(p, now, first)
-	if p != Today && p != Week && p != Month {
-		s.Period = All
-	}
+	s.Period = p.shown()
 
 	priceOf := pricer()
 	// the places each provider id went in the period, and goes now

@@ -108,9 +108,10 @@ func callerUsageGroups(s usage.Summary) []usageGroup {
 	return keys
 }
 
+// periodOf is the period a ?period= names: a preset, or days picked as
+// "2026-10-01..2026-10-07" (#1492); 30 days for anything else.
 func periodOf(s string) usage.Period {
-	switch p := usage.Period(s); p {
-	case usage.Today, usage.Week, usage.Month, usage.All:
+	if p := usage.Period(s); p.Known() {
 		return p
 	}
 	return usage.Month
@@ -121,6 +122,9 @@ func periodOf(s string) usage.Period {
 func csvStamp(p usage.Period, day string, now time.Time) string {
 	if _, err := time.Parse(time.DateOnly, day); err == nil {
 		return "magpie-requests-day-" + day
+	}
+	if p.IsRange() { // the days picked, which already say when
+		return "magpie-requests-" + strings.Replace(string(p), "..", "-to-", 1)
 	}
 	return "magpie-requests-" + string(p) + "-" + now.Format(time.DateOnly)
 }
@@ -375,13 +379,7 @@ func requestContent(agent, session string, from, to, at time.Time) contentJSON {
 
 func usageRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("GET /api/usage", func(rw http.ResponseWriter, r *http.Request) {
-		p := usage.Period(r.URL.Query().Get("period"))
-		switch p {
-		case usage.Today, usage.Week, usage.Month, usage.All:
-		default:
-			p = usage.Month
-		}
-		writeJSON(rw, usageState(p))
+		writeJSON(rw, usageState(periodOf(r.URL.Query().Get("period"))))
 	})
 	// the ledger: the period's calls, newest first, a page at a time
 	mux.HandleFunc("GET /api/usage/requests", func(rw http.ResponseWriter, r *http.Request) {
