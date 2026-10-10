@@ -572,3 +572,87 @@ func TestSnowSmallModel(t *testing.T) {
 		t.Fatalf("after Disconnect: %v, active %q", err, snowActive(dir))
 	}
 }
+
+// Snow's thinking on magpie's profile is chatThinking, as Snow's own
+// settings write it (ui/pages/configScreen/useConfigState.ts): the
+// model's levels are offered, a pick turns it on with that level, and
+// clearing it is Snow's default, off. A chatThinking the user brought from
+// their own profile is shown as theirs, not written over.
+func TestSnowThinking(t *testing.T) {
+	_, dir := snowHome(t)
+	prof := `{
+  "snowcfg": {
+    "baseUrl": "https://api.example.com/v1",
+    "apiKey": "user-key",
+    "requestMethod": "chat",
+    "advancedModel": "glm-5",
+    "basicModel": "glm-5",
+    "chatThinking": {"enabled": true, "reasoning_effort": "medium"}
+  }
+}`
+	os.WriteFile(filepath.Join(dir, "profiles", "default.json"), []byte(prof), 0o644)
+	os.WriteFile(filepath.Join(dir, "active-profile.json"), []byte(`{"activeProfile": "default"}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(prof), 0o644)
+	snowSees(t)
+	if err := provider.SetModelEfforts("relay/glm-4.6", []string{"low", "medium", "high", "max"}); err != nil {
+		t.Fatal(err)
+	}
+	ours := filepath.Join(dir, "profiles", "magpie.json")
+	a, _ := Find("snow")
+	// on the user's own profile: theirs, nothing offered
+	if v := a.Values()["effort"]; v != "" {
+		t.Fatalf("effort on the user's profile: %q", v)
+	}
+	if opts := a.Field("effort").Options(a.Values()); len(opts) != 0 {
+		t.Fatalf("effort offered on the user's profile: %+v", opts)
+	}
+	if err := a.Apply("effort", "high"); err == nil {
+		t.Fatal("effort set on the user's profile")
+	}
+
+	if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	// the user's own thinking came along with their profile, as they set it
+	if v := a.Values()["effort"]; v != "medium" {
+		t.Fatalf("the user's chatThinking: %q", v)
+	}
+	opts := a.Field("effort").Options(a.Values())
+	if len(opts) != 5 || opts[0].Value != "" || opts[0].Takes != "off" || opts[4].Value != "max" {
+		t.Fatalf("levels: %+v", opts)
+	}
+	if err := a.Apply("effort", "max"); err != nil {
+		t.Fatal(err)
+	}
+	ct, _ := snowCfg(t, ours)["chatThinking"].(map[string]any)
+	if ct["enabled"] != true || ct["reasoning_effort"] != "max" {
+		t.Fatalf("chatThinking: %v", ct)
+	}
+	if readFile(filepath.Join(dir, "config.json")) != readFile(ours) {
+		t.Fatal("config.json not copied from magpie's profile")
+	}
+	// kept through a sync and a new model
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if v := a.Values()["effort"]; v != "max" {
+		t.Fatalf("after sync: %q", v)
+	}
+	// a model with no levels: none offered, the value still shown
+	if err := a.Apply("model", "magpie/relay/glm-4.5v"); err != nil {
+		t.Fatal(err)
+	}
+	if opts := a.Field("effort").Options(a.Values()); len(opts) != 0 || a.Values()["effort"] != "max" {
+		t.Fatalf("no levels: %+v %q", opts, a.Values()["effort"])
+	}
+	// cleared: Snow's default, thinking off
+	if err := a.Apply("effort", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snowCfg(t, ours)["chatThinking"]; ok || a.Values()["effort"] != "" {
+		t.Fatalf("cleared: %v", snowCfg(t, ours))
+	}
+	if readFile(filepath.Join(dir, "profiles", "default.json")) != prof {
+		t.Fatal("the user's profile was rewritten")
+	}
+}

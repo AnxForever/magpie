@@ -384,6 +384,60 @@ func snowIn(at place) *Agent {
 				}
 				return viaMagpie("snow", magpieID+"/")
 			},
+		}, {
+			// chatThinking, the thinking magpie's profile asks for on Chat
+			// Completions (api/chat.ts): enabled sends reasoning_effort,
+			// unset sends thinking {type: disabled}, Snow's default. On
+			// magpie's profile only; Snow's thinking.effort (Anthropic)
+			// and responsesReasoning (Responses) are for protocols that
+			// profile doesn't use.
+			Key: "effort", Label: "thinking",
+			Get: func() string {
+				if !onOurs() {
+					return ""
+				}
+				b, _ := edit.Read(ours)
+				ct := gjson.GetBytes(jsonc.ToJSONInPlace(b), "snowcfg.chatThinking")
+				if !ct.Get("enabled").Bool() {
+					return ""
+				}
+				if v := ct.Get("reasoning_effort").String(); v != "" {
+					return v
+				}
+				// on, with no level: the model's own
+				return "on"
+			},
+			Set: func(v string) error {
+				if !onOurs() {
+					if v == "" {
+						return nil
+					}
+					return errors.New("Snow CLI's thinking can be set here on magpie's profile: pick a model through magpie as its model first")
+				}
+				var err error
+				if v == "" {
+					err = edit.DelJSON(ours, "snowcfg.chatThinking")
+				} else {
+					err = edit.SetJSON(ours, edit.KV{Path: "snowcfg.chatThinking", Value: map[string]any{"enabled": true, "reasoning_effort": v}})
+				}
+				if err != nil {
+					return err
+				}
+				return mirror(snowProfile)
+			},
+			Options: func(cur map[string]string) []Option {
+				ref, ok := strings.CutPrefix(cur["model"], magpieID+"/")
+				if !ok {
+					return nil
+				}
+				for _, m := range magpieModels("snow") {
+					if m.ID == ref && len(m.Efforts) > 0 {
+						return append([]Option{{Value: "", Takes: "off"}}, static(m.Efforts...)...)
+					}
+				}
+				// a model that lists no levels has none to pick
+				return nil
+			},
 		}},
 	}, ours, activeFile, config, defaultProfile)
 }
