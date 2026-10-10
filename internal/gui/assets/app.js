@@ -9010,6 +9010,8 @@ function importAppRow(ia, s, it, recount, boxes) {
     who.append(sg);
   }
   let tag = null;
+  // which provider holds it, so the user can find it (#1486)
+  if (it.status === "same" && it.existing) who.append(el("div", "sub", t("magpie has {name} already", { name: it.existing })));
   if (it.status === "same") tag = el("span", "apptag", t("Already added"));
   else if (it.skip) tag = el("span", "apptag", t("Can't import"));
   else if (it.status === "taken") tag = el("span", "apptag", t("Name in use"));
