@@ -811,6 +811,12 @@ a price missing one would understate the rest of every call; `0` is a model
 served at no cost, which is a price, not the absence of one. Decimals take a
 point or, in the app's boxes, a comma (`0,25`).
 
+A call to a model no price is known for is counted at the price of the model
+the reply said answered, at the same provider, when that one has a price: a
+relay that sells `kimi-k3` as `moonshot-kimi-k3` answers as `kimi-k3`, so its
+calls are counted at `relay-a/kimi-k3`'s price. A model with a price of its
+own, `0` included, keeps it whatever its reply says.
+
 A **Kimi Code** membership's models are counted at the Kimi API model each
 one is, not at the $0 models.dev lists them at for the plan: `k3` and
 `k3-256k` at `kimi-k3`, `kimi-for-coding-highspeed` at

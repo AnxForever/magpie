@@ -408,16 +408,30 @@ func ledgerWithShared(since, until time.Time, f Filter, recs []Record, logs []se
 // pricer uses the same effective price as the model CLI and session totals:
 // explicit provider/model or provider-wide prices (including zero), then the
 // provider catalog, then the maker catalog. Settings are read once per query.
+//
+// A model no price is known for is priced as the model the vendor's reply
+// said answered (Served), at the same provider, when that one has a price:
+// a relay that sells kimi-k3 as moonshot-kimi-k3 answers as kimi-k3, which
+// is listed (#1498). The model asked for keeps its own price whenever it
+// has one, a zero set by the user included, so a ledger that matched the
+// vendor's bill still does.
 func pricer() func(Record) *catalog.Price {
-	prices := map[[2]string]*catalog.Price{}
+	prices := map[[3]string]*catalog.Price{}
 	s := settings.Load()
 	return func(r Record) *catalog.Price {
-		k := [2]string{r.Provider, r.Model}
+		served := strings.TrimSpace(r.Served)
+		if served == r.Model {
+			served = ""
+		}
+		k := [3]string{r.Provider, r.Model, served}
 		if pr, ok := prices[k]; ok {
 			return pr
 		}
 		var pr *catalog.Price
 		v, ok := provider.EffectivePriceIn(s, r.Provider, r.Model)
+		if !ok && served != "" {
+			v, ok = provider.EffectivePriceIn(s, r.Provider, served)
+		}
 		if ok {
 			pr = &v
 		} else {
