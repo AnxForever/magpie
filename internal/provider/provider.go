@@ -252,6 +252,10 @@ type Provider struct {
 	// Models the user chose to expose. Empty means "the preset's picks, or
 	// everything the vendor lists when that list is short".
 	Models []string `json:"models,omitempty"`
+	// PickedFrom are the models the vendor listed when Models were saved: one
+	// listed since is served beside picks that held every one listed then
+	// (withNewlyListed), and one listed then and left unpicked stays out.
+	PickedFrom []string `json:"pickedFrom,omitempty"`
 	// Unlisted keeps the provider's own models out of the list agents see:
 	// it serves only through the routing groups it is in, and by its
 	// "provider/model" ids.
@@ -412,6 +416,7 @@ func (p Provider) clone() Provider {
 	p.Keys = slices.Clone(p.Keys)
 	p.Fallback = slices.Clone(p.Fallback)
 	p.Models = slices.Clone(p.Models)
+	p.PickedFrom = slices.Clone(p.PickedFrom)
 	p.Headers = maps.Clone(p.Headers)
 	p.AccountProxies = maps.Clone(p.AccountProxies)
 	p.AccountCaps = maps.Clone(p.AccountCaps)
@@ -464,6 +469,7 @@ func allProviders() []Provider {
 			continue
 		}
 		pk := picks[a.ID]
+		a.PickedFrom = pk.PickedFrom
 		a.Models, a.Unlisted, a.Off, a.Fallback, a.Routing, a.Affinity, a.KeepLogin, a.KeepLoginAs, a.Contexts, a.Family = pk.Models, pk.Unlisted, pk.Off, pk.Fallback, pk.Routing, pk.Affinity, pk.KeepLogin, pk.KeepLoginAs, pk.Contexts, pk.Family
 		a.Sink = pk.Sink
 		a.Proxy, a.AccountProxies, a.AccountModels = pk.Proxy, pk.AccountProxies, pk.AccountModels
@@ -588,7 +594,7 @@ func Save(p Provider) error {
 		if p.ID == "kiro" {
 			key = p.Key
 		}
-		p = Provider{ID: p.ID, Key: key, Models: p.Models, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PinUpstream: p.PinUpstream, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
+		p = Provider{ID: p.ID, Key: key, Models: p.Models, PickedFrom: p.PickedFrom, Unlisted: p.Unlisted, Off: p.Off, Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, Contexts: p.Contexts, Family: p.Family, Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, MaxConcurrency: p.MaxConcurrency, AccountConcurrency: p.AccountConcurrency, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, PinUpstream: p.PinUpstream, Hidden: hiddenAccount(p.ID), Quiet: quietAccount(p.ID), Tucked: tuckedAccount(p.ID)}
 	} else {
 		p.AccountProxies = keyProxies(p) // a provider of keys proxies each key apart
 		if subscriptionID(p.ID) && !stored(p.ID) {
@@ -612,17 +618,42 @@ func Save(p Provider) error {
 	if err != nil {
 		return err
 	}
-	for i := range f.Providers {
-		if f.Providers[i].ID == p.ID {
-			if p.Was == nil {
-				p.Was = f.Providers[i].Was
-			}
-			f.Providers[i] = p
-			return store(f)
+	i := slices.IndexFunc(f.Providers, func(q Provider) bool { return q.ID == p.ID })
+	var was *Provider
+	if i >= 0 {
+		was = &f.Providers[i]
+	}
+	p.PickedFrom = listedWith(p, was)
+	if was != nil {
+		if p.Was == nil {
+			p.Was = was.Was
 		}
+		f.Providers[i] = p
+		return store(f)
 	}
 	f.Providers = append(f.Providers, p)
 	return store(f)
+}
+
+// listedWith is what p.PickedFrom is saved as: none without picks; what was
+// kept with the picks when they are the same picks; and the models listed
+// now when the picks are new, as the user picked them from that list.
+func listedWith(p Provider, was *Provider) []string {
+	if len(p.Models) == 0 {
+		return nil
+	}
+	if was != nil && slices.Equal(normalModels(was.Models), normalModels(p.Models)) {
+		return was.PickedFrom
+	}
+	from := p
+	if q, err := Find(p.ID); err == nil {
+		from = *q // with its account, whose list it is
+	}
+	var ids []string
+	for _, m := range from.Available() {
+		ids = append(ids, m.ID)
+	}
+	return ids
 }
 
 // Add saves a provider the user just added, beside those already here: an

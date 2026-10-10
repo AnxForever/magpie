@@ -799,7 +799,7 @@ func (p Provider) Exposed() []catalog.Model {
 		picks = slices.DeleteFunc(slices.Clone(picks), p.Account.unusable)
 	}
 	if len(picks) > 0 {
-		return pick(picks)
+		return pick(p.withNewlyListed(picks, avail))
 	}
 	// another magpie's list is already the models its user exposed
 	if len(avail) <= manyModels || p.IsRemoteMagpie() {
@@ -809,6 +809,69 @@ func (p Provider) Exposed() []catalog.Model {
 	// vendor's own list — theirs run newest first — and let the user pick
 	// from the rest; nothing here is compiled in.
 	return avail[:manyModels]
+}
+
+// Picks are the models the user picked, with those the vendor has listed
+// since beside them (withNewlyListed): what agents are served of the
+// picks, and what an editor starts its picks from. None when nothing is
+// picked.
+func (p Provider) Picks() []string {
+	if len(p.Models) == 0 {
+		return p.Models
+	}
+	return p.withNewlyListed(p.Models, p.Available())
+}
+
+// withNewlyListed is picks with the models the vendor has listed since
+// they were saved put first, when they held every model listed then. A
+// Claude account whose user picked every model (Select all, or the TUI's
+// toggles) was served the list as it was then, and never Haiku 5.5 when
+// models.dev listed it (wakaka on Discord, after 9b51428e). A model that
+// was listed and left unpicked stays left out, and so do new ones beside
+// picks that left any out. Picks saved before PickedFrom was kept are taken
+// to have held every model when they hold every one released up to the
+// newest of them, and a model released after it is the new one.
+func (p Provider) withNewlyListed(picks []string, avail []catalog.Model) []string {
+	if len(avail) == 0 {
+		return picks
+	}
+	picked := make(map[string]bool, len(picks))
+	for _, id := range picks {
+		picked[id] = true
+	}
+	var isNew func(catalog.Model) bool
+	if p.PickedFrom != nil {
+		listed := make(map[string]bool, len(p.PickedFrom))
+		for _, id := range p.PickedFrom {
+			listed[id] = true
+		}
+		isNew = func(m catalog.Model) bool { return !listed[m.ID] }
+	} else {
+		newest := ""
+		for _, m := range avail {
+			if picked[m.ID] && m.Released > newest {
+				newest = m.Released
+			}
+		}
+		if newest == "" {
+			return picks
+		}
+		isNew = func(m catalog.Model) bool { return m.Released > newest }
+	}
+	var added []string
+	for _, m := range avail {
+		if picked[m.ID] {
+			continue
+		}
+		if !isNew(m) {
+			return picks // one the user saw and left unpicked
+		}
+		added = append(added, m.ID)
+	}
+	if len(added) == 0 {
+		return picks
+	}
+	return append(added, picks...)
 }
 
 // RejectsTemperature reports whether the model is known to refuse

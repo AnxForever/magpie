@@ -367,7 +367,7 @@ func (m *model) openProviderModels(id string) {
 			if err != nil {
 				return nil, err.Error(), false
 			}
-			ids := p.Models
+			ids := p.Picks()
 			if len(ids) == 0 {
 				for _, x := range p.Exposed() {
 					ids = append(ids, x.ID)
