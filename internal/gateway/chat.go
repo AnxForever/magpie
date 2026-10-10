@@ -226,15 +226,22 @@ func buildHost(p provider.Provider) string {
 	return p.Host()
 }
 
+// chatReplaysReasoning is whether a Chat upstream wants a turn's reasoning
+// back in reasoning_content: DeepSeek's models wherever they are served
+// (#388), the model named as the provider names it (OpenCode Go's
+// deepseek-v4.1-flash, whose host doesn't say so), and Command Code's
+// plugin, which replays it for a Go key as the built-in did to
+// /alpha/generate.
+func chatReplaysReasoning(host, model string) bool {
+	return strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID
+}
+
 func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	var msgs []map[string]any
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})
 	}
-	// DeepSeek takes a turn's reasoning back, wherever its models are
-	// served (#388), as Command Code's plugin does for a Go key, as the
-	// built-in replayed it to /alpha/generate
-	replay := strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID
+	replay := chatReplaysReasoning(host, model)
 	// MiniMax's own Chat API gives a model's thinking in the text, between
 	// <think> tags, and wants it back there on the turns after (its
 	// interleaved thinking): the decoder takes it out as thinking (#1267),
@@ -337,6 +344,10 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 				}
 			} else if think != "" && replay {
 				am["reasoning_content"] = think
+			} else if replay && len(calls) > 0 {
+				// a tool call with no thinking (another model's turn), which
+				// DeepSeek turns the whole request away for (#1462)
+				am["reasoning_content"] = noReasoning
 			}
 			msgs = append(msgs, am)
 			continue
