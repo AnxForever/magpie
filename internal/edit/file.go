@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/filememo"
@@ -32,6 +34,26 @@ func Read(path string) ([]byte, error) {
 	return bytes.Clone(b), nil
 }
 
+// filter, while Filtered runs, is given each file WriteAtomic is about to
+// write and returns what is written in its place.
+var (
+	filter    atomic.Pointer[func(path string, data []byte) []byte]
+	filtering sync.Mutex
+)
+
+// Filtered runs fn with every file written through this package passed
+// through f first: f gets the path (a link's target) and the bytes about to
+// be written, and returns the bytes to write. Writes from elsewhere while
+// fn runs pass through f too, so f changes only what it is sure of. One
+// Filtered runs at a time.
+func Filtered(f func(path string, data []byte) []byte, fn func() error) error {
+	filtering.Lock()
+	defer filtering.Unlock()
+	filter.Store(&f)
+	defer filter.Store(nil)
+	return fn()
+}
+
 // WriteAtomic writes data to path via a temp file + rename so a crash can
 // never leave a half-written config behind. File mode and group are
 // preserved. When path is a symlink (a config kept in a dotfiles repo) the
@@ -43,6 +65,9 @@ func WriteAtomic(path string, data []byte) error {
 	path, err := Target(path)
 	if err != nil {
 		return err
+	}
+	if f := filter.Load(); f != nil {
+		data = (*f)(path, data)
 	}
 	if hardLinked(path) {
 		f, err := os.OpenFile(path, os.O_WRONLY, 0)
