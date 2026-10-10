@@ -373,6 +373,15 @@ func addAccount(agentID string) error {
 	if _, plug := provider.PluginOf(agentID); plug || provider.Moved(agentID) {
 		return pluginLogin(context.Background(), agentID, "")
 	}
+	if p, _ := claudeCode.downloaded(); agentID == "claude" && runtime.GOOS != "windows" && claudeCode.own() == "" && p == "" {
+		// a server or container: the sign-in runs Claude Code, which it
+		// has none of; downloading it is offered, and asked (Jorben).
+		// Not on Windows, where one in WSL may be the one signed in with.
+		fmt.Println(amber.Render("!"), "Claude Code isn't installed here: magpie signs in to Claude, and answers its requests, through it")
+		if err := installClaudeCode(false); err != nil {
+			return err
+		}
+	}
 	st, err := provider.StartSignIn(agentID)
 	if err != nil {
 		return err

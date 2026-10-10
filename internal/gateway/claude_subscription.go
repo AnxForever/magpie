@@ -60,6 +60,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
@@ -428,14 +429,16 @@ type claudeCLI struct {
 	wsl  *wslrun.Tool
 }
 
+// claudeBinary is this machine's Claude Code, or the one magpie downloaded
+// for it (claudecode.Find), else one in WSL.
 func claudeBinary() (claudeCLI, error) {
-	if p := proc.FindTool("claude"); p != "" {
+	if p := claudecode.Find(); p != "" {
 		return claudeCLI{path: p}, nil
 	}
 	if t, ok := wslrun.Find("claude"); ok {
 		return claudeCLI{wsl: &t}, nil
 	}
-	return claudeCLI{}, errors.New("Claude Code is not installed; install it and run `claude auth login`")
+	return claudeCLI{}, errors.New("Claude Code is not installed; install it and run `claude auth login`, " + claudecode.InstallHint)
 }
 
 func (c claudeCLI) command(ctx context.Context, args ...string) *exec.Cmd {

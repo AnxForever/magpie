@@ -33,6 +33,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/proc"
 )
@@ -545,8 +546,9 @@ func saveClaudeCredential(loc claudeCredentialLocation, c claudeCredentials) err
 }
 
 // claudeExecutable finds the claude CLI (proc.FindTool: claude.exe in
-// ~/.local/bin on Windows too, #839); a var so tests can fake it.
-var claudeExecutable = func() string { return proc.FindTool("claude") }
+// ~/.local/bin on Windows too, #839), else the one magpie downloaded
+// (claudecode.Find); a var so tests can fake it.
+var claudeExecutable = claudecode.Find
 
 // claudeIdentity asks Claude Code itself which account is active. Its credential
 // blob intentionally contains tokens and plan metadata but no display identity;
