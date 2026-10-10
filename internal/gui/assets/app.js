@@ -7893,9 +7893,11 @@ const decidesModel = (p, id) => !!p.decide && (decideOnly(p) || (p.deciders ? p.
 // modelAPIs: the APIs one of p's models can be asked on alone, those it has
 // a URL for when it has more than one — a custom provider's, a preset's or
 // a subscription's alike (01huadalang on Discord: 一个 api 里有很多模型但是不同协议;
-// OpenCode Go's DeepSeek answers on Responses too)
+// OpenCode Go's DeepSeek answers on Responses too), its Gemini URL's
+// among them (Kayphoon on Discord: 自定义供应商兼容 gemini 格式了，模型的
+// 配置里还是只能选 chat 和 anthropic)
 const modelAPIs = (p) => {
-  const urls = ["chat", "responses", "anthropic"].filter((k) => ((draft?.id === p.id ? draft[k] : undefined) ?? p[k] ?? "").trim());
+  const urls = ["chat", "responses", "anthropic", "gemini"].filter((k) => ((draft?.id === p.id ? draft[k] : undefined) ?? p[k] ?? "").trim());
   return urls.length < 2 ? [] : PROTOS.filter(([k]) => urls.includes(k));
 };
 
