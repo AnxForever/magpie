@@ -211,7 +211,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
       <li><b>プロキシ。</b>プラグインがプロバイダやアカウントのために行う fetch は、ユーザーがそのプロバイダやアカウントに設定したプロキシを経由します。設定がなければ magpie 自身のプロキシを経由します（設定が<em>直接接続</em>の場合を除く）。ループバックアドレスはプロキシを通りません。独自の <code>proxy</code> オプションを渡す fetch はそのままにされます。</li>
       <li><b>更新。</b>
         <ul>
-          <li>コミュニティのパッケージ（<code>@magpie-community/*</code>）は、magpie の起動から少し後に自動で更新され、その後は 6 時間ごとに更新されます。</li>
+          <li>コミュニティのパッケージ（<code>@magpie-community/*</code>）は、magpie の起動から少し後に自動で更新され、その後は 1 時間ごとに更新されます。</li>
           <li>そのほかのパッケージは、新しいバージョンがあると <span class="ui">プラグイン</span> にドットが表示され、ユーザーがクリックか <code>magpie plugin update</code> で更新します。</li>
           <li>バージョンを固定した指定（<code>name@1.2.3</code>）は、ユーザーが更新するまでそのバージョンのままです。<span class="ui">… にアップデート</span>、<span class="ui">すべてアップデート</span>、<code>magpie plugin update</code> は最新版をインストールし、固定を外します。</li>
         </ul></li>
