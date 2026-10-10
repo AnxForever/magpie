@@ -56,6 +56,9 @@ func (p Provider) Test(ctx context.Context) []Result {
 	if p.isClaudeAccount() {
 		return []Result{p.testClaude(ctx, p.testModel(p, Anthropic))}
 	}
+	if p.testsTranslated() {
+		return []Result{p.testTranslated(ctx, p.testModel(p, CodeAssist))}
+	}
 	var out []Result
 	for _, proto := range p.Speaks() {
 		q, ok := p.keyFor(proto)
@@ -124,7 +127,8 @@ func clineProbe(body string) string {
 // for them; "own-api" for a sign-in reached
 // through its agent's own API (Cursor, Devin, Kiro, Zed, Qoder, a Google
 // sign-in), which the gateway translates every request for, so a probe
-// has no endpoint to go to.
+// has no endpoint to go to. A Google sign-in's are asked through the
+// gateway's translator (testsTranslated).
 func (p Provider) ModelTest() string {
 	if p.DecideOnly() {
 		if p.AsksDecideModels() {
@@ -132,7 +136,7 @@ func (p Provider) ModelTest() string {
 		}
 		return "decide"
 	}
-	if p.isClaudeAccount() {
+	if p.isClaudeAccount() || p.testsTranslated() {
 		return ""
 	}
 	for _, pr := range p.Speaks() {
@@ -245,6 +249,9 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 	}
 	if p.isClaudeAccount() {
 		return p.testClaude(ctx, model)
+	}
+	if p.testsTranslated() {
+		return p.testTranslated(ctx, model)
 	}
 	var protos []Protocol
 	for _, pr := range p.Speaks() {
