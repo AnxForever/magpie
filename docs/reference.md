@@ -2152,6 +2152,15 @@ and the country, while a partner is listed. Each event has an id of its
 own: no install id, address or account goes with it. The code is
 [site/worker.js](../site/worker.js).
 
+A plugin's, an import link's and the library's icons sit on hosts their
+authors picked. magpie fetches each through
+`https://usemagpie.ai/api/icon?url=<https URL>`, so the host sees
+Cloudflare's address and never the user's. The worker sends only
+`Accept: image/*` and its own User-Agent, passes on a PNG, JPEG, GIF, WebP,
+ICO or SVG of at most 1 MB and refuses anything else, and counts and keeps
+nothing. The code is [internal/iconproxy](../internal/iconproxy/iconproxy.go)
+and `icon` in [site/worker.js](../site/worker.js).
+
 ## Community
 
 Questions, setups worth sharing, ideas, bugs: come talk to us and other

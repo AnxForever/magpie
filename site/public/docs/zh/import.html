@@ -233,7 +233,7 @@ href = <span class="s">"https://usemagpie.ai/import#"</span> + urlencode({
       <li><b>不会悄悄覆盖。</b>id 已被占用时，对话框会说明，按钮也会变成「替换」。</li>
       <li><b>只接受 https。</b>除了本机和局域网，一律拒绝 http；<code>file:</code>、URL 里带账号密码以及其他协议直接拒绝。</li>
       <li><b>只读一次。</b>在应用里，链接内容只交给窗口一次；刷新后对话框不会再出现。</li>
-      <li><b>图标是下载的，不是嵌入的。</b><code>icon=</code> 地址由 magpie 自己下载，只在用户确认导入之后，只走 https，只存进它自己的图标目录，最大 1&nbsp;MB，并校验类型。域名在连接时解析，落到回环、内网、链路本地或保留地址时 magpie 拒绝连接，所以指回用户本机的域名（或 DNS 重绑定）都会被拒绝。页面和对话框从不直接加载远程图片。</li>
+      <li><b>图标是下载的，不是嵌入的。</b><code>icon=</code> 地址由 magpie 下载，只在用户确认导入之后，只走 https，只存进它自己的图标目录，最大 1&nbsp;MB，并校验类型。magpie 经 usemagpie.ai 的图标代理去取，所以你的服务器只看到 Cloudflare 的地址，看不到用户的 IP；请求从 Cloudflare 发出，碰不到用户本机和内网。回环或内网的域名在发出请求前就被拒绝。页面和对话框从不直接加载远程图片。</li>
       <li><b>密钥不经过服务器。</b>网页链接把参数放在 # 片段里。密钥最终只存在 <code>~/.config/magpie/providers.json</code>，只有用户本人可读。</li>
     </ul>
     <div class="note"><b>链接里的密钥就是机密。</b>只在该用户本人能看到的页面上把密钥放进链接，最好是专门给 magpie 生成、可以随时吊销的密钥。绝不要把共享密钥放进公开链接。</div>
