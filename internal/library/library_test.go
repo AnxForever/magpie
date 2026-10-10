@@ -768,7 +768,7 @@ func TestSkillsFromGitHub(t *testing.T) {
 		t.Error("the tarball wrote outside its folder")
 	}
 	version = "two"
-	ok(t)(UpdateSkill("pdf"))
+	ok(t)(UpdateSkill("pdf", false))
 	v, _ := Read(nil)
 	if v.Skills[0].Description != "PDFs two" || v.Skills[0].Source != in+"/pdf" {
 		t.Errorf("after update: %+v", v.Skills[0])
