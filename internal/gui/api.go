@@ -451,7 +451,7 @@ func searchState(s *settingsJSON) {
 	for _, a := range provider.StoredSearchAPIs() {
 		j := searchAPIJSON{Vendor: a.Vendor, Name: a.Name(), URL: a.URL, Ready: a.Ready()}
 		if a.Key != "" {
-			j.Key = provider.Mask(a.Key)
+			j.Key = a.MaskedKey()
 		}
 		s.SearchAPIs = append(s.SearchAPIs, j)
 	}
