@@ -210,6 +210,9 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .editor .lib-ag { padding: 0 9px 0 6px; border-color: var(--line); }
 .editor .lib-ag.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--fg) 30%, transparent); }
 .lib-probefoot .lib-agents { max-width: none; justify-content: flex-start; }
+/* All, ahead of a picker's chips (#1531): a word, set a little apart */
+.lib-agents > .lib-ag.all { padding: 0 8px; margin-right: 4px; font-weight: 500; }
+.lib-agents > .lib-ag.all.on { color: var(--fg); }
 
 /* in a list row they sit stacked like a hand of cards, on one line, and fan
    out when the pointer or focus comes to them */
