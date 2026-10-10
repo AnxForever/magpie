@@ -45,7 +45,7 @@ var CursorExecutable = func() string {
 		}
 	}
 	home, _ := os.UserHomeDir()
-	for _, p := range []string{filepath.Join(home, ".local", "bin", "cursor-agent"), "/usr/local/bin/cursor-agent", "/opt/homebrew/bin/cursor-agent"} {
+	for _, p := range append([]string{filepath.Join(home, ".local", "bin", "cursor-agent")}, proc.SystemDirs("/usr/local/bin/cursor-agent", "/opt/homebrew/bin/cursor-agent")...) {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p
 		}
