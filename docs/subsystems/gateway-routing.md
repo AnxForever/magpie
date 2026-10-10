@@ -88,6 +88,24 @@ are described in [Providers and accounts](providers-accounts.md#remote-magpie).
 System One uses `RouteDecider` and `postDecide` in
 [`decide.go`](../../internal/gateway/decide.go), taking one provider prefix
 off at each hop and preserving the state, questions and vendor errors.
+A model naming a group of decision models (`provider.Group.Decides`: every
+member a decision model; `cleanDecisionGroup` in
+[`decide_group.go`](../../internal/provider/decide_group.go) refuses a mixed
+one, one inside a chat group, and patterns, rules, effort or fast mode on
+it) goes to `serveDecisionGroup` in
+[`decide_group.go`](../../internal/gateway/decide_group.go) instead
+(`decisionGroupOf`: `group/<id>`, or a group's id or name by `GroupFor`). It
+plans the members' keys and accounts with `planGroup` (`perKeyBarred` keeps
+a decision-only provider's keys: `DecidesModel`), applies a gateway key's
+model and account limits and pause rules as for a chat, and tries each
+candidate in turn: a `retryable` failure that is not the request's own
+(`shapeRefused`, `promptRefused`, `protectionRefused`) rests it
+(`decideFailed` → `restAfter`) and the next is asked; the last one's answer
+is passed on. Every try is a `Try` of one route; one usage row is written
+for the answer. A group classifier of decision models fails over the same
+way (`askDecisionGroup`, `decideRefused` carrying the vendor's status). A
+decision group is kept out of the agents' catalog (`groupEntries`), and a
+conversation asked of it is refused 400 pointing at `/v1/systemone`.
 [`embeddings.go`](../../internal/gateway/embeddings.go) relays retrieval
 bodies and options, [`draw.go`](../../internal/gateway/draw.go) sends images
 to the remote's images API, and [`video.go`](../../internal/gateway/video.go)

@@ -47,6 +47,9 @@ type groupJSON struct {
 	// Patterns: its patterns, each with how many models it matches now
 	// (#766), so one that matches nothing is said on its card
 	Patterns []provider.PatternHit `json:"patterns"`
+	// Decides: it is a group of decision models, asked at /v1/systemone
+	// and by a group's classifier, never by an agent
+	Decides bool `json:"decides,omitempty"`
 }
 
 type memberJSON struct {
@@ -189,6 +192,7 @@ func groupsState() groupsJSON {
 	for _, g := range provider.Groups() {
 		gj := groupJSON{Group: g, Info: []memberJSON{}, Holds: []string{}, Offers: []string{}, Shared: []string{}, Patterns: []provider.PatternHit{}}
 		gj.Patterns = append(gj.Patterns, provider.PatternHits(g)...)
+		gj.Decides = g.Decides()
 		for _, e := range served {
 			if e.ID == provider.GroupPrefix+g.ID {
 				gj.Offers, gj.Shared = append(gj.Offers, e.Efforts...), append(gj.Shared, e.Shared...)

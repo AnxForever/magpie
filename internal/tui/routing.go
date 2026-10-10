@@ -187,15 +187,29 @@ type pickMsg struct{ group, newGroup string }
 // memberOptions is every model and group magpie has, but those in skip.
 func memberOptions(skip []string, self string) []agent.Option {
 	var out []agent.Option
-	for _, e := range provider.Catalog() {
-		if slices.Contains(skip, e.ID) || e.ID == provider.GroupPrefix+self {
-			continue
+	// a group is of decision models alone, asked at /v1/systemone, or of
+	// models that hold conversations (provider.cleanDecisionGroup): one
+	// holding either is offered more of the same, a new one both
+	g, _ := findGroup(self)
+	decides := self != "" && g.Decides()
+	if !decides {
+		for _, e := range provider.Catalog() {
+			if slices.Contains(skip, e.ID) || e.ID == provider.GroupPrefix+self {
+				continue
+			}
+			note := e.Name
+			if e.Group != "" {
+				note = "group · " + e.Name
+			}
+			out = append(out, agent.Option{Value: e.ID, Note: note})
 		}
-		note := e.Name
-		if e.Group != "" {
-			note = "group · " + e.Name
+	}
+	if self == "" || decides {
+		for _, e := range provider.Deciders() {
+			if !slices.Contains(skip, e.ID) {
+				out = append(out, agent.Option{Value: e.ID, Note: e.Name + " · decision model"})
+			}
 		}
-		out = append(out, agent.Option{Value: e.ID, Note: note})
 	}
 	return out
 }

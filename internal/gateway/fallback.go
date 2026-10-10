@@ -219,7 +219,7 @@ func perKeyBarred(p provider.Provider, model string, from provider.Protocol) (ou
 	var unlisted []candidate
 	for i, k := range keys {
 		q := p.WithKey(k)
-		if len(q.Speaks()) == 0 {
+		if len(q.Speaks()) == 0 && !q.DecidesModel(model) {
 			continue // made for a protocol this provider has no endpoint for
 		}
 		rest := p.ID

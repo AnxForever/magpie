@@ -86,14 +86,18 @@ func TestPluginServesSystemOne(t *testing.T) {
 	if code, out := postAs(t, s, "", `{"model":"`+pid+`/fake-clef","messages":[{"role":"user","content":"hi"}]}`); code != 400 || !strings.Contains(out, "only decides") {
 		t.Fatalf("chat to a decision model: %d %s", code, out)
 	}
-	// a group's classifier, and never a member
+	// a chat group's classifier, and never one of its models; a group of
+	// decision models alone is a decision group (decide_group.go)
 	g := provider.Group{ID: "d", Members: []string{pid + "/fake-1"}, Classifier: pid + "/fake-clef",
 		Rules: []provider.Rule{{Use: pid + "/fake-1", Intent: "bug"}}}
 	if err := provider.SaveGroup(g); err != nil {
 		t.Fatal(err)
 	}
-	if err := provider.SaveGroup(provider.Group{ID: "e", Members: []string{pid + "/fake-judge"}}); err == nil || !strings.Contains(err.Error(), "classifier") {
-		t.Fatalf("a decision model saved as a member: %v", err)
+	if err := provider.SaveGroup(provider.Group{ID: "e", Members: []string{pid + "/fake-1", pid + "/fake-judge"}}); err == nil || !strings.Contains(err.Error(), "decision models only") {
+		t.Fatalf("a decision model saved beside a chat model: %v", err)
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "e", Members: []string{pid + "/fake-judge", pid + "/jev-9"}}); err != nil {
+		t.Fatalf("a group of decision models: %v", err)
 	}
 	for _, m := range []string{"fake-clef", "fake-judge", "jev-9"} {
 		if v, err := s.askClassifier(pid+"/"+m, []string{"feature", "bug"}, before{}, false, "fix this"); err != nil || v.Intent != "bug" {

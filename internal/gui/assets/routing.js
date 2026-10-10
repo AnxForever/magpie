@@ -3088,7 +3088,11 @@
     const m = /^(.+):(none|minimal|low|medium|high|xhigh|max)$/i.exec(id);
     return m ? [m[1], m[2].toLowerCase()] : [id, ""];
   }
-  const modelOf = (id) => groups?.models.find((m) => m.id === id) || groups?.models.find((m) => m.id === splitMember(id)[0]);
+  // a decision model (Jev) is a member of a group of decision models only,
+  // asked at /v1/systemone (provider/decide_group.go): it is in
+  // groups.deciders, not groups.models
+  const deciderOf = (id) => groups?.deciders?.find((m) => m.id === splitMember(id)[0]);
+  const modelOf = (id) => groups?.models.find((m) => m.id === id) || groups?.models.find((m) => m.id === splitMember(id)[0]) || deciderOf(id);
   // a group's patterns (#766, provider.IsPattern): a glob, * any run of
   // characters over the provider/model id in any case, or re:<regexp> over
   // the whole id. The group keeps them, and the models they match now
@@ -3779,7 +3783,8 @@
         // the reasoning the model is sent at in this group: the group's
         // (blank), or one of its own whatever the agent asks. A group in
         // it reasons as it says.
-        if (!s) {
+        // a decision model reasons at no level of the group's or its own
+        if (!s && !deciderOf(id)) {
           const [base, fixed] = splitMember(id);
           const fx = el("button", "rt-cond rt-fixed" + (fixed ? " on" : ""), fixed ? fixedWords(fixed) : t("Group's reasoning"));
           fx.title = fixed ? t("Sent at {level} reasoning whatever the agent asks, at the model's nearest level", { level: fixed }) : t("Reasons as the group's effort says");
@@ -3811,7 +3816,7 @@
             fb.onclick = () => { d.fast = on ? d.fast.filter((x) => x !== id) : [...d.fast, id]; draw(); };
             row.append(fb);
           }
-        } else {
+        } else if (s) {
           // a group in the group takes no reasoning of its own: its models
           // reason as it says (provider.SaveGroup refuses "group/x:high", and
           // the gateway has nowhere to put one). So the slot a model's own
@@ -3858,10 +3863,15 @@
     addBtn.onclick = (ev) => {
       // a group in it may be any other, but never one it is in already:
       // that would put it in itself
-      const subs = groups.groups.filter((x) => !x.hidden && x.id !== g?.id && !(g && x.holds?.includes(g.id)))
+      // a group is of decision models only, or of models that hold
+      // conversations (provider.cleanDecisionGroup): one holding either
+      // is offered more of the same, an empty one both. A group of
+      // decision models is never in another: it holds no conversation
+      const decides = d.members.some((m) => !subOf(m) && deciderOf(m)), chats = d.members.some((m) => subOf(m) || !deciderOf(m));
+      const subs = decides ? [] : groups.groups.filter((x) => !x.hidden && !x.decides && x.id !== g?.id && !(g && x.holds?.includes(g.id)))
         .map((x) => ({ value: "group/" + x.id, label: x.name, note: noted("group/" + x.id, "group/" + x.id), icons: groupIcons(x), group: ROUTING_GROUPS, ref: "group/" + x.id }));
-      const options = [...subs, ...groups.models
-        .map((x) => ({ value: x.id, label: x.name || x.id, note: noted(x.providerName, x.id), icon: x.icon, group: x.providerName, ref: x.id, context: x.context }))];
+      const ref = (x) => ({ value: x.id, label: x.name || x.id, note: noted(x.providerName, x.id), icon: x.icon, group: x.providerName, ref: x.id, context: x.context });
+      const options = [...subs, ...(decides ? [] : groups.models.map(ref)), ...(chats ? [] : (groups.deciders || []).map(ref))];
       // the member a model is in the group as: itself, or with its
       // reasoning fixed (deepseek/x:max), which is ticked as it and taken
       // out by it rather than added twice (#907)
