@@ -46,6 +46,14 @@ type keptIdentity struct {
 
 var identityFile sync.Mutex
 
+// KeepCLIIdentities is whether the answers are kept on disk. Off in the
+// gateway's tests: an ask runs behind the look that started it, and one
+// still going when its test ended (a stand-in CLI slow under load) wrote
+// cli-identity.json into the test's config folder as that was being
+// removed, failing the test's TempDir cleanup (#1524). Set before the
+// tests start, never while asks run.
+var KeepCLIIdentities = true
+
 func identityPath() string { return filepath.Join(filepath.Dir(Path()), "cli-identity.json") }
 
 func readIdentities() map[string]keptIdentity {
@@ -57,6 +65,9 @@ func readIdentities() map[string]keptIdentity {
 }
 
 func (c *cliIdentity) keep() {
+	if !KeepCLIIdentities {
+		return
+	}
 	identityFile.Lock()
 	defer identityFile.Unlock()
 	m := readIdentities()
