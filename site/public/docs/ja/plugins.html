@@ -215,6 +215,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
           <li>コミュニティのパッケージ（<code>@magpie-community/*</code>）は、magpie の起動から少し後に自動で更新され、その後は 1 時間ごとに更新されます。</li>
           <li>そのほかのパッケージは、新しいバージョンがあると <span class="ui">プラグイン</span> にドットが表示され、ユーザーがクリックか <code>magpie plugin update</code> で更新します。</li>
           <li>バージョンを固定した指定（<code>name@1.2.3</code>）は、ユーザーが更新するまでそのバージョンのままです。<span class="ui">… にアップデート</span>、<span class="ui">すべてアップデート</span>、<code>magpie plugin update</code> は最新版をインストールし、固定を外します。</li>
+          <li>git リポジトリには比べるバージョンがありません。ブランチやタグ（<code>#ref</code> がなければデフォルトブランチ）が Bun のインストールしたコミットと違うときだけ、アップデートが表示されます。GitHub のものは GitHub の API に、ほかのホストは <code>git ls-remote</code> で、最大 10 分に 1 回問い合わせ、1 時間ごとのチェックでも問い合わせます。コミットに固定した指定にはアップデートはありません。行にはインストールしたコミットが表示されます。</li>
         </ul></li>
     </ul>
     <p>magpie が設定フォルダ（<code>~/.config/magpie</code> または <code>$XDG_CONFIG_HOME/magpie</code>）に保存するもの：</p>
@@ -253,7 +254,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>OpenCode は <code>magpie</code> オブジェクトを無視するので、OpenCode プラグインに追加しても安全です。</p>
     <div class="table-wrap"><table>
       <tr><th>フィールド</th><th>意味</th></tr>
-      <tr><td><code>magpie.icon</code></td><td>プロバイダの画像：<code>https://</code> URL または <code>data:image/…</code> URI、最大 1 MB。SVG、PNG など。</td></tr>
+      <tr><td><code>magpie.icon</code></td><td>プロバイダの画像。「発見」のプラグインのカードにも表示されます（npm から、GitHub のものはリポジトリから読み込み）：<code>https://</code> URL または <code>data:image/…</code> URI、最大 1 MB。SVG、PNG など。</td></tr>
       <tr><td><code>magpie.maxConcurrency</code></td><td>各アカウントが同時に受けるリクエスト数。1 から 1000 の整数。ユーザーがプロバイダに設定した上限が優先されます。</td></tr>
     </table></div>
     <p>同じフィールドは <code>auth</code> フックにも設定でき（<code>auth.icon</code>、<code>auth.maxConcurrency</code>）、そちらが <code>package.json</code> より優先されます。</p>
@@ -285,6 +286,10 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
 }</pre>
     </div>
     <p>モデルには、プロバイダとは別の API やアドレスを使うための <code>provider: { npm, api }</code>、<code>headers</code>、<code>options</code>、そして非表示にするための <code>disabled: true</code> も指定できます。</p>
+
+        <h3 id="decide">判定 API（System One）</h3>
+    <p>プラグインは自分のプロバイダ向けに TypeSafe の System One API を提供でき、そのモデルを<a href="/docs/ja/intent">ルーティンググループの分類器</a>にできます。<code>config</code> フックでプロバイダに <code>decide: true</code> を、会話ではなく質問に答えるモデルごとに <code>decides: true</code> を設定します（<code>config</code> フックでも <code>models</code> フックのリストでも構いません）。すると magpie は各質問を <code>POST {baseURL}/systemone</code> としてローダーの <code>fetch</code> に送ります。アカウントのサインイン情報は他のリクエストと同じく付きます。本文は <code>{"model", "questions", "state"}</code>、返答は <code>{"model", "answers": {"&lt;質問&gt;": {"choice", "score", "confidence"}}}</code> です。</p>
+    <p><code>decides</code> を付けたモデルと <code>jev-*</code> という名前のモデルは分類器として提示され、エージェントには見せません。それらへのチャットリクエストは拒否されます。プロバイダに <code>decide: true</code> がなければ <code>decides</code> は無視され、どのモデルも普通にチャットに使えます。</p>
 
     <h3 id="apis">モデルが話す API</h3>
     <p>モデルまたはプロバイダの <code>npm</code> で指定した AI SDK パッケージが API を決めます。それによって、あなたの <code>fetch</code> が受け取るリクエストの形が決まります。エージェントが何を送ってきても、magpie のゲートウェイがすでに変換済みです：</p>

@@ -368,13 +368,7 @@ func ClaudeDir() string {
 }
 
 // CodexDir is Codex's folder: $CODEX_HOME, else ~/.codex.
-func CodexDir() string {
-	if d := appdir.Getenv("CODEX_HOME"); d != "" {
-		return d
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".codex")
-}
+func CodexDir() string { return appdir.CodexHome() }
 
 func stat(f *file) bool {
 	fi, err := os.Stat(f.path)

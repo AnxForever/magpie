@@ -1858,7 +1858,7 @@ func StandIn(agent, model string) string {
 		return ""
 	}
 	if agent == "codex" {
-		return codexStandIn(filepath.Join(home, ".codex", "config.toml"))
+		return codexStandIn(filepath.Join(here(home).codexHome(), "config.toml"))
 	}
 	if m := claudeStandIn(filepath.Join(home, ".claude", "settings.json"), model); m != "" || runtime.GOOS != "windows" {
 		return m

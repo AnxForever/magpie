@@ -80,6 +80,10 @@ func cursorAuthPath() string {
 
 func cursorSubscriptionUsage(ctx context.Context, plan string) SubscriptionQuota {
 	q := SubscriptionQuota{Provider: "cursor", Name: "Cursor", Icon: "cursor", Plan: plan, Windows: []QuotaWindow{}}
+	if holding(ctx) {
+		q.Error = errNotAsked.Error()
+		return q
+	}
 	tok, err := cursorToken()
 	if err == nil {
 		q.Windows, err = cursorWindows(ctx, tok)

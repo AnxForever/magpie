@@ -13,7 +13,7 @@ import (
 // what doesn't answer before ctx ends comes back with an error.
 func Quotas(ctx context.Context) []SubscriptionQuota {
 	subs, plans, balances := quotas(ctx)
-	return append(append(subs, plans...), balances...)
+	return cardsServed(subs, plans, balances, LastServed())
 }
 
 // Allotted is Quotas without the keys' balances: the accounts and plans

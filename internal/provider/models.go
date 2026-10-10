@@ -169,6 +169,16 @@ func (p Provider) Fetch(ctx context.Context) ([]catalog.Model, error) {
 // A pick the old list didn't have was typed in by hand, and stays; a
 // fetch that fails, or that answers no model at all, changes nothing.
 func (p Provider) Refetch(ctx context.Context) ([]catalog.Model, []string, error) {
+	if p.IsPlugin() {
+		// its plugin's list, read again: a pick it had and has no more
+		// goes as a built-in's does (plugin_relist.go)
+		before := plugin.Cached()
+		ms, err := p.fetch(ctx)
+		if err != nil {
+			return ms, nil, err
+		}
+		return ms, dropGonePluginPicks(before, plugin.Cached())[p.ID], nil
+	}
 	if p.Account != nil || p.DecideOnly() {
 		ms, err := p.fetch(ctx)
 		return ms, nil, err

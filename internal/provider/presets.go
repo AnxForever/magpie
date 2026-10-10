@@ -103,6 +103,11 @@ func bailianWorkspace(region string) string {
 	return "https://" + WorkspaceID + "." + region + ".maas.aliyuncs.com/compatible-mode/v1"
 }
 
+// alibabaPlanModels are the text models of Alibaba's Token Plan, the same
+// on the Qwen AI platform's and on Bailian's, as their overviews list them.
+var alibabaPlanModels = []string{"auto", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+	"deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "glm-5.3", "glm-5.2"}
+
 // presets are ordered as they appear in the picker.
 var presets = []PresetDef{
 	{ID: "anthropic", Name: "Anthropic", Icon: "claude-color", Kind: KindVendor, Catalog: "anthropic",
@@ -308,17 +313,29 @@ var presets = []PresetDef{
 		Chat: "https://dashscope.aliyuncs.com/compatible-mode/v1", Anthropic: "https://dashscope.aliyuncs.com/apps/anthropic",
 		Note:    "DashScope · China",
 		Website: "https://bailian.console.aliyun.com", KeysURL: "https://bailian.console.aliyun.com/?tab=model#/api-key"},
-	// Alibaba Cloud Bailian's Token Plan (personal and team), a subscription
-	// on a key of its own (sk-sp-) that only its own host takes, serving
-	// chat completions and Anthropic messages. The models given are the
-	// plan's text models as its overview lists them, for when it gives no
-	// list.
+	// Alibaba's Token Plan is sold twice, each on a key of its own (sk-sp-)
+	// that only its own host takes, serving chat completions and Anthropic
+	// messages: on the Qwen AI platform (platform.qianwenai.com) at
+	// token-plan.maas.qianwenaiapi.com, and on Alibaba Cloud Bailian
+	// (bailian.console.aliyun.com) at token-plan.cn-beijing.maas.aliyuncs.com
+	// (#1506). The models given are the plans' text models as their
+	// overviews list them, for when the host gives no list. Neither has an
+	// API for the plan's credits: its console's subscription page shows them.
 	{ID: "qwen-token-plan", Name: "Qwen Token Plan", Short: "Qwen Plan", Icon: "qwen-color", Kind: KindVendor,
 		Chat: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", Anthropic: "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
-		Note:    "Bailian · subscription",
+		Note:    "Qwen AI platform · subscription",
+		Website: "https://platform.qianwenai.com/docs/token-plan/overview", KeysURL: "https://platform.qianwenai.com/home/analytics/token-plan/individual",
+		Models: alibabaPlanModels},
+	// Bailian's also answers its decision model, decision-model-preview, on
+	// System One at /compatible-mode/v1/systemone with the same key
+	// (token-plan-decision-model; the personal plan only), so a routing
+	// group can be classified by it
+	{ID: "bailian-token-plan", Name: "Bailian Token Plan", Short: "Bailian Plan", Icon: "bailian-color", Kind: KindVendor,
+		Chat: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", Anthropic: "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+		Decide:  "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		Note:    "Alibaba Cloud Bailian · subscription",
 		Website: "https://help.aliyun.com/zh/model-studio/token-plan-overview", KeysURL: "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal",
-		Models: []string{"auto", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-			"deepseek-v4.1-flash", "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "glm-5.3", "glm-5.2"}},
+		Models: alibabaPlanModels},
 	{ID: "mistral", Name: "Mistral", Icon: "mistral-color", Kind: KindVendor, Catalog: "mistral",
 		Chat:    "https://api.mistral.ai/v1",
 		Website: "https://console.mistral.ai", KeysURL: "https://console.mistral.ai/api-keys"},
@@ -487,7 +504,7 @@ var presets = []PresetDef{
 	// Alibaba Cloud Bailian's decision model (#647), on Jev's System One
 	// API: at the host of the key's workspace (Beijing or Singapore), or
 	// the Token Plan's for its sk-sp- keys
-	{ID: "bailian-decision", Name: "Bailian Decision Model", Short: "Bailian Decision", Icon: "qwen-color", Kind: KindVendor,
+	{ID: "bailian-decision", Name: "Bailian Decision Model", Short: "Bailian Decision", Icon: "bailian-color", Kind: KindVendor,
 		Decide:      bailianWorkspace("cn-beijing"),
 		Note:        "routes groups · picks model and effort",
 		RegionLabel: "Plan", Regions: []Region{
@@ -498,6 +515,12 @@ var presets = []PresetDef{
 				KeysURL: "https://bailian.console.aliyun.com/cn-beijing/subscription/token-plan/personal"},
 		},
 		Website: "https://help.aliyun.com/zh/model-studio/decision-model-preview", KeysURL: "https://bailian.console.aliyun.com/?tab=model#/api-key"},
+	// the same decision model on the Qwen AI platform's pay as you go
+	// (#1506), at maas.qianwenaiapi.com with a key of that platform's
+	{ID: "qwen-decision", Name: "Qwen Decision Model", Short: "Qwen Decision", Icon: "qwen-color", Kind: KindVendor,
+		Decide:  "https://maas.qianwenaiapi.com/compatible-mode/v1",
+		Note:    "routes groups · picks model and effort",
+		Website: "https://www.qianwenai.com/models/decision-model-preview", KeysURL: "https://platform.qianwenai.com/home/api-keys"},
 	{ID: "ollama", Name: "Ollama", Icon: "ollama", Kind: KindLocal, NoKey: true,
 		Chat: "http://localhost:11434/v1", Anthropic: "http://localhost:11434",
 		Note: "your local models", Website: "https://ollama.com"},

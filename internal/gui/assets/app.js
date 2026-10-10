@@ -301,7 +301,8 @@ function renderAgents() {
     // Code's, until it runs through magpie where magpie takes any key), or
     // a small model with none to pick (Snow CLI's, on a profile of the
     // user's own)
-    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in" || f.key === "small") && !f.options.length && !f.value;
+    // nor Aside's account with one account only (#1499)
+    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in" || f.key === "small" || asideAccount(a, f)) && !f.options.length && !f.value;
     const shownFields = a.fields.filter((f) => !grouped(a, f) && !none(f));
     const tiers = tierMenu(a);
     if (tiers) shownFields.push(tiers);
@@ -2935,11 +2936,16 @@ const TIER_EFFORTS = TIERS.map((tier) => tier + " effort");
 const FOLLOWS_MODEL = [...TIERS, "subagents", "smol", "slow"];
 // omp's roles share one square as Claude Code's tiers do (#1397), each
 // with its thinking level under its model: the level omp reads off the end
-// of the role's model ("…:high"). plan, vision and advisor don't follow
-// the model: unset, omp picks for each itself, the advisor the slow
-// role's model first
-const OMP_ROLES = ["subagents", "smol", "slow", "plan", "vision", "advisor"];
-const OMP_OWN_PICK = ["plan", "vision", "advisor"];
+// of the role's model ("…:high"). The roles after slow don't follow the
+// model; each says what omp does when it is unset: plan and vision are
+// omp's own pick, the advisor the slow role's model first, commit and tiny
+// the smol role's, memory the tiny role's (omp's chat roles, #1397)
+const OMP_UNSET = {
+  plan: "omp's own pick", vision: "omp's own pick", advisor: "the slow role's model, else omp's own pick",
+  commit: "the smol role's model", tiny: "the smol role's model", memory: "the tiny role's model, else the smol role's",
+};
+const OMP_OWN_PICK = Object.keys(OMP_UNSET);
+const OMP_ROLES = ["subagents", "smol", "slow", ...OMP_OWN_PICK];
 // omp, a named profile of it (omp#<name>) or either in a WSL distro
 const ompAgent = (a) => a.id.split("@wsl:")[0].split("#")[0] === "omp";
 // the roles an agent's square lists, and whether a field is one of them or
@@ -3059,8 +3065,7 @@ function tierMenu(a) {
   // Claude model of that tier magpie serves, else on the chat's model
   const main = a.fields.find((f) => f.key === "model");
   const mainName = main && (optionFor(main, main.value)?.label || main.value);
-  const unset = (f) => omp && f.label === "advisor" ? t("the slow role's model, else omp's own pick")
-    : omp && OMP_OWN_PICK.includes(f.label) ? t("omp's own pick")
+  const unset = (f) => omp && OMP_OWN_PICK.includes(f.label) ? t(OMP_UNSET[f.label])
     : main ? t("same as model ({model})", { model: mainName }) : t("a Claude model of the tier, else the chat's model");
   // a tier's effort, offered while there are levels to pick (Claude Code
   // through magpie); unset, the tier runs at the effort Claude Code asks.
@@ -3191,14 +3196,35 @@ async function load(again) {
   if (view === "gateway" && !providers) renderGatewayLoading();
   try {
     const since = prefsWrites;
-    const next = await api("state");
+    const asked = api("state");
+    // the first load draws the state magpie kept from its last read while
+    // the fresh one is read (#1519, fatkun): reading every agent's config,
+    // and a WSL distro's through \\wsl.localhost, took seconds after a
+    // start or after light mode let the window go. The fresh state
+    // replaces it the moment it is in, so an agent leaves the list only
+    // once that says it is gone.
+    let relang = false, shown = null;
+    if (!load.done) {
+      const last = await Promise.race([api("state?last=1").catch(() => null), asked.then(() => null, () => null)]);
+      if (last?.last && !load.done) {
+        state = shown = last;
+        relang = applyPrefs(state.settings, state.fx);
+        tintPanel();
+        tintTitleBar();
+        renderAgents();
+      }
+    }
+    let next = await asked;
+    // a change made on the rows drawn from it answered with a state read
+    // after this one was asked for: that one stands
+    if (shown && state !== shown) next = state;
     // a setting changed while this was on its way (it can take seconds):
     // what came back is from before it, and would put the old theme back
     if (!prefsSettled(since) && load.done) next.settings = state.settings;
     state = next;
     load.done = true;
     // the library may have drawn itself before the saved language was known
-    if (applyPrefs(state.settings, state.fx)) {
+    if (applyPrefs(state.settings, state.fx) || relang) {
       again = false; // the Usage page too is drawn again, in the new language
       if (view === "library") window.loadLibrary?.();
       if (view === "plugins") window.loadPlugins?.();
@@ -3229,6 +3255,22 @@ async function load(again) {
   renderUpdateBadge();
   cliBehindOnce();
   whatsNewOnce();
+  recoveredOnce();
+}
+
+// recoveredOnce tells, once each, of a file of magpie's own a crash left
+// unreadable (all zero, #1505) that was read back from its last good copy:
+// the accounts in it are as they were then, a later change may be missing.
+const recoveredShown = new Set();
+function recoveredOnce() {
+  const fresh = (state?.recovered || []).filter((n) => !recoveredShown.has(n.path + "\n" + n.at));
+  if (!fresh.length) return;
+  for (const n of fresh) recoveredShown.add(n.path + "\n" + n.at);
+  const files = fresh.map((n) => n.file).join(", ");
+  const bak = fresh.length === 1 && fresh[0].bak && !fresh[0].bak.startsWith("0001-") ? new Date(fresh[0].bak) : null;
+  status(bak
+    ? t("{file} was damaged (the computer likely stopped mid-write), so magpie restored it from its backup of {time}. A change made after that may be missing; the damaged file is kept beside it.", { file: files, time: bak.toLocaleString(locale) })
+    : t("{file} was damaged (the computer likely stopped mid-write), so magpie restored it from its backup. A change made after that may be missing; the damaged file is kept beside it.", { file: files }), "warn", 20000);
 }
 
 // installFrom is what a restart to update tells the app: the window's tab,
@@ -3773,8 +3815,8 @@ function openPicker(agent, field, anchor, ev, only) {
       : PICKS_ITSELF.includes(agent.id) && field.key === "model" ? "clears the default model; {agent} picks one on its own"
       : field.label === MEMORIES ? MEMORIES_DEFAULT
       : field.label === SUB_MODEL ? "each subagent on the model {agent}'s lead asks for"
-      : ompAgent(agent) && field.label === "advisor" ? "the slow role's model, else omp's own pick"
-      : ompAgent(agent) && OMP_OWN_PICK.includes(field.label) ? "omp's own pick"
+      : ompAgent(agent) && OMP_OWN_PICK.includes(field.label) ? OMP_UNSET[field.label]
+      : asideAccount(agent, field) ? "the account active in {agent}"
       : "what {agent} ships with";
     options.unshift({ value: "", label: t("Default"), note: t(note, { agent: agent.name, field: t(field.label) }), icon: agent.icon, reset: true });
   }
@@ -4246,7 +4288,9 @@ function renderList() {
     if (rate) words.append(rate);
     const ctx = contextTag(o.context, o.label);
     if (ctx) words.append(ctx);
-    let note = o.note && o.note !== (o.label || o.value) ? (own ? t(o.note) : o.note) : "";
+    // an Aside account's note is its e-mail, or Aside's "Local Account",
+    // then whether Aside has it active: the words are magpie's, the e-mail not
+    let note = o.note && o.note !== (o.label || o.value) ? (own ? t(o.note) : asideAccount(pick.agent, pick.field) ? o.note.split(" · ").map((w) => t(w)).join(" · ") : o.note) : "";
     // which way the model goes, as a tag the note's ellipsis can't cut
     // off: "· via magpie" ended a long note (an account's e-mail), and
     // Claude Code's own models said nothing, so an Opus asked of Anthropic
@@ -4427,6 +4471,12 @@ async function commit(value) {
   // (#726)
   if (leavesMagpie(agent, field, value, opt)) { askLeave(agent, field, value, opt); return; }
   return setPick(agent, field, value, opt);
+}
+
+// asideAccount: Aside's account field, which of its accounts (~/.aside/u/N)
+// magpie configures; empty follows the one Aside has active (#1499)
+function asideAccount(a, f) {
+  return a?.id === "aside" && f?.key === "account";
 }
 
 // leavesMagpie: picking value in field takes the connected agent off
@@ -7706,6 +7756,8 @@ function openModal(content) {
   d.classList.remove("swap");
   if (!fresh) { void d.offsetWidth; d.classList.add("swap"); } // content changed: a soft refresh, not a re-entrance
   frame(content);
+  // an editor that reads long text (a prompt's) takes a wider dialog
+  d.classList.toggle("wide", content.classList.contains("wide"));
   // Keep focus through a redraw of an open editor.
   const active = d.contains(document.activeElement) ? document.activeElement : null;
   const focusID = active?.id;
@@ -7864,9 +7916,11 @@ const decidesModel = (p, id) => !!p.decide && (decideOnly(p) || (p.deciders ? p.
 // modelAPIs: the APIs one of p's models can be asked on alone, those it has
 // a URL for when it has more than one — a custom provider's, a preset's or
 // a subscription's alike (01huadalang on Discord: 一个 api 里有很多模型但是不同协议;
-// OpenCode Go's DeepSeek answers on Responses too)
+// OpenCode Go's DeepSeek answers on Responses too), its Gemini URL's
+// among them (Kayphoon on Discord: 自定义供应商兼容 gemini 格式了，模型的
+// 配置里还是只能选 chat 和 anthropic)
 const modelAPIs = (p) => {
-  const urls = ["chat", "responses", "anthropic"].filter((k) => ((draft?.id === p.id ? draft[k] : undefined) ?? p[k] ?? "").trim());
+  const urls = ["chat", "responses", "anthropic", "gemini"].filter((k) => ((draft?.id === p.id ? draft[k] : undefined) ?? p[k] ?? "").trim());
   return urls.length < 2 ? [] : PROTOS.filter(([k]) => urls.includes(k));
 };
 
@@ -8915,7 +8969,9 @@ async function openImportApps(discovered) {
     for (const s of sources) for (const it of s.items) {
       if (it.skip || it.status === "same") continue;
       const offered = !(discovered instanceof Set) || discovered.has(it.fingerprint);
-      picks[s.id + "\n" + it.ref] = { on: offered && !it.off && (it.status !== "taken" || !!it.keyOf), mode: it.keyOf ? "key" : "add" };
+      // one named as a subscription (claude, workbuddy) comes in beside
+      // it, so it is picked like a new one (#1487)
+      picks[s.id + "\n" + it.ref] = { on: offered && !it.off && (it.status !== "taken" || !!it.keyOf || !!it.reserved), mode: it.keyOf ? "key" : "add" };
     }
     if (!importingApps) return;
     const tab = sources.find((s) => s.items.some((it) => picks[s.id + "\n" + it.ref]?.on))?.id;
@@ -9034,7 +9090,7 @@ function renderImportApps(ia) {
     for (const [k, v] of Object.entries(ia.picks)) {
       if (!v.on) continue;
       const [source, ref] = k.split("\n");
-      picks.push({ source, ref, mode: v.mode });
+      picks.push({ source, ref, mode: v.mode, ...(v.name?.trim() ? { name: v.name.trim() } : {}) });
     }
     go.classList.add("busy");
     try {
@@ -9089,13 +9145,38 @@ function importAppRow(ia, s, it, recount, boxes) {
   who.append(el("div", "sub", bits.join(" · ")));
   if (pick && it.off) who.append(el("div", "sub", t(it.off)));
   if (pick && (it.keyOf || it.status === "taken")) {
-    const opts = [];
-    if (it.keyOf) opts.push(["key", t("Add as another key")]);
-    opts.push(["add", t(it.status === "taken" ? "Keep both" : "Add as a new provider")]);
-    if (it.status === "taken") opts.push(["replace", t("Replace it")]);
-    who.append(el("div", "sub", t("magpie has {name} already", { name: it.existing })));
-    const sg = segs(opts, pick.mode, (m) => { pick.mode = m; if (!pick.on) { pick.on = box.checked = true; recount(); } });
-    sg.onclick = (e) => e.preventDefault(); // a click on a choice is not a click on the checkbox
+    const renamed = () => !!pick.name?.trim() && pick.name.trim() !== p.name;
+    const choices = () => {
+      const opts = [];
+      if (it.keyOf) opts.push(["key", t("Add as another key")]);
+      opts.push(["add", t(it.status === "taken" && !it.reserved && !renamed() ? "Keep both" : "Add as a new provider")]);
+      // a subscription is never replaced by a provider of keys, nor is
+      // anything by one the user gave a name of its own (#1487)
+      if (it.status === "taken" && !it.reserved && !renamed()) opts.push(["replace", t("Replace it")]);
+      // one way in alone needs no choice
+      if (opts.length === 1) { pick.mode = opts[0][0]; const none = el("span"); none.hidden = true; return none; }
+      const sg = segs(opts, pick.mode, (m) => { pick.mode = m; if (!pick.on) { pick.on = box.checked = true; recount(); } });
+      sg.onclick = (e) => e.preventDefault(); // a click on a choice is not a click on the checkbox
+      return sg;
+    };
+    who.append(el("div", "sub", t(it.reserved ? "{name} is a subscription in magpie; this one comes in beside it as a provider of its own" : "magpie has {name} already", { name: it.existing })));
+    let sg = choices();
+    if (it.status === "taken") {
+      // a name that collides can be changed right here (#1487)
+      const nm = input(pick.name ?? p.name, t("e.g. My Relay"));
+      nm.className = "appname";
+      nm.setAttribute("aria-label", t("Name"));
+      nm.onclick = (e) => e.preventDefault(); // typing in it never ticks the row
+      nm.oninput = () => {
+        pick.name = nm.value;
+        if (renamed() && pick.mode === "replace") pick.mode = "add";
+        const next = choices();
+        sg.replaceWith(next);
+        sg = next;
+        if (renamed() && !pick.on) { pick.on = box.checked = true; recount(); }
+      };
+      who.append(nm);
+    }
     who.append(sg);
   }
   let tag = null;
@@ -11583,12 +11664,22 @@ function quotaError(err) {
   // card sentence, so the sign-in errors — which name the address themselves —
   // and "could not be read" are left alone.
   if (/^this account has no GLM Coding Plan, and ZCode's Start Plan has ended or was never started$/.test(err)) return t("ZCode: no GLM Coding Plan, and no free Start Plan — subscribe to a GLM Coding Plan to use this account");
+  // an OpenCode Go key's windows (planWindows, planquota.go): Go is the
+  // subscribing member's, in their workspace, so a key from anyone else
+  // reads none — said with the way out, as a phone can't hover for it
+  if (/^this key has no OpenCode Go subscription/.test(err)) return t("No OpenCode Go on this key — use a key made by the member who subscribed, in that workspace");
+  if (/^OpenCode didn't take this key/.test(err)) return t("OpenCode didn't take this key — paste a current one in the provider's settings");
+  if (/^OpenCode Go's reply has no rolling/.test(err)) return t("OpenCode Go answered in a form magpie doesn't read — hover for what it sent");
   // a remote magpie's card (remote_quotas.go)
   if (/^nothing read on that magpie yet/.test(err)) return t("Nothing read on that computer yet — refresh this card to have it read");
   if (/^remote magpie doesn't share its quotas/.test(err)) return t("That computer's magpie doesn't share its quotas yet — update magpie there");
   if (/^remote magpie isn't shared/.test(err)) return t("That computer's magpie isn't shared — turn on Settings → Share on local network there");
   if (/^remote magpie didn't take this key/.test(err)) return t("That computer's magpie didn't take this key — use one of its gateway keys in this provider");
   if (/^couldn't reach the remote magpie/.test(err)) return t("Couldn't reach that computer's magpie — check that it is running and its address");
+  // a ClinePass card with its balance but not its limits (#79): the
+  // built-in key card (clineLimitsUnread, cline_usage.go) and the Cline
+  // plugin both begin their error with these words
+  if (/^ClinePass limits couldn't be read/.test(err)) return t("ClinePass limits couldn't be read — hover for why");
   return balanceError(err) || t("Allowance unavailable");
 }
 
@@ -13471,6 +13562,7 @@ function renderQuotas() {
       card.append(el("span", "skeleton sk-title"), el("span", "skeleton sk-line"), el("span", "skeleton sk-line short"));
       subscriptions.append(card);
     }
+    packUsageNow(subscriptions);
     return;
   }
   if (usageArranging) { usageRenderPending = true; return; }
@@ -13579,6 +13671,7 @@ function renderQuotas() {
     subscriptions.append(card);
   }
   markUpstream();
+  packUsageNow(subscriptions);
   restoreFlash();
   requestAnimationFrame(focusQuotaCard);
 }
@@ -13729,6 +13822,90 @@ function byUsageOrder(list) {
   const order = state.settings?.usageOrder || [];
   const rank = (q) => { const i = order.indexOf(q.provider); return i < 0 ? order.length : i; };
   return list.map((q, i) => [q, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([q]) => q);
+}
+
+// packUsage lays the Usage page's cards out in columns, each card as tall
+// as itself, the next in the order going to the column that ends highest
+// (huoranxuanyuan, #860: a tall Codex card beside Antigravity and a
+// DeepSeek balance left the short two mostly empty; 把 antigravity 和
+// deepseek 两个上下堆叠和 Codex 对齐). The order still reads left to right,
+// row by row as near as the heights allow, and the cards stay in it on the
+// page, for dragging, Alt+arrows and a screen reader alike. As many columns
+// as 260px each fit, unless one fewer leaves much less empty beside the
+// short cards for a page not much taller. Decided again when the cards
+// change or the width fits another number of columns; a card growing (a
+// fold opened) only packs them again, so what was clicked stays where it
+// was, even as the view's scrollbar comes in and takes some of the width
+// (in WebKit a card turned to every model went to one column under its
+// neighbour, the page following it).
+const USAGE_MIN = 260, USAGE_GAP = 7;
+let usagePacked = null, usagePackFrame = 0;
+function packUsage() {
+  const list = $("#subscriptionUsage");
+  if (usagePackFrame) { cancelAnimationFrame(usagePackFrame); usagePackFrame = 0; }
+  if (!list || list.classList.contains("sorting")) return;
+  const cards = [...list.children], width = list.clientWidth;
+  if (!width || !cards.length) {
+    // out of sight: the grid as it is without packing, packed once it shows
+    list.classList.remove("packed");
+    list.style.gridTemplateColumns = "";
+    for (const c of cards) c.style.gridArea = "";
+    usagePacked = null;
+    return;
+  }
+  const keys = cards.map((c) => c.dataset.key || "").join();
+  const most = Math.max(1, Math.min(cards.length, Math.floor((width + USAGE_GAP) / (USAGE_MIN + USAGE_GAP))));
+  const place = (n, hs) => {
+    const ends = Array(n).fill(0), at = [];
+    for (const h of hs.map(Math.ceil)) {
+      // the leftmost of those ending within a pixel of the highest
+      const low = Math.min(...ends), c = ends.findIndex((e) => e <= low + 1);
+      at.push([c, ends[c], h]);
+      ends[c] += h + USAGE_GAP;
+    }
+    const tall = Math.max(...ends) - USAGE_GAP;
+    // what stands empty under the columns' ends, by the columns' width
+    const empty = ends.reduce((s, e) => s + tall - (e - USAGE_GAP), 0) * (width - (n - 1) * USAGE_GAP) / n;
+    return { n, at, tall, empty };
+  };
+  const heights = () => {
+    for (const g of list.querySelectorAll(".quota-windows")) fitQuota(g);
+    return cards.map((c) => c.getBoundingClientRect().height);
+  };
+  const columns = (n) => { list.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`; };
+  let best;
+  if (usagePacked && usagePacked.most === most && usagePacked.keys === keys && list.classList.contains("packed")) {
+    // the same cards, as many columns fitting: the columns as they are
+    best = place(usagePacked.n, heights());
+  } else {
+    list.classList.remove("packed");
+    for (const c of cards) c.style.gridArea = "";
+    for (let n = most; n >= Math.max(1, most - 1); n--) {
+      columns(n);
+      const p = place(n, heights());
+      if (!best) best = p;
+      else if (p.tall <= best.tall * 1.3 && p.empty < best.empty * 0.6) best = p;
+    }
+    // measured again: a count beside its name or under it is the width's
+    columns(best.n);
+    best = place(best.n, heights());
+  }
+  usagePacked = { most, keys, n: best.n };
+  list.classList.add("packed");
+  best.at.forEach(([c, top, h], i) => {
+    const area = `${top + 1} / ${c + 1} / span ${Math.max(1, h)} / span 1`;
+    if (cards[i].style.gridArea !== area) cards[i].style.gridArea = area;
+  });
+}
+// a card's height or the page's width moved: packed again on the next frame
+// (in the observer's own call the change is owed to it in the same frame,
+// which WebKit reports as a ResizeObserver loop)
+const usagePack = new ResizeObserver(() => { if (!usagePackFrame) usagePackFrame = requestAnimationFrame(packUsage); });
+function packUsageNow(list) {
+  packUsage();
+  usagePack.disconnect();
+  usagePack.observe(list);
+  for (const card of list.children) usagePack.observe(card);
 }
 
 // usageHandle is a card's logo, which is also its handle: drag it to move
@@ -14522,7 +14699,9 @@ function renderPanelUse() {
 
 // The Usage tab: accounts under their vendor, each window a ring with its
 // share in it, when the plan ends and the windows start again under the
-// account; balances last, as figures.
+// account; balances as figures. All in the Usage page's order, a balance
+// where it was put there, not after the plans (#1510, JokerQyou); balances
+// side by side share one grid.
 function renderPanelQuota() {
   const box = $("#panelQuota");
   if (mode !== "panel" || !box) return;
@@ -14562,17 +14741,24 @@ function renderPanelQuota() {
   const hidden = new Set(state.settings?.panelUsageHidden || []);
   const peek = (q) => !!panelPeek && (trayCardID(q) === panelPeek || q.provider === panelPeek);
   const away = new Set(subs.filter((q) => hidden.has(q.provider) && !peek(q)).map((q) => q.provider));
-  const groups = new Map();
-  const bals = [];
+  // the sections in order: a vendor's accounts, or a run of balances
+  const parts = [], groups = new Map();
   for (const q of subs) {
     if (away.has(q.provider)) continue;
     // a balance with windows (Command Code's credits beside its 5-hour and
     // weekly windows) is the windows' card; a balance alone, a figure
-    if (q.balance && !q.windows?.length) { bals.push(q); continue; }
-    if (!groups.has(q.name)) groups.set(q.name, []);
+    if (q.balance && !q.windows?.length) {
+      const last = parts[parts.length - 1];
+      if (last?.bals) last.bals.push(q);
+      else parts.push({ bals: [q] });
+      continue;
+    }
+    if (!groups.has(q.name)) parts.push({ name: q.name, qs: groups.set(q.name, []).get(q.name) });
     groups.get(q.name).push(q);
   }
-  for (const [name, qs] of groups) {
+  for (const part of parts) {
+    if (part.bals) { box.append(panelBalances(part.bals)); continue; }
+    const { name, qs } = part;
     const g = el("div", "pq-group");
     const head = el("div", "pq-gh");
     head.append(icon(qs[0].icon), el("span", "pq-gn", name));
@@ -14601,47 +14787,6 @@ function renderPanelQuota() {
     if (qs.length > 1) g.append(usageMore(qs, "pq-more"));
     box.append(g);
   }
-  if (bals.length) {
-    const g = el("div", "pq-group");
-    const head = el("div", "pq-gh");
-    head.append(el("span", "pq-gn", t("Balances")));
-    g.append(head);
-    const grid = el("div", "pq-bals");
-    for (const q of bals) {
-      const card = el("div", "pq-card bal");
-      card.dataset.card = trayCardID(q);
-      card.title = [q.name, q.user].filter(Boolean).join(" · ");
-      // whose balance, at a glance: the provider's logo before its name
-      const who = el("span", "pq-sub pq-bn");
-      who.append(icon(q.icon || "generic"), el("span", "", q.name));
-      card.append(who);
-      // a balance field with several amounts: the first as the figure,
-      // the others each a quiet line, a percent a meter (#420)
-      const parts = q.balanceParts?.length ? q.balanceParts : [{ text: q.balance }];
-      for (const [i, p] of parts.entries()) {
-        if (!i && !p.label) card.append(el("b", "pq-amt", p.text));
-        else if (!i) {
-          const lead = el("span", "pq-lead");
-          lead.append(el("b", "pq-amt", p.text), el("span", "", p.label));
-          card.append(lead);
-        } else {
-          const line = el("span", "pq-sub pq-bp");
-          line.append(el("span", "", p.label || ""), el("b", "", p.text));
-          card.append(line);
-        }
-        if (p.percent != null) card.append(balanceMeter(p.percent));
-      }
-      // standing in for a reading that failed just now: as of when
-      if (q.asOf) {
-        card.classList.add("stale");
-        card.title += "\n" + asOfText(q);
-        card.append(el("span", "pq-sub pq-asof", t("As of {when}", { when: stamp(q.asOf) })));
-      }
-      grid.append(card);
-    }
-    g.append(grid);
-    box.append(g);
-  }
   // the way to hide some and move them, and how many are hidden
   const foot = el("div", "pq-foot");
   const arrange = el("button", "pq-more pq-arrange", t("Arrange"));
@@ -14656,6 +14801,50 @@ function renderPanelQuota() {
   panelAge();
   fit();
   requestAnimationFrame(focusQuotaCard);
+}
+
+// panelBalances is a run of balances on the Allowances tab, under their
+// heading, as figures side by side.
+function panelBalances(bals) {
+  const g = el("div", "pq-group");
+  const head = el("div", "pq-gh");
+  head.append(el("span", "pq-gn", t("Balances")));
+  g.append(head);
+  const grid = el("div", "pq-bals");
+  for (const q of bals) {
+    const card = el("div", "pq-card bal");
+    card.dataset.card = trayCardID(q);
+    card.title = [q.name, q.user].filter(Boolean).join(" · ");
+    // whose balance, at a glance: the provider's logo before its name
+    const who = el("span", "pq-sub pq-bn");
+    who.append(icon(q.icon || "generic"), el("span", "", q.name));
+    card.append(who);
+    // a balance field with several amounts: the first as the figure,
+    // the others each a quiet line, a percent a meter (#420)
+    const parts = q.balanceParts?.length ? q.balanceParts : [{ text: q.balance }];
+    for (const [i, p] of parts.entries()) {
+      if (!i && !p.label) card.append(el("b", "pq-amt", p.text));
+      else if (!i) {
+        const lead = el("span", "pq-lead");
+        lead.append(el("b", "pq-amt", p.text), el("span", "", p.label));
+        card.append(lead);
+      } else {
+        const line = el("span", "pq-sub pq-bp");
+        line.append(el("span", "", p.label || ""), el("b", "", p.text));
+        card.append(line);
+      }
+      if (p.percent != null) card.append(balanceMeter(p.percent));
+    }
+    // standing in for a reading that failed just now: as of when
+    if (q.asOf) {
+      card.classList.add("stale");
+      card.title += "\n" + asOfText(q);
+      card.append(el("span", "pq-sub pq-asof", t("As of {when}", { when: stamp(q.asOf) })));
+    }
+    grid.append(card);
+  }
+  g.append(grid);
+  return g;
 }
 
 // The Allowances tab's arranging (H20 on Discord): a row a subscription,
@@ -15264,17 +15453,18 @@ const quotaFit = new ResizeObserver((es) => {
   for (const { target } of es) quotaFitting.add(target);
 });
 function fitQuotas() {
+  for (const g of quotaFitting) fitQuota(g);
+  quotaFitting.clear();
+}
+function fitQuota(g) {
   // a count's own width, its parts laid end to end: once stacked it spans
   // the row and may be two lines, so its box no longer says
   const wide = (e) => [...e.children].reduce((w, c) => w + c.getBoundingClientRect().width, 0) + 4 * (e.children.length - 1);
-  for (const g of quotaFitting) {
-    const wraps = [...g.querySelectorAll(".quota-labels")].some((l) => {
-      const [name, n] = l.children;
-      return name.getBoundingClientRect().width + 6 + wide(n) > l.clientWidth;
-    });
-    g.classList.toggle("stacked", wraps);
-  }
-  quotaFitting.clear();
+  const wraps = [...g.querySelectorAll(".quota-labels")].some((l) => {
+    const [name, n] = l.children;
+    return name.getBoundingClientRect().width + 6 + wide(n) > l.clientWidth;
+  });
+  g.classList.toggle("stacked", wraps);
 }
 
 // balanceRow: what is left on an account, as a figure; a balance field
@@ -15415,14 +15605,23 @@ function holdsLine(h) {
 
 // quotaWindows: one account's allowance as meters, or why there are none.
 function quotaWindows(sub) {
-  if (sub.balance && !sub.windows?.length) return balanceRow(sub, "What is left on the account: the vendor tells only this, so Used / Left leaves it as it is", "refresh");
-  if (sub.error) {
+  const failed = () => {
     const e = el("div", "subscription-error", quotaError(sub.error));
     e.title = sub.error;
     // read again from here too: a failed reading is the one most wanted
     e.prepend(quotaRefresh(sub));
     return e;
+  };
+  if (sub.balance && !sub.windows?.length) {
+    const b = balanceRow(sub, "What is left on the account: the vendor tells only this, so Used / Left leaves it as it is", "refresh");
+    if (!sub.error) return b;
+    // the balance read, and why the rest wasn't: a ClinePass card whose
+    // limits failed to read (#79) says so under its balance
+    const box = el("div", "quota-balance-error");
+    box.append(b, failed());
+    return box;
   }
+  if (sub.error) return failed();
   const windows = el("div", "quota-windows");
   for (const w of sub.windows) {
     const quota = el("div", "quota");
@@ -19566,6 +19765,11 @@ let trayUsageLoading = null;
 function renderTrayUsage(s, keep) {
   $("#quotaLeftSegs").replaceChildren(segs([[false, t("Used")], [true, t("Left")]], !!s.quotaLeft,
     (on) => { if (on !== quotaLeft) setQuotaLeft(on); }));
+  // allowances read by magpie itself, or only when the user asks: at login
+  // before a proxy app, a read by itself goes out direct (#1518)
+  $("#quotaReadsSegs").replaceChildren(segs([["", t("Automatic")], ["asked", t("When I ask")]], s.quotaReads || "", (v) =>
+    writingPrefs(api("settings/quota-reads", { reads: v })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
+      .catch((e) => { status(t(e.message), "err"); renderSettings(); })));
   $("#currencySegs").replaceChildren(segs(CURRENCIES.map(([id, name]) => [id, t(name)]), s.currency || "usd", (v) => savePrefs({ ...keep, currency: v })));
   // 万 and 亿 are Chinese's alone: in English a count is always K, M and B
   $("#unitsRow").hidden = locale !== "zh" && locale !== "zh-TW";
@@ -20202,6 +20406,12 @@ function renderSearch(s, keep) {
         (v) => savePrefs({ ...keep, searchFirst: v === "api" ? "api" : "" })));
     r.id = "searchFirstRow";
   }
+  // the same search as an MCP server of the gateway's (Kayphoon on
+  // Discord), for an agent to mount as its web_search tool
+  const mcpURL = (s.gateway || providers?.gateway?.url || `http://127.0.0.1:${s.port || 3425}`).replace(/\/+$/, "") + "/mcp/magpie/web-search";
+  const mcp = row(t("MCP server"), t("Cursor, Claude Desktop and other agents can add this search as an MCP server (Streamable HTTP) with one web_search tool. From another computer, send a gateway key as Authorization: Bearer <key>."),
+    el("code", "", mcpURL), copyBtn(mcpURL, t("Address")));
+  mcp.id = "searchMcpRow";
 }
 
 // renderSearcher: the provider that searches the web for a model that
@@ -20638,7 +20848,10 @@ function renderLAN(s) {
     box.append(r);
     return r;
   };
-  const set = (body) => writingPrefs(api("settings/lan", body)).then((ns) => { prefs = ns; renderSettings(); })
+  const set = (body) => writingPrefs(api("settings/lan", body)).then((ns) => {
+    prefs = ns; renderSettings();
+    if (ns.rekeyed) status(ns.rekeyed, "err");
+  })
     .catch((e) => { status(t(e.message), "err"); renderSettings(); });
   row(t("Share on local network"), t("Agents on other computers on this network can use magpie’s models with a gateway key from Gateway"), "",
     segs([["off", t("Off")], ["on", t("On")]], s.lan ? "on" : "off", (v) => set({ on: v === "on" })));

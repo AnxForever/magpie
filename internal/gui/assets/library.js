@@ -284,7 +284,10 @@
   // All, ahead of a row's chips: one click gives the item to every agent
   // shown that can take it (not those a chip is greyed out for: no SSE, no
   // remote server), and when they all have it, takes it from every one.
-  // An agent not shown keeps what it has, as with a chip.
+  // An agent not shown keeps what it has, as with a chip. The pickers that
+  // choose the agents before an item is added (installing skills, adding or
+  // bringing in servers) have it too (#1531): most start with every agent
+  // lit, and one agent alone was a click on each of the others.
   function allChip(box, all, on, onChange) {
     const can = [...box.children].filter((c) => !cannot(c)).map((c) => c.dataset.agent);
     if (can.length < 2) return;
@@ -1659,7 +1662,7 @@
     ed.append(err);
 
     function drawAgents() {
-      agentsBox.replaceChildren(agentChips(all, d.agents, (next) => { d.agents = next; drawAgents(); }, { names: true, blocked: sseBlocked(d) }));
+      agentsBox.replaceChildren(agentChips(all, d.agents, (next) => { d.agents = next; drawAgents(); }, { names: true, blocked: sseBlocked(d), all: true }));
     }
     function draw() {
       slot.replaceChildren();
@@ -1777,7 +1780,7 @@
     }
     ed.append(list);
     const agentsBox = el("div");
-    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, who, (n) => { who = n; drawAgents(); }, { names: true }));
+    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, who, (n) => { who = n; drawAgents(); }, { names: true, all: true }));
     drawAgents();
     ed.append(...field(t("Agents"), agentsBox));
     const err = el("div", "editor-error");
@@ -3464,7 +3467,7 @@
     box.append(list);
     const foot = el("div", "lib-probefoot");
     const agentsBox = el("div");
-    const drawAgents = () => agentsBox.replaceChildren(agentChips(skillAgents(), p.agents, (n) => { p.agents = n; drawAgents(); }, { names: false }));
+    const drawAgents = () => agentsBox.replaceChildren(agentChips(skillAgents(), p.agents, (n) => { p.agents = n; drawAgents(); }, { names: false, all: true }));
     drawAgents();
     foot.append(el("span", "note", t("for")), agentsBox, el("span", "grow"));
     foot.append(button(t("Cancel"), "", () => { probe = null; render(); }));
@@ -3916,7 +3919,7 @@
       ed.append(...field(t(i.label) + (i.required ? "" : " " + t("(optional)")), f, hint));
     }
     const agentsBox = el("div");
-    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, agents, (n) => { agents = n; drawAgents(); }, { names: true, blocked: sseBlocked(x) }));
+    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, agents, (n) => { agents = n; drawAgents(); }, { names: true, blocked: sseBlocked(x), all: true }));
     drawAgents();
     ed.append(...field(t("Agents"), agentsBox));
     const err = el("div", "editor-error");
@@ -4011,7 +4014,7 @@
     src.append(el("span", "", t("From")), extLink("https://github.com/" + x.source, "github.com/" + x.source));
     ed.append(src);
     const agentsBox = el("div");
-    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, agents, (n) => { agents = n; drawAgents(); }, { names: true }));
+    const drawAgents = () => agentsBox.replaceChildren(agentChips(all, agents, (n) => { agents = n; drawAgents(); }, { names: true, all: true }));
     drawAgents();
     if (!x.have) ed.append(...field(t("Agents"), agentsBox));
     const bar = el("div", "bar");

@@ -194,3 +194,20 @@ func TestCLIIdentityFailingAskedLessOften(t *testing.T) {
 		})
 	}
 }
+
+// With KeepCLIIdentities off, an answer is served but nothing is written:
+// the gateway's tests turn it off, as an ask still going when a test ended
+// wrote into the config folder being removed (#1524).
+func TestCLIIdentityNotKeptWhenOff(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	KeepCLIIdentities = false
+	t.Cleanup(func() { KeepCLIIdentities = true })
+	c := &cliIdentity{name: "x", exe: func() string { return "/bin/sh" }, ask: func() (string, string, bool, error) { return "me@example.com", "Pro", true, nil }}
+	if u, _, ok := c.get(); !ok || u != "me@example.com" {
+		t.Fatalf("get: %q %v", u, ok)
+	}
+	if es, _ := os.ReadDir(dir); len(es) != 0 {
+		t.Fatalf("written with KeepCLIIdentities off: %v", es)
+	}
+}

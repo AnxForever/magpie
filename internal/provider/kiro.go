@@ -54,8 +54,8 @@ var KiroExecutable = func() string {
 		return p
 	}
 	home, _ := os.UserHomeDir()
-	for _, p := range []string{filepath.Join(home, ".local", "bin", "kiro-cli"),
-		"/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli", "/usr/local/bin/kiro-cli", "/opt/homebrew/bin/kiro-cli"} {
+	for _, p := range append([]string{filepath.Join(home, ".local", "bin", "kiro-cli")}, proc.SystemDirs(
+		"/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli", "/usr/local/bin/kiro-cli", "/opt/homebrew/bin/kiro-cli")...) {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p
 		}
@@ -469,11 +469,7 @@ func writeFileAtomic(path string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".magpie-tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return steady.Rename(tmp, path)
+	return steady.WriteFile(path, b, 0o600) // on the disk before it is renamed in (#1505)
 }
 
 // kiroPost posts to a sign-in endpoint.
@@ -782,6 +778,10 @@ func (l kiroLimits) windows() []QuotaWindow {
 // magpie signed in in home, or Kiro's own sign-in's.
 func kiroQuotaAt(ctx context.Context, key, home string) SubscriptionQuota {
 	q := SubscriptionQuota{Provider: "kiro", Name: "Kiro", Icon: "kiro-color", Windows: []QuotaWindow{}}
+	if holding(ctx) {
+		q.Error = errNotAsked.Error()
+		return q
+	}
 	a, err := KiroAuthOf(ctx, key, home, false)
 	if err != nil {
 		q.Error = err.Error()

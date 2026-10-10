@@ -145,9 +145,9 @@ func nodeHere() bool {
 	}
 	dirs := proc.UserBinDirs()
 	if runtime.GOOS == "windows" {
-		dirs = append(dirs, proc.LoginPath()...)
+		dirs = append(dirs, proc.SystemDirs(proc.LoginPath()...)...)
 		if pf := os.Getenv("ProgramFiles"); pf != "" {
-			dirs = append(dirs, filepath.Join(pf, "nodejs"))
+			dirs = append(dirs, proc.SystemDirs(filepath.Join(pf, "nodejs"))...)
 		}
 	}
 	return npmIn(dirs, runtime.GOOS)

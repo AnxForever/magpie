@@ -879,7 +879,7 @@ type codexAuth struct {
 }
 
 func codexAccount(home string) (Provider, bool) {
-	path := filepath.Join(home, ".codex", "auth.json")
+	path := filepath.Join(appdir.CodexHomeIn(home), "auth.json")
 	b, err := os.ReadFile(path)
 	var a codexAuth
 	if err != nil || json.Unmarshal(b, &a) != nil || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {

@@ -428,6 +428,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	go provider.KeepPluginsCheckedIn(ctx)
 	// and moves the built-in subscriptions being retired onto their plugins
 	go provider.KeepRetiringMoved(ctx)
+	go provider.KeepPluginsListed(ctx) // models a plugin's vendor drops or adds, while magpie runs
 	// and keeps the community's plugins up to date, noting others' updates, and the Bun they run on
 	go plugin.KeepUpdated(ctx)
 	go plugin.KeepBunUpdated(ctx)
@@ -531,6 +532,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /videos/{id}/content", s.videosContent)
 	mux.HandleFunc("POST /_magpie/claude-mcp/{token}", s.subscription.mcpCall)
 	mux.HandleFunc("/mcp/{name}", s.mcpProxy)
+	mux.HandleFunc(SearchMCPPath, s.searchMCP)
 	mux.HandleFunc(CodexPath+"/", s.codexBackend)
 	mux.HandleFunc("GET "+CodexCatalogPath, s.codexCatalog)
 	mux.HandleFunc("GET /v1beta/models", s.geminiModels)
@@ -558,7 +560,7 @@ func responsesOverHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"name": "magpie", "version": Version, "models": len(provider.Catalog()), "window": Window,
-		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route"}})
+		"apis": []string{"/v1/chat/completions", "/v1/responses", "/v1/messages", "/v1/systemone", "/v1beta/models/{model}:generateContent", "/v1/images/generations", "/v1/images/edits", "/v1/videos", "/v1/embeddings", "/v1/rerank", "/v1/magpie/quotas", "/v1/magpie/quotas/history", "/v1/magpie/usage", "/v1/magpie/usage/requests", "/v1/magpie/route", SearchMCPPath}})
 }
 
 // quotas is what is left of every subscription, plan and key magpie has,
@@ -1237,6 +1239,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// it, for a request that goes only where the user said it may go
 	// unmasked (unredactedRoute)
 	plain := body
+	var masked []byte // the masked body, when plain goes instead
 	w, body, unmask := redacted(w, body)
 	defer unmask()
 	// the reply's model the member that answered, when asked for (#822)
@@ -1327,19 +1330,33 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		return m
 	}
+	// a name that is a routing group's — its id or name bare, or Codex's
+	// spelling of a group's model (#750) — is that group, as asked for or
+	// as an agent's config names its stand-in
+	grouped := func(m string) string {
+		if id, ok := provider.GroupFor(m); ok {
+			return id
+		}
+		if id, ok := provider.AutoStandIn(m); ok {
+			// a group magpie found, while the user has those off: its
+			// model from one provider, rather than refused
+			return id
+		}
+		return m
+	}
 	if m := claudeTierStandIn(agent, asked); m != "" {
 		// Claude Code (or a wrapper, T3 Code) naming one of Anthropic's
 		// models by its full id: the model it is set to use for that tier,
 		// whether or not magpie serves the id too
-		asked = at(m)
-	} else if id, ok := provider.GroupFor(asked); ok {
-		asked = id
-	} else if id, ok := provider.AutoStandIn(asked); ok {
-		// a group magpie found, while the user has those off: its model
-		// from one provider, rather than refused
-		asked = id
+		asked = grouped(at(m))
+	} else if g := grouped(asked); g != asked {
+		asked = g
 	} else if m := standIn(agent, asked); m != "" {
-		asked = at(m)
+		// Codex's config on a group by its bare name (model = "my-group",
+		// or gpt-6.1-sol for group/auto-gpt-6-1-sol): its turns reached the
+		// group, and its auto-review's codex-auto-review, stood in for by
+		// that same name, went on unresolved, a 404 (Adam on Discord)
+		asked = grouped(at(m))
 	}
 	if m := s.codexMemoryStandIn(r, call.Agent, agent, call.Kind, asked); m != "" {
 		asked = m
@@ -1370,6 +1387,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		if g, ok := provider.DisabledGroup(asked); ok {
 			call.Error = "group switched off"
 			msg = fmt.Sprintf("the routing group %s is switched off in Magpie, so %q is not served; switch it on again on Magpie's Routing page to use it", g.Name, call.Model)
+		} else if g, _, ok := provider.FindGroup(asked); ok && g.Decides() {
+			// a group of decision models answers System One, not this
+			call.Status, call.Error = 400, "a decision group"
+			writeError(w, from, 400, fmt.Sprintf("the routing group %s holds decision models: it only decides a routing group's model and effort, asked at /v1/systemone; it holds no conversation", g.Name))
+			turnedAway()
+			return
 		} else if g, ok := emptyGroup(asked); ok {
 			// a group of its own with nothing in it now — its patterns
 			// match no model served (#766) — said so, not the whole list
@@ -1394,7 +1417,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// go unmasked gets the request as written (lc on Discord); the log
 	// keeps the masked one
 	if unredactedRoute(p, isGroup, ms) {
-		body = plain
+		masked, body = body, plain
 	}
 	// a gateway key held to some models (#882) is refused another, or a
 	// group it doesn't name with one it may not use in it
@@ -1767,7 +1790,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if telemetry != nil {
 		telemetry.routeID = tr.ID
 	}
-	promptRead := s.inspectPrompt(tr, from, body)
+	// the card's text is the masked body, even where the request went
+	// unmasked
+	textBody := body
+	if masked != nil {
+		textBody = masked
+	}
+	promptRead := s.inspectPrompt(tr, from, body, textBody)
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
 	sent := ""       // the reasoning the last try's model was asked for
@@ -3178,6 +3207,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// Relays enforce OpenAI's item ID prefixes too, including during
 		// compaction. call_id stays unchanged so tool outputs remain paired.
 		body = callItemIDs(body)
+		// and an item id with a character OpenAI's don't have, another
+		// vendor's (Muse Spark's "rs_…:rs_…"), to an upstream that checks
+		// them (echo_ts)
+		if validatesItemIDs(p) || !s.fits(p.ID, itemIDsRefused(model), proto) {
+			body = plainItemIDs(body)
+		}
 		// xAI's API turns away a tool_choice with no tools beside it ("A
 		// tool_choice was set on the request but no tools were specified"),
 		// and Copilot's /responses, in front of it for Grok, with a bare
@@ -3355,6 +3390,20 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// (#1104).
 			if nb := withoutBareReasoning(body); !replay && !bytes.Equal(nb, body) {
 				refused = append(refused, bareReasoningRefused(model))
+				body = nb
+				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+				}
+				continue
+			}
+		}
+		if len(fs) == 0 && len(ms) == 0 && proto == provider.Responses && itemIDRefusal.Match(b) {
+			// and an input item's id with a character OpenAI's don't
+			// have, which a relay in front of OpenAI turns away as it
+			// does (echo_ts): asked once more with ids it takes, and so
+			// from then on
+			if nb := plainItemIDs(body); !bytes.Equal(nb, body) {
+				refused = append(refused, itemIDsRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
 					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
@@ -4730,12 +4779,12 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 // Bailian): Qwen's presets, or one of its hosts given as a custom provider.
 func dashScope(p provider.Provider) bool {
 	switch p.Preset {
-	case "qwen", "qwen-cn", "qwen-token-plan":
+	case "qwen", "qwen-cn", "qwen-token-plan", "bailian-token-plan":
 		return true
 	}
 	h := p.Host()
 	return strings.HasPrefix(h, "dashscope") && strings.HasSuffix(h, ".aliyuncs.com") ||
-		strings.HasSuffix(h, ".maas.aliyuncs.com") || strings.HasSuffix(h, ".maas.qianwenaiapi.com")
+		strings.HasSuffix(h, ".maas.aliyuncs.com") || h == "maas.qianwenaiapi.com" || strings.HasSuffix(h, ".maas.qianwenaiapi.com")
 }
 
 func streamOf(body []byte) bool {

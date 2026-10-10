@@ -70,6 +70,8 @@ const providerUsage = `usage:
                                    (another computer's magpie, shared on its network: its models and routing
                                     groups as office/…, each request sent on in the API the agent spoke)
        magpie provider add bailian-decision sk-… workspace=<workspace id>   (or region=ap-southeast-1, or region=token-plan with an sk-sp- key)
+       magpie provider add bailian-token-plan sk-sp-…   (Bailian's Token Plan: its chat models, and its decision model for routing groups;
+                                    qwen-token-plan is the Qwen AI platform's, qwen-decision its pay-as-you-go decision model)
        magpie provider add google-vertex project=my-project impersonate=vertex@my-project.iam.gserviceaccount.com
                                    (Google Vertex AI in your Google Cloud project, with no key: signed with gcloud's
                                     Application Default Credentials (gcloud auth application-default login) unless

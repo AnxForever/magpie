@@ -55,6 +55,8 @@ var Vars = []string{
 	"QWEN_HOME",
 	// Ante
 	"ANTE_HOME",
+	// AstrBot's root, the folder holding its data/ (else ~/.astrbot, the desktop app's)
+	"ASTRBOT_ROOT",
 	// MiMo Code, MiniMax Code, OpenHanako, Hermes, dsh, WorkBuddy, CodeBuddy Code
 	"MIMOCODE_HOME", "MINIMAX_DATA_DIR", "HANA_HOME", "HERMES_HOME", "DSH_HOME",
 	"WORKBUDDY_CONFIG_DIR", "CODEBUDDY_CONFIG_DIR",

@@ -96,7 +96,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie serve                    run the gateway alone (the app runs it too)
   magpie healthcheck              exit 0 when the gateway answers (a container's HEALTHCHECK)
   magpie gateway-key list|add <name>|rotate <id>|remove <id>   manage the keys clients use to call a shared gateway
-  magpie gateway-key limit <id> [off|day|week|month --tokens N --cost USD --cache-reads]   a key's own limit, and what it used
+  magpie gateway-key limit <id> [off|reset|day|week|month|<N>d --tokens N --cost USD --cache-reads]   a key's own limit, and what it used
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
   magpie mcp image                the image and video generation MCP server an agent is given from the library (stdio)
   magpie usage [today|7d|30d|all] tokens and cost per agent, model and subscription account (30d)

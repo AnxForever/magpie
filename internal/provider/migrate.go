@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"maps"
 	"net/http"
@@ -40,6 +41,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/filememo"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/update"
 )
@@ -296,12 +298,29 @@ var migrationsMu sync.Mutex
 func readMigrations() map[string]Migration { return heldOf("migrations", readMigrationsFile) }
 
 func readMigrationsFile() map[string]Migration {
-	m, _ := filememo.Read("migrations", migrationsPath(), func(b []byte) (map[string]Migration, error) {
-		var m map[string]Migration
-		_ = json.Unmarshal(b, &m)
-		return m, nil
-	})
+	m, err := filememo.Read("migrations", migrationsPath(), parseMigrations)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// one that doesn't read (all zero after a crash, #1505) is not
+		// "nothing moved": a moved subscription would come back as its
+		// built-in, and the next move write that over every other's
+		if b, ferr := lastgood.Fallback(migrationsPath(), unreadBytes(migrationsPath()), validMigrations); ferr == nil {
+			m, _ = parseMigrations(b)
+		} else {
+			log.Printf("migrations.json: %v", ferr)
+		}
+	}
 	return m
+}
+
+func parseMigrations(b []byte) (map[string]Migration, error) {
+	var m map[string]Migration
+	err := json.Unmarshal(b, &m)
+	return m, err
+}
+
+func validMigrations(b []byte) bool {
+	_, err := parseMigrations(b)
+	return err == nil
 }
 
 // MigrationOf is where the built-in id's move stands.
@@ -359,6 +378,9 @@ func setMigration(id string, f func(m *Migration)) error {
 		return err
 	}
 	defer Changed()
+	if err := lastgood.Keep(migrationsPath(), validMigrations, 0o600); err != nil {
+		return err
+	}
 	return writePrivate(migrationsPath(), append(b, '\n'))
 }
 

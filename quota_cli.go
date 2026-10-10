@@ -98,7 +98,9 @@ func quotaCmd(args []string) error {
 			only = append(only, strings.ToLower(a))
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// magpie quota is the user asking: read even when allowances are read
+	// only when asked (#1518)
+	ctx, cancel := context.WithTimeout(provider.Asked(context.Background()), 15*time.Second)
 	defer cancel()
 	qs := []provider.Quota{}
 	provider.AskClaudeUsage()
@@ -191,7 +193,7 @@ func quotaResetCmd(args []string) error {
 			user = a
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(provider.Asked(context.Background()), 20*time.Second)
 	defer cancel()
 	// what the account holds, and whose it is when none was named
 	var held *provider.SubscriptionQuota

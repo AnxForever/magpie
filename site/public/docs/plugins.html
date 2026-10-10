@@ -215,6 +215,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
           <li>The community’s packages (<code>@magpie-community/*</code>) update by themselves a little after magpie starts, then every hour.</li>
           <li>Any other package with a newer version shows a dot on <span class="ui">Plugins</span>, and the user updates it with a click or <code>magpie plugin update</code>.</li>
           <li>A spec pinned to a version (<code>name@1.2.3</code>) stays on it until the user updates it: <span class="ui">Update to …</span>, <span class="ui">Update all</span> and <code>magpie plugin update</code> install the newest version and unpin it.</li>
+          <li>A git repository has no version to compare. It shows an update when its branch or tag (the default branch without <code>#ref</code>) is at another commit than the one Bun installed: GitHub is asked through its API, any other host with <code>git ls-remote</code>, at most every ten minutes, and the hourly check asks again. A spec pinned to a commit never has one. The row shows the commit installed.</li>
         </ul></li>
     </ul>
     <p>What magpie keeps, in its config folder (<code>~/.config/magpie</code>, or <code>$XDG_CONFIG_HOME/magpie</code>):</p>
@@ -253,7 +254,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>OpenCode ignores the <code>magpie</code> object, so these are safe to add to an OpenCode plugin.</p>
     <div class="table-wrap"><table>
       <tr><th>Field</th><th>Meaning</th></tr>
-      <tr><td><code>magpie.icon</code></td><td>The provider’s picture: an <code>https://</code> URL or a <code>data:image/…</code> URI, at most 1 MB. SVG, PNG and the like.</td></tr>
+      <tr><td><code>magpie.icon</code></td><td>The provider’s picture, also on the plugin’s card in Discover (read from npm, or from the repository for one on GitHub): an <code>https://</code> URL or a <code>data:image/…</code> URI, at most 1 MB. SVG, PNG and the like.</td></tr>
       <tr><td><code>magpie.maxConcurrency</code></td><td>How many requests each account takes at once, a whole number from 1 to 1000. A limit the user sets on the provider wins over it.</td></tr>
     </table></div>
     <p>The same fields can be set on the <code>auth</code> hook (<code>auth.icon</code>, <code>auth.maxConcurrency</code>), where they win over <code>package.json</code>.</p>
@@ -285,6 +286,10 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
 }</pre>
     </div>
     <p>A model can also say <code>provider: { npm, api }</code> to use another API or address than the provider’s, <code>headers</code>, <code>options</code>, and <code>disabled: true</code> to hide it.</p>
+
+        <h3 id="decide">A decision API (System One)</h3>
+    <p>A plugin can serve TypeSafe’s System One API for its provider, so its models can be a <a href="/docs/intent">routing group’s classifier</a>. Set <code>decide: true</code> on the provider in the <code>config</code> hook, and <code>decides: true</code> on each model that answers questions rather than a conversation, in the <code>config</code> hook or on the <code>models</code> hook’s list. magpie then posts each question as <code>POST {baseURL}/systemone</code> through your loader’s <code>fetch</code>, with the account’s sign-in, as it sends any other request. The body is <code>{"model", "questions", "state"}</code>; answer <code>{"model", "answers": {"&lt;question&gt;": {"choice", "score", "confidence"}}}</code>.</p>
+    <p>A marked model, and one named <code>jev-*</code>, is offered as a classifier and kept from agents: a chat request to it is refused. Without <code>decide: true</code> on the provider, <code>decides</code> is ignored and every model stays one to chat with.</p>
 
     <h3 id="apis">The API a model speaks</h3>
     <p>The AI SDK package named by <code>npm</code>, on the model or on the provider, decides the API. That decides the shape of the request your <code>fetch</code> receives. Whatever the agent sent, magpie’s gateway has already translated it:</p>

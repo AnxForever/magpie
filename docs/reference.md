@@ -117,6 +117,7 @@ line; agents connected to magpie lose it when it quits.
 | Muse Code    | `~/.config/muse/settings.json` (`$XDG_CONFIG_HOME`) | model (endpoint_transport to the gateway, auth none; magpie's models in Muse's list) |
 | Empryo       | `~/.empryo/config.json` | defaultModel (a `magpie` provider at the gateway in `providers`) |
 | Ante         | `~/.ante/catalog.json` and `settings.json` (`$ANTE_HOME`) | provider, model (a `magpie` provider on OpenAiCompatible, with no auth of magpie's: the gateway lets this machine in with any token and Ante counts a provider with none as authenticated; magpie's models in Ante's model picker, and Ante started on magpie, which is what its settings' `provider` decides) |
+| AstrBot      | `data/cmd_config.json` under `$ASTRBOT_ROOT`, else `~/.astrbot` (the desktop app's) | model (a `magpie` entry in `provider_sources` and magpie's models in `provider`, the user's own entries kept; the default chat model in `agent_runner.config.model.provider_id`, or `provider_settings.default_provider_id` on AstrBot before 4.28's agent runner; restart AstrBot after connecting; Docker installs aren't reached) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
@@ -380,6 +381,8 @@ magpie gateway-key rotate <id>         # prints the replacement; identity stays 
 magpie gateway-key remove <id>         # revokes remote access
 magpie gateway-key limit <id> week --tokens 2m --cost 5   # its own limit
 magpie gateway-key limit <id>          # limit, used, left and reset
+magpie gateway-key limit <id> 10d --tokens 5m   # every 10 days, from now
+magpie gateway-key limit <id> reset    # count its usage from 0 again
 magpie gateway-key limit <id> off      # no limit
 magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
@@ -389,7 +392,12 @@ magpie gateway-key accounts <id> all    # every account
 
 Each gateway key can have its own **limit**: a token total, an estimated
 cost in US$, or both, per day, week or month (calendar windows in local
-time: from midnight, from Monday, from the 1st). Set it with **Limit** on
+time: from midnight, from Monday, from the 1st), or every N days (#1509;
+N from 1 to 3650). An N-day cycle starts when the limit is set and runs
+N×24 hours, then the next one starts where it ended, so a restart, a
+time-zone change or a daylight-saving shift doesn't move it. Changing only
+the caps or **Count cache reads too** keeps the cycle; changing N or the
+period, or turning the limit on, starts a new one then. Set it with **Limit** on
 the key's row (saved with Save) or `magpie gateway-key limit`; the row shows
 what the key has used, what is left and when it resets. Tokens counted are a
 call's uncached input, output and cache writes, plus cache reads when **Count
@@ -402,6 +410,14 @@ counts are read from the usage log, so they survive a restart. A request in
 flight holds a reservation (its body's size in tokens plus the key's mean
 output per call), so requests sent at once overshoot by about one call; a
 streamed reply is settled when it ends with the usage its vendor reported.
+**Reset usage** in the key's limit editor (or `magpie gateway-key limit
+<id> reset`) counts the key's tokens and cost from 0 together, from now. An
+N-day key starts a new N-day cycle then. A day, week or month key keeps
+its window's end (midnight, Monday, the 1st): only the calls before the
+reset stop counting, so it doesn't drift off the calendar. The reset is
+stored with the key (`since` in caller-keys.json, magpie's own: a value a
+client sends is ignored), so it survives a restart; the usage log itself is
+untouched. Keys saved before keep their JSON as it was.
 A key can read its own status with `GET /v1/magpie/limit`. Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.
@@ -535,6 +551,20 @@ it with `magpie provider add baidu-qianfan <api-key>` — the id it carried its
 first day, `qianfan-token-plan`, is taken too. The plans serve no model list,
 so the preset carries their documented models; pay as you go serves its own
 at `/v2/models`.
+
+Alibaba's Token Plan is sold in two places, each with its own `sk-sp-` key
+that only its own host takes: on the Qwen AI platform as `qwen-token-plan`
+(`token-plan.maas.qianwenaiapi.com`), and on Alibaba Cloud Bailian as
+`bailian-token-plan` (`token-plan.cn-beijing.maas.aliyuncs.com`). Both serve
+Chat Completions at `/compatible-mode/v1` and Anthropic Messages at
+`/apps/anthropic`, and carry the plans' documented text models for when the
+host lists none. Bailian's also answers its decision model,
+`decision-model-preview`, on System One at `/compatible-mode/v1/systemone`
+with the same key, so a routing group can pick it as its classifier. The
+same model on the Qwen AI platform's pay as you go is `qwen-decision`
+(`maas.qianwenaiapi.com`), and on a Bailian workspace `bailian-decision`.
+Neither plan has an API for its credits: the console's subscription page
+shows them, so magpie shows no plan usage for these keys.
 
 ### Google Vertex AI
 
@@ -1015,6 +1045,22 @@ stays with the key or account that answered it: `auto` (the default, while
 the vendor's cache of it is worth keeping), `session`, `turn` or `off`.
 `models=` replaces the whole list, in order; a bare model id works when only
 one provider serves it.
+
+A group can also be of decision models alone (Jev and the like: TypeSafe's,
+Bailian's `decision-model-preview`, a plugin's marked models) — never mixed
+with models that hold a conversation. It is not offered to agents; it is asked
+at `POST /v1/systemone` with `"model":"group/<id>"` (or its id or name), and a
+chat group can take it as its classifier. Each of its models' keys and
+accounts is asked in the group's routing order: one that fails as a chat
+request would fail over (a 429, a 5xx, an unreachable host, an exhausted
+key) rests and the next is asked, and the Routing page's Requests list shows
+every try. It takes no patterns, rules, classifier, effort or fast mode.
+
+```sh
+magpie group add Jevs models=typesafe/jev-latest,bailian-token-plan/decision-model-preview routing=order
+curl -s localhost:3425/v1/systemone -H 'Authorization: Bearer magpie' \
+  -d '{"model":"group/jevs","state":{"message":"fix the login bug"},"questions":{"intent":{"type":"choice","choices":["bug","feature"]}}}'
+```
 
 The Routing page's Requests list defaults to the time-ordered By request view.
 Choose By session to group calls by the agent's session ID; the page remembers
@@ -2121,6 +2167,15 @@ fetches of the list sends a `magpie partners fetch` event with weight 10
 and the country, while a partner is listed. Each event has an id of its
 own: no install id, address or account goes with it. The code is
 [site/worker.js](../site/worker.js).
+
+A plugin's, an import link's and the library's icons sit on hosts their
+authors picked. magpie fetches each through
+`https://usemagpie.ai/api/icon?url=<https URL>`, so the host sees
+Cloudflare's address and never the user's. The worker sends only
+`Accept: image/*` and its own User-Agent, passes on a PNG, JPEG, GIF, WebP,
+ICO or SVG of at most 1 MB and refuses anything else, and counts and keeps
+nothing. The code is [internal/iconproxy](../internal/iconproxy/iconproxy.go)
+and `icon` in [site/worker.js](../site/worker.js).
 
 ## Community
 

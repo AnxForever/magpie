@@ -579,7 +579,10 @@ body.window .field.solo { grid-column: auto; }
 /* the tabs sit on the head's middle line with the refresh beside them, not
    at its top as .segs elsewhere do */
 .usage-head > .segs { align-self: center; }
-.subscription-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 7px; margin-bottom: 8px; flex: none; }
+.subscription-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; gap: 7px; margin-bottom: 8px; flex: none; }
+/* packed into columns (packUsage): each card as tall as itself, placed on
+   rows a pixel high, the gap between cards in its place on them (#860) */
+.subscription-usage.packed { grid-auto-rows: 1px; row-gap: 0; }
 .subscription-card { padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-width: 0; }
 .subscription-head { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
 .subscription-head .ic { width: 17px; height: 17px; }
@@ -2123,7 +2126,12 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 #gatewayKeys .klf-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); }
 #gatewayKeys .klf-err { color: var(--red); }
 #gatewayKeys .klf .klf-period { width: 100%; max-width: none; height: 28px; justify-content: space-between; color: var(--fg); }
-@media (max-width: 520px) { #gatewayKeys .klf { grid-template-columns: 1fr; } }
+#gatewayKeys .klf.with-days { grid-template-columns: minmax(0, 1fr) minmax(0, 0.6fr) minmax(0, 1fr) minmax(0, 1fr); }
+#gatewayKeys .klf-days[hidden] { display: none; }
+#gatewayKeys .klf-used { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#gatewayKeys .klf-used .key-limit { flex: 1 1 auto; }
+#gatewayKeys .klf-used .klf-reset { flex: none; }
+@media (max-width: 520px) { #gatewayKeys .klf, #gatewayKeys .klf.with-days { grid-template-columns: 1fr; } #gatewayKeys .klf-used { flex-wrap: wrap; } }
 /* the models a key may use (#882): a long model's id is cut, and the
    badge gives way first on a narrow window */
 #gatewayKeys .amodels.key-models { display: inline-block; flex: 0 1 auto; min-width: 24px; max-width: 180px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
@@ -2595,7 +2603,10 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .mname .mwho { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; min-width: 0; }
 .mname .mwho input { flex: 1; min-width: 0; max-width: 220px; height: 25px; }
 .mname .mwho code { font-size: 11px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; user-select: text; -webkit-user-select: text; cursor: text; }
-.mname .mapi { flex: none; height: 24px; font-size: 11px; }
+/* a model's API choice: Auto and up to four APIs, which wrap to a second
+   row in a phone-wide editor (Kayphoon: a Gemini URL's beside the others),
+   the box growing with them rather than the last one hanging out of it */
+.mname .mapi { flex: none; min-height: 24px; font-size: 11px; }
 .mname .msame { display: flex; align-items: center; gap: 6px; flex: 0 1 230px; min-width: 0; font-size: 11.5px; color: var(--muted); }
 .mname .msame span { flex: none; }
 .mname .msame input { flex: 1; min-width: 0; height: 25px; font-size: 11.5px; }
@@ -2992,6 +3003,7 @@ body.panel .modal { padding: 16px 12px; }
 .editor.importapps .approw .name .from { font-size: 11px; color: var(--muted); }
 .editor.importapps .approw .sub { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .editor.importapps .approw .segs { margin-top: 3px; max-width: 100%; overflow-x: auto; }
+.editor.importapps .approw input.appname[type="text"] { margin: 3px 0 0; flex: none; width: 100%; max-width: 280px; box-sizing: border-box; font-size: 12.5px; padding: 4px 8px; border-radius: 6px; }
 .editor.importapps .approw .segs .opt { white-space: nowrap; flex: none; }
 .editor.importapps .apptag { flex: none; font-size: 11px; color: var(--fg-2); background: var(--pill); border-radius: 5px; padding: 1px 6px; margin-top: 1px; }
 .editor.importapps .bar .note { font-size: 12px; color: var(--muted); }

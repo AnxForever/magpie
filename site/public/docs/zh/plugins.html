@@ -215,6 +215,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
           <li>社区的包（<code>@magpie-community/*</code>）在 magpie 启动后不久自动更新，之后每小时一次。</li>
           <li>其他包有新版本时，<span class="ui">插件</span>上会出现一个小圆点，用户点一下或运行 <code>magpie plugin update</code> 更新。</li>
           <li>固定了版本的写法（<code>name@1.2.3</code>）会停在那个版本，直到用户自己更新：<span class="ui">更新到 …</span>、<span class="ui">全部更新</span>和 <code>magpie plugin update</code> 会装上最新版并取消固定。</li>
+          <li>git 仓库没有版本号可比。它的分支或标签（不写 <code>#ref</code> 时是默认分支）指向的提交和 Bun 装的那个不一样时，才显示有更新：GitHub 上的通过 GitHub API 查询，其他主机用 <code>git ls-remote</code>，最多每十分钟问一次，每小时的检查也会再问。固定到某个提交的写法不会有更新。这一行会显示已安装的提交。</li>
         </ul></li>
     </ul>
     <p>magpie 在它的配置目录（<code>~/.config/magpie</code> 或 <code>$XDG_CONFIG_HOME/magpie</code>）里保存这些：</p>
@@ -253,7 +254,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p>OpenCode 会忽略 <code>magpie</code> 对象，所以给 OpenCode 插件加上它是安全的。</p>
     <div class="table-wrap"><table>
       <tr><th>字段</th><th>含义</th></tr>
-      <tr><td><code>magpie.icon</code></td><td>供应商的图标：<code>https://</code> 地址或 <code>data:image/…</code> URI，最大 1 MB，SVG、PNG 等都行。</td></tr>
+      <tr><td><code>magpie.icon</code></td><td>供应商的图标，也是这个插件在「发现」里卡片上的图标（从 npm 读取，GitHub 上的插件从仓库读取）：<code>https://</code> 地址或 <code>data:image/…</code> URI，最大 1 MB，SVG、PNG 等都行。</td></tr>
       <tr><td><code>magpie.maxConcurrency</code></td><td>每个账号同时接多少个请求，1 到 1000 的整数。用户在供应商上设置的上限优先。</td></tr>
     </table></div>
     <p>同样的字段也可以写在 <code>auth</code> 钩子上（<code>auth.icon</code>、<code>auth.maxConcurrency</code>），优先于 <code>package.json</code>。</p>
@@ -285,6 +286,10 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
 }</pre>
     </div>
     <p>模型还可以写 <code>provider: { npm, api }</code>，使用和供应商不同的 API 或地址；也可以写 <code>headers</code>、<code>options</code>，以及用 <code>disabled: true</code> 隐藏它。</p>
+
+        <h3 id="decide">决策 API（System One）</h3>
+    <p>插件可以为自己的提供商提供 TypeSafe 的 System One API，这样它的模型就能当<a href="/docs/zh/intent">路由组的分类器</a>。在 <code>config</code> 钩子里给提供商设 <code>decide: true</code>，并给每个只回答问题、不用来对话的模型设 <code>decides: true</code>（写在 <code>config</code> 钩子里或 <code>models</code> 钩子的列表上都行）。之后 magpie 会把每个问题以 <code>POST {baseURL}/systemone</code> 发给 loader 的 <code>fetch</code>，带上账号的登录信息，和其他请求一样。请求体是 <code>{"model", "questions", "state"}</code>；回答 <code>{"model", "answers": {"&lt;问题&gt;": {"choice", "score", "confidence"}}}</code>。</p>
+    <p>标了 <code>decides</code> 的模型，以及名为 <code>jev-*</code> 的模型，会作为分类器提供，并对智能体隐藏：发给它的对话请求会被拒绝。提供商没有 <code>decide: true</code> 时，<code>decides</code> 不起作用，所有模型照常用于对话。</p>
 
     <h3 id="apis">模型使用的 API</h3>
     <p>模型或供应商上 <code>npm</code> 指定的 AI SDK 包决定了 API，也就决定了你的 <code>fetch</code> 收到的请求格式。无论 agent 发来的是什么，magpie 的网关都已经转换好了：</p>

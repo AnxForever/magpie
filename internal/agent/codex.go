@@ -100,7 +100,7 @@ func codexEfforts(ms []catalog.Model, model string) []Option {
 }
 
 func codexIn(at place) *Agent {
-	dir := filepath.Join(at.home, ".codex")
+	dir := at.codexHome()
 	path := filepath.Join(dir, "config.toml")
 	catalogPath := filepath.Join(dir, "magpie-models.json")
 	get := func(k string) string { v, _ := edit.GetTOMLTop(path, k); return v }

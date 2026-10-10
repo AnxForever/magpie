@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/filememo"
@@ -32,17 +34,40 @@ func Read(path string) ([]byte, error) {
 	return bytes.Clone(b), nil
 }
 
+// filter, while Filtered runs, is given each file WriteAtomic is about to
+// write and returns what is written in its place.
+var (
+	filter    atomic.Pointer[func(path string, data []byte) []byte]
+	filtering sync.Mutex
+)
+
+// Filtered runs fn with every file written through this package passed
+// through f first: f gets the path (a link's target) and the bytes about to
+// be written, and returns the bytes to write. Writes from elsewhere while
+// fn runs pass through f too, so f changes only what it is sure of. One
+// Filtered runs at a time.
+func Filtered(f func(path string, data []byte) []byte, fn func() error) error {
+	filtering.Lock()
+	defer filtering.Unlock()
+	filter.Store(&f)
+	defer filter.Store(nil)
+	return fn()
+}
+
 // WriteAtomic writes data to path via a temp file + rename so a crash can
-// never leave a half-written config behind. File mode is preserved. When
-// path is a symlink (a config kept in a dotfiles repo) the file it points
-// at is written and the link stays; a file with other hard links is
-// written in place, see writeInPlace. Once written, temp files earlier
-// writes of path left behind go, see removeStaleTemps.
+// never leave a half-written config behind. File mode and group are
+// preserved. When path is a symlink (a config kept in a dotfiles repo) the
+// file it points at is written and the link stays; a file with other hard
+// links is written in place, see writeInPlace. Once written, temp files
+// earlier writes of path left behind go, see removeStaleTemps.
 func WriteAtomic(path string, data []byte) error {
 	defer filememo.Forget() // read again, where a request holds it
 	path, err := Target(path)
 	if err != nil {
 		return err
+	}
+	if f := filter.Load(); f != nil {
+		data = (*f)(path, data)
 	}
 	if hardLinked(path) {
 		f, err := os.OpenFile(path, os.O_WRONLY, 0)
@@ -62,7 +87,8 @@ func WriteAtomic(path string, data []byte) error {
 		}
 	}
 	mode := fs.FileMode(0o644)
-	if st, err := os.Stat(path); err == nil {
+	st, statErr := os.Stat(path)
+	if statErr == nil {
 		mode = st.Mode().Perm()
 	}
 	dir := filepath.Dir(path)
@@ -81,6 +107,16 @@ func WriteAtomic(path string, data []byte) error {
 		return err
 	}
 	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
+	if statErr == nil {
+		keepGroup(tmp, st)
+	}
+	// on the disk before it is renamed in: a machine that goes down
+	// between the two can leave the file at its length, all zero (#1505)
+	if err := steady.Sync(tmp); err != nil {
 		tmp.Close()
 		cleanup()
 		return err

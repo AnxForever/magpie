@@ -33,6 +33,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/proc"
 )
 
 // DevinExecutable finds the devin CLI; a var so tests can fake it.
@@ -41,7 +42,7 @@ var DevinExecutable = func() string {
 		return p
 	}
 	home, _ := os.UserHomeDir()
-	for _, p := range []string{filepath.Join(home, ".local", "bin", "devin"), "/usr/local/bin/devin", "/opt/homebrew/bin/devin"} {
+	for _, p := range append([]string{filepath.Join(home, ".local", "bin", "devin")}, proc.SystemDirs("/usr/local/bin/devin", "/opt/homebrew/bin/devin")...) {
 		if st, err := os.Stat(p); err == nil && !st.IsDir() {
 			return p
 		}

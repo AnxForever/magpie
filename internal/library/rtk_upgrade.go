@@ -270,20 +270,23 @@ func rtkUpgrader(bin string) []string {
 	have := func(name string) bool { _, err := exec.LookPath(name); return err == nil }
 	slash := filepath.ToSlash(real)
 	dir := filepath.Dir(bin)
+	wingetUp := []string{"winget", "upgrade", "--id", "rtk-ai.rtk", "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
 	switch {
 	case strings.Contains(slash, "/Cellar/rtk/") || strings.Contains(slash, "/.linuxbrew/"):
 		if have("brew") {
 			return []string{"brew", "upgrade", "rtk"}
 		}
-	case runtime.GOOS == "windows" && strings.Contains(strings.ToLower(slash), "/winget/"):
+	// winget's own folders: its package, or the link it puts in
+	// WinGet\Links to one installed with --location (#1527)
+	case rtkOnWindows && (strings.Contains(strings.ToLower(slash), "/winget/") || strings.Contains(strings.ToLower(filepath.ToSlash(bin)), "/winget/")):
 		if have("winget") {
-			return []string{"winget", "upgrade", "--id", "rtk-ai.rtk", "--exact", "--silent", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"}
+			return wingetUp
 		}
 	case dir == filepath.Join(home(), ".cargo", "bin"):
 		if have("cargo") {
 			return []string{"cargo", "install", "--git", "https://github.com/rtk-ai/rtk", "--force"}
 		}
-	case runtime.GOOS != "windows":
+	case !rtkOnWindows:
 		// its own script, told the folder it is in (RTK_INSTALL_DIR): the
 		// one a link to it points into (Put RTK on PATH's), not the link's
 		if st, err := os.Lstat(bin); err == nil && st.Mode()&os.ModeSymlink != 0 {
@@ -292,8 +295,87 @@ func rtkUpgrader(bin string) []string {
 		if have("curl") {
 			return []string{"sh", "-c", "curl -fsSL " + rtkScript + " | sh", dir}
 		}
+	// installed with winget --location into a folder of the user's own
+	// (D:\codes\tools\rtk): winget's records say so, not the folder's name
+	case have("winget") && wingetOwnsRTK(bin, real):
+		return wingetUp
 	}
 	return nil
+}
+
+// rtkOnWindows is whether rtk is upgraded as Windows has it; a var so a
+// test can ask a fake winget on any platform.
+var rtkOnWindows = runtime.GOOS == "windows"
+
+// wingetRecords is where winget's records say it put rtk-ai.rtk: the
+// InstallLocation of its entries among Windows' installed programs, which
+// winget writes for a portable package like rtk's, wherever --location
+// put it. ok is false when they can't be read (not Windows). A var for
+// tests.
+var wingetRecords = rtkWingetLocations
+
+// rtkWingetOwned is whether winget installed the rtk at a path, as last
+// asked: asking can run winget, which takes seconds, and the Library page
+// reads rtk's card each time it is drawn.
+var rtkWingetOwned = struct {
+	sync.Mutex
+	m map[string]rtkOwned
+}{m: map[string]rtkOwned{}}
+
+type rtkOwned struct {
+	yes  bool
+	next time.Time
+}
+
+// wingetOwnsRTK says whether winget installed the rtk at bin (real, with
+// links followed), remembered for ten minutes.
+func wingetOwnsRTK(bin, real string) bool {
+	key := strings.ToLower(real)
+	rtkWingetOwned.Lock()
+	defer rtkWingetOwned.Unlock()
+	if o, ok := rtkWingetOwned.m[key]; ok && time.Now().Before(o.next) {
+		return o.yes
+	}
+	yes := askWingetOwns(bin, real)
+	rtkWingetOwned.m[key] = rtkOwned{yes: yes, next: time.Now().Add(10 * time.Minute)}
+	return yes
+}
+
+// askWingetOwns asks winget's records whether the rtk at bin is the one it
+// installed: the folder its record names holds it, so an rtk.exe put
+// somewhere else by hand isn't taken for winget's. When there is no record
+// to read, winget list --id rtk-ai.rtk is asked, briefly, whether winget
+// has rtk installed at all.
+func askWingetOwns(bin, real string) bool {
+	if locs, ok := wingetRecords(); ok && len(locs) > 0 {
+		for _, l := range locs {
+			if inFolder(real, l) || inFolder(bin, l) {
+				return true
+			}
+		}
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wingetListTimeout)
+	defer cancel()
+	cmd := proc.CommandContext(ctx, "winget", "list", "--id", "rtk-ai.rtk", "--exact", "--accept-source-agreements", "--disable-interactivity")
+	cmd.Stdin = nil
+	out, err := cmd.Output()
+	// it lists the package by its id in any language, and says it has none
+	// with exit code 0x8A150014
+	return err == nil && strings.Contains(string(out), "rtk-ai.rtk")
+}
+
+// wingetListTimeout is how long winget list is given; a var for tests.
+var wingetListTimeout = 15 * time.Second
+
+// inFolder says whether path is folder dir or inside it, case aside, as
+// Windows has paths.
+func inFolder(path, dir string) bool {
+	if dir == "" {
+		return false
+	}
+	p, d := strings.ToLower(filepath.Clean(path)), strings.ToLower(filepath.Clean(dir))
+	return p == d || strings.HasPrefix(p, strings.TrimRight(d, `\/`)+string(filepath.Separator))
 }
 
 // UpgradeRTK brings rtk up to its latest release the way it was installed.

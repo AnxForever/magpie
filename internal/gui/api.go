@@ -36,6 +36,7 @@ import (
 	"github.com/yetone/magpie/internal/fonts"
 	"github.com/yetone/magpie/internal/fx"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/profile"
@@ -259,6 +260,13 @@ type stateJSON struct {
 	// Unlisted are the models kept for routing groups, which the pickers
 	// don't offer: a filter that finds one of them says why it isn't there
 	Unlisted []unlistedJSON `json:"unlisted,omitempty"`
+	// Recovered are magpie's files a crash left unreadable (all zero,
+	// #1505) that were read from their last good generation: the page
+	// tells the user once each
+	Recovered []lastgood.Note `json:"recovered,omitempty"`
+	// Last: this is the state kept from the last read (laststate.go), for
+	// the page to draw while the fresh one is read
+	Last bool `json:"last,omitempty"`
 }
 
 // unlistedJSON is a model of a provider kept for routing groups, and the
@@ -325,6 +333,9 @@ type settingsJSON struct {
 	// WSL is whether there is WSL to look in for agents (Windows), for
 	// Settings' Detect agents in WSL (#1264)
 	WSL bool `json:"wsl,omitempty"`
+	// Rekeyed is what an agent beyond loopback, given the sharing key,
+	// couldn't be set again with when sharing changed (agent.Rekey)
+	Rekeyed string `json:"rekeyed,omitempty"`
 	// Mac apps that explicitly handle .command files, for resumed sessions.
 	TerminalApps    []terminalChoice `json:"terminalApps,omitempty"`
 	TerminalDefault string           `json:"terminalDefault,omitempty"`
@@ -696,7 +707,19 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// without its vendor's list (one whose try at start-up failed) is
 		// asked again in the background, not only from the Providers page
 		provider.FetchNewSoon(8 * time.Second)
-		writeJSON(rw, state())
+		// ?last=1: the state kept from the last read, at once (#1519);
+		// null when none is kept
+		if r.URL.Query().Get("last") == "1" {
+			if s, ok := lastKnown(); ok {
+				writeJSON(rw, s)
+			} else {
+				writeJSON(rw, nil)
+			}
+			return
+		}
+		s := state()
+		writeJSON(rw, s)
+		keepState(s)
 	})
 	mux.HandleFunc("POST /api/set", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Agent, Field, Value string }
@@ -1019,6 +1042,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.RedactRules = cur.RedactRules                   // the masking rules, set on their own
 		// used or left is the Usage page's toggle as much as Settings', set on its own
 		in.QuotaLeft = cur.QuotaLeft
+		in.QuotaReads = cur.QuotaReads // set on its own (quota-reads below)
 		in.UsageOrder = cur.UsageOrder // the Usage page's, dragged there
 		// and what the tray panel's Allowances tab leaves out, set there
 		in.PanelUsageHidden = cur.PanelUsageHidden
@@ -1124,6 +1148,24 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		if changed && onTrayUsage != nil {
 			onTrayUsage()
+		}
+		writeJSON(rw, settingsState())
+	})
+	// when allowances are read: whenever magpie needs them, or only when
+	// the user asks (#1518)
+	mux.HandleFunc("POST /api/settings/quota-reads", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Reads string `json:"reads"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		s.QuotaReads = in.Reads
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
 		}
 		writeJSON(rw, settingsState())
 	})
@@ -1498,6 +1540,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
+		// the agents reaching the gateway now: one in a WSL distro under NAT
+		// is given the sharing key, which this changes
+		on := agent.OnGateway()
 		if err := access.ConfigureLAN(in.On, in.NewKey); err != nil {
 			fail(rw, err)
 			return
@@ -1508,7 +1553,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				return
 			}
 		}
-		writeJSON(rw, settingsState())
+		out := settingsState()
+		if _, err := agent.Rekey(on); err != nil {
+			out.Rekeyed = err.Error()
+		}
+		writeJSON(rw, out)
 	})
 	// the web pages that may call the gateway from a browser (#1051), as
 	// their origins; none takes them all away
@@ -1764,6 +1813,7 @@ func state() stateJSON {
 			s.Profiles = append(s.Profiles, pj)
 		}
 	}
+	s.Recovered = lastgood.Recovered()
 	return s
 }
 
