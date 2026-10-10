@@ -14542,7 +14542,9 @@ function renderPanelUse() {
 
 // The Usage tab: accounts under their vendor, each window a ring with its
 // share in it, when the plan ends and the windows start again under the
-// account; balances last, as figures.
+// account; balances as figures. All in the Usage page's order, a balance
+// where it was put there, not after the plans (#1510, JokerQyou); balances
+// side by side share one grid.
 function renderPanelQuota() {
   const box = $("#panelQuota");
   if (mode !== "panel" || !box) return;
@@ -14582,17 +14584,24 @@ function renderPanelQuota() {
   const hidden = new Set(state.settings?.panelUsageHidden || []);
   const peek = (q) => !!panelPeek && (trayCardID(q) === panelPeek || q.provider === panelPeek);
   const away = new Set(subs.filter((q) => hidden.has(q.provider) && !peek(q)).map((q) => q.provider));
-  const groups = new Map();
-  const bals = [];
+  // the sections in order: a vendor's accounts, or a run of balances
+  const parts = [], groups = new Map();
   for (const q of subs) {
     if (away.has(q.provider)) continue;
     // a balance with windows (Command Code's credits beside its 5-hour and
     // weekly windows) is the windows' card; a balance alone, a figure
-    if (q.balance && !q.windows?.length) { bals.push(q); continue; }
-    if (!groups.has(q.name)) groups.set(q.name, []);
+    if (q.balance && !q.windows?.length) {
+      const last = parts[parts.length - 1];
+      if (last?.bals) last.bals.push(q);
+      else parts.push({ bals: [q] });
+      continue;
+    }
+    if (!groups.has(q.name)) parts.push({ name: q.name, qs: groups.set(q.name, []).get(q.name) });
     groups.get(q.name).push(q);
   }
-  for (const [name, qs] of groups) {
+  for (const part of parts) {
+    if (part.bals) { box.append(panelBalances(part.bals)); continue; }
+    const { name, qs } = part;
     const g = el("div", "pq-group");
     const head = el("div", "pq-gh");
     head.append(icon(qs[0].icon), el("span", "pq-gn", name));
@@ -14621,47 +14630,6 @@ function renderPanelQuota() {
     if (qs.length > 1) g.append(usageMore(qs, "pq-more"));
     box.append(g);
   }
-  if (bals.length) {
-    const g = el("div", "pq-group");
-    const head = el("div", "pq-gh");
-    head.append(el("span", "pq-gn", t("Balances")));
-    g.append(head);
-    const grid = el("div", "pq-bals");
-    for (const q of bals) {
-      const card = el("div", "pq-card bal");
-      card.dataset.card = trayCardID(q);
-      card.title = [q.name, q.user].filter(Boolean).join(" · ");
-      // whose balance, at a glance: the provider's logo before its name
-      const who = el("span", "pq-sub pq-bn");
-      who.append(icon(q.icon || "generic"), el("span", "", q.name));
-      card.append(who);
-      // a balance field with several amounts: the first as the figure,
-      // the others each a quiet line, a percent a meter (#420)
-      const parts = q.balanceParts?.length ? q.balanceParts : [{ text: q.balance }];
-      for (const [i, p] of parts.entries()) {
-        if (!i && !p.label) card.append(el("b", "pq-amt", p.text));
-        else if (!i) {
-          const lead = el("span", "pq-lead");
-          lead.append(el("b", "pq-amt", p.text), el("span", "", p.label));
-          card.append(lead);
-        } else {
-          const line = el("span", "pq-sub pq-bp");
-          line.append(el("span", "", p.label || ""), el("b", "", p.text));
-          card.append(line);
-        }
-        if (p.percent != null) card.append(balanceMeter(p.percent));
-      }
-      // standing in for a reading that failed just now: as of when
-      if (q.asOf) {
-        card.classList.add("stale");
-        card.title += "\n" + asOfText(q);
-        card.append(el("span", "pq-sub pq-asof", t("As of {when}", { when: stamp(q.asOf) })));
-      }
-      grid.append(card);
-    }
-    g.append(grid);
-    box.append(g);
-  }
   // the way to hide some and move them, and how many are hidden
   const foot = el("div", "pq-foot");
   const arrange = el("button", "pq-more pq-arrange", t("Arrange"));
@@ -14676,6 +14644,50 @@ function renderPanelQuota() {
   panelAge();
   fit();
   requestAnimationFrame(focusQuotaCard);
+}
+
+// panelBalances is a run of balances on the Allowances tab, under their
+// heading, as figures side by side.
+function panelBalances(bals) {
+  const g = el("div", "pq-group");
+  const head = el("div", "pq-gh");
+  head.append(el("span", "pq-gn", t("Balances")));
+  g.append(head);
+  const grid = el("div", "pq-bals");
+  for (const q of bals) {
+    const card = el("div", "pq-card bal");
+    card.dataset.card = trayCardID(q);
+    card.title = [q.name, q.user].filter(Boolean).join(" · ");
+    // whose balance, at a glance: the provider's logo before its name
+    const who = el("span", "pq-sub pq-bn");
+    who.append(icon(q.icon || "generic"), el("span", "", q.name));
+    card.append(who);
+    // a balance field with several amounts: the first as the figure,
+    // the others each a quiet line, a percent a meter (#420)
+    const parts = q.balanceParts?.length ? q.balanceParts : [{ text: q.balance }];
+    for (const [i, p] of parts.entries()) {
+      if (!i && !p.label) card.append(el("b", "pq-amt", p.text));
+      else if (!i) {
+        const lead = el("span", "pq-lead");
+        lead.append(el("b", "pq-amt", p.text), el("span", "", p.label));
+        card.append(lead);
+      } else {
+        const line = el("span", "pq-sub pq-bp");
+        line.append(el("span", "", p.label || ""), el("b", "", p.text));
+        card.append(line);
+      }
+      if (p.percent != null) card.append(balanceMeter(p.percent));
+    }
+    // standing in for a reading that failed just now: as of when
+    if (q.asOf) {
+      card.classList.add("stale");
+      card.title += "\n" + asOfText(q);
+      card.append(el("span", "pq-sub pq-asof", t("As of {when}", { when: stamp(q.asOf) })));
+    }
+    grid.append(card);
+  }
+  g.append(grid);
+  return g;
 }
 
 // The Allowances tab's arranging (H20 on Discord): a row a subscription,
