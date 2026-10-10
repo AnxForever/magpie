@@ -33,11 +33,11 @@ func Read(path string) ([]byte, error) {
 }
 
 // WriteAtomic writes data to path via a temp file + rename so a crash can
-// never leave a half-written config behind. File mode is preserved. When
-// path is a symlink (a config kept in a dotfiles repo) the file it points
-// at is written and the link stays; a file with other hard links is
-// written in place, see writeInPlace. Once written, temp files earlier
-// writes of path left behind go, see removeStaleTemps.
+// never leave a half-written config behind. File mode and group are
+// preserved. When path is a symlink (a config kept in a dotfiles repo) the
+// file it points at is written and the link stays; a file with other hard
+// links is written in place, see writeInPlace. Once written, temp files
+// earlier writes of path left behind go, see removeStaleTemps.
 func WriteAtomic(path string, data []byte) error {
 	defer filememo.Forget() // read again, where a request holds it
 	path, err := Target(path)
@@ -62,7 +62,8 @@ func WriteAtomic(path string, data []byte) error {
 		}
 	}
 	mode := fs.FileMode(0o644)
-	if st, err := os.Stat(path); err == nil {
+	st, statErr := os.Stat(path)
+	if statErr == nil {
 		mode = st.Mode().Perm()
 	}
 	dir := filepath.Dir(path)
@@ -84,6 +85,9 @@ func WriteAtomic(path string, data []byte) error {
 		tmp.Close()
 		cleanup()
 		return err
+	}
+	if statErr == nil {
+		keepGroup(tmp, st)
 	}
 	// on the disk before it is renamed in: a machine that goes down
 	// between the two can leave the file at its length, all zero (#1505)
