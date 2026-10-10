@@ -1238,6 +1238,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// it, for a request that goes only where the user said it may go
 	// unmasked (unredactedRoute)
 	plain := body
+	var masked []byte // the masked body, when plain goes instead
 	w, body, unmask := redacted(w, body)
 	defer unmask()
 	// the reply's model the member that answered, when asked for (#822)
@@ -1409,7 +1410,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// go unmasked gets the request as written (lc on Discord); the log
 	// keeps the masked one
 	if unredactedRoute(p, isGroup, ms) {
-		body = plain
+		masked, body = body, plain
 	}
 	// a gateway key held to some models (#882) is refused another, or a
 	// group it doesn't name with one it may not use in it
@@ -1782,7 +1783,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	if telemetry != nil {
 		telemetry.routeID = tr.ID
 	}
-	promptRead := s.inspectPrompt(tr, from, body)
+	// the card's text is the masked body, even where the request went
+	// unmasked
+	textBody := body
+	if masked != nil {
+		textBody = masked
+	}
+	promptRead := s.inspectPrompt(tr, from, body, textBody)
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
 	sent := ""       // the reasoning the last try's model was asked for

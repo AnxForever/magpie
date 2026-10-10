@@ -582,7 +582,7 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 		captureTitle = link != nil && isTitleKind(kind)
 		tr = s.trace.begin(Route{imageTurn: drawingTurnID(metadata.Turn), imageCaller: codexTurnKey(r, callerOf(r).agent), imageProvider: imageProvider, TitleLink: link, Time: start, Agent: agentOf(r), Session: sessionOf(r.Header), Conv: convOf(r.Header, body), ParentSession: titleParentSession(r.Header, metadata, kind), Kind: kind, Model: model, Effort: effort, Provider: "openai", Subagent: subagentPickOf(r),
 			Order: []Weighed{seat}, Tries: []Try{{ID: seat.ID, Model: model, Effort: effort, Start: start}}})
-		promptRead := s.inspectPrompt(tr, provider.Responses, body)
+		promptRead := s.inspectPrompt(tr, provider.Responses, body, body)
 		end = func(status int, msg string, tokens, out int) {
 			ms := time.Since(start).Milliseconds()
 			ttft, text := first.ms()
