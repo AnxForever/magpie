@@ -527,8 +527,19 @@ type ompProviderEntry struct {
 	// and only a later one with its own (omp/18.4.4), so its requests went
 	// to "Bun" in usage and past omp's own rules and stand-ins
 	Headers map[string]string `yaml:"headers,omitempty"`
-	Models  []ompModel        `yaml:"models"`
+	// Compat names the header omp sends its session in. omp names the
+	// conversation on Anthropic's Messages API (X-Claude-Code-Session-Id),
+	// and on Chat and Responses only to OpenAI itself, so a turn of omp's on
+	// Chat or Responses reached the gateway with no session: its usage had
+	// none and "Record gateway conversations" kept none of it (akic404 on
+	// Discord). promptCacheSessionHeader has omp send its session id in it.
+	Compat map[string]string `yaml:"compat,omitempty"`
+	Models []ompModel        `yaml:"models"`
 }
+
+// ompSessionSince is the first omp whose compat takes
+// promptCacheSessionHeader (pi-catalog 16.0.6).
+const ompSessionSince = "16.0.6"
 
 // ompMaxSince is the first omp whose models.yml takes max as a thinking
 // effort (pi-ai 16.4.0); 16.3.5's schema stops at xhigh and turns the whole
@@ -609,6 +620,9 @@ func ompProviderAt(gw, version string) ompProviderEntry {
 	}
 	e := ompProviderEntry{BaseURL: gw + "/v1", API: "openai-completions", Auth: "none",
 		Headers: map[string]string{"User-Agent": "omp"}, Models: ms}
+	if version != "" && !Newer(ompSessionSince, version) {
+		e.Compat = map[string]string{"promptCacheSessionHeader": "x-session-affinity"}
+	}
 	// whqtian on Discord: a WSL omp under NAT asks Windows' address, where
 	// the gateway turns a request without a named key away
 	if key := keyAt(gw); key != gateway.Token {

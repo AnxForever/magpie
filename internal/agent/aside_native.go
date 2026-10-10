@@ -360,7 +360,7 @@ func (c *asideConnection) sync() error {
 // kept is the block with what else Aside's providers.magpie holds kept
 // (theirsKept).
 func (c *asideConnection) kept() func() any {
-	return theirsKept(c.models, "providers.magpie", c.block, "models")
+	return piBlockKept(c.models, c.block)
 }
 
 func (c *asideConnection) state() NativeState {

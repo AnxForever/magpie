@@ -392,9 +392,38 @@ func magpieProviderJSONAt(shape, catalog, gw string) any {
 		if ms == nil {
 			ms = []map[string]any{}
 		}
-		return map[string]any{"name": "magpie", "baseUrl": gw + "/v1", "api": "openai-completions", "apiKey": keyAt(gw), "models": ms}
+		// Pi names its session to a provider only when asked to:
+		// sendSessionAffinityHeaders has it send it on Chat
+		// (x-session-affinity, session_id) and Anthropic's Messages API
+		// (x-session-affinity). On Responses it sends session_id anyway.
+		// Without it a turn of Pi's on Chat or Messages reached the gateway
+		// with no session: its usage had none and "Record gateway
+		// conversations" kept none of it (akic404 on Discord).
+		return map[string]any{"name": "magpie", "baseUrl": gw + "/v1", "api": "openai-completions", "apiKey": keyAt(gw),
+			"compat": map[string]any{"sendSessionAffinityHeaders": true}, "models": ms}
 	}
 	return nil
+}
+
+// piBlockKept is theirsKept for magpie's provider in a Pi models.json at
+// path, where a sendSessionAffinityHeaders the file already has, the
+// user's own or pi-cache-optimizer's (#1103), stays as it is.
+func piBlockKept(path string, value func() any) func() any {
+	return theirsKept(path, "providers."+magpieID, func() any {
+		v := value()
+		if _, set := edit.GetJSON(path, "providers."+magpieID+".compat.sendSessionAffinityHeaders"); !set {
+			return v
+		}
+		if m, ok := v.(map[string]any); ok {
+			if c, ok := m["compat"].(map[string]any); ok {
+				delete(c, "sendSessionAffinityHeaders")
+				if len(c) == 0 {
+					delete(m, "compat")
+				}
+			}
+		}
+		return v
+	}, "models")
 }
 
 // piModelJSON is one of magpie's models as an entry of Pi's models.json.
@@ -817,7 +846,7 @@ func piLike(at place, id, name, dir string) *Agent {
 	pair := pairSet(set, "defaultProvider", "defaultModel")
 	// the model a new session starts on, as the model field shows it
 	startup := func() string { return piStartup(path, pairGet(get, "defaultProvider", "defaultModel")()) }
-	block := theirsKept(modelsPath, "providers."+magpieID, func() any { return magpieProviderJSONAt("pi", id, at.gw()) }, "models")
+	block := piBlockKept(modelsPath, func() any { return magpieProviderJSONAt("pi", id, at.gw()) })
 	writeMagpie := func() error {
 		return edit.SetJSON(modelsPath, edit.KV{Path: "providers." + magpieID, Value: block()})
 	}

@@ -9,6 +9,12 @@ origins can read this header through CORS. magpie never makes up an id for a
 request without one, so such a request has no session and its text is not
 recorded: text kept under an id nothing lists couldn't be opened. Prompt text,
 caller keys and network addresses are never used to guess conversation ownership.
+So the configs magpie writes have each agent name its session: Pi's provider
+block sets `compat.sendSessionAffinityHeaders` (`x-session-affinity` on Chat and
+Messages; Responses sends `session_id` anyway), and omp 16.0.6 and later gets
+`compat.promptCacheSessionHeader: x-session-affinity`. A user's own
+`sendSessionAffinityHeaders` is kept (`piBlockKept`). Verification:
+`TestPiNamesItsSessionToTheGateway`, `TestOmpNamesItsSessionToTheGateway`.
 Older ledger records without `Session` remain excluded. The projection is
 computed from the usage ledger and is not persisted. Window projections and
 routing summaries reuse versioned log snapshots; appends and rewrites invalidate
