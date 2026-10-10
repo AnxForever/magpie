@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,12 +26,46 @@ var servedAt = struct {
 	sync.Mutex
 	m    map[string]time.Time // ServedID → when it last answered
 	path string               // the file m goes with: another (a test's HOME) starts afresh
-}{m: map[string]time.Time{}}
+	// by: the ServedID that answered last for each provider (servedOf),
+	// to tell OnServedMoved when that is another one
+	by map[string]string
+}{m: map[string]time.Time{}, by: map[string]string{}}
+
+// OnServedMoved sets what is told when a provider's requests are answered
+// by another of its accounts or keys than the one that answered before, or
+// when the user signs an agent in to another account (SwitchLogin): the
+// menu bar following the account in use reads it again then, rather than
+// minutes later (#1516). It is called after NoteServed lets go of its lock
+// and must not block; nil tells nothing.
+func OnServedMoved(f func()) {
+	if f == nil {
+		onServedMoved.Store(nil)
+		return
+	}
+	onServedMoved.Store(&f)
+}
+
+var onServedMoved atomic.Pointer[func()]
+
+func servedMoved() {
+	if f := onServedMoved.Load(); f != nil {
+		(*f)()
+	}
+}
+
+// servedOf is the provider a ServedID is of: "codex" for "codex@a@b.c",
+// "deepseek" for "deepseek#k1a2b3c".
+func servedOf(id string) string {
+	if i := strings.IndexAny(id, "@#"); i >= 0 {
+		return id[:i]
+	}
+	return id
+}
 
 // ours is servedAt.m for the file at path. Called with servedAt held.
 func ours(path string) map[string]time.Time {
 	if servedAt.path != path {
-		servedAt.path, servedAt.m = path, map[string]time.Time{}
+		servedAt.path, servedAt.m, servedAt.by = path, map[string]time.Time{}, map[string]string{}
 	}
 	return servedAt.m
 }
@@ -55,12 +90,24 @@ func NoteServed(p Provider, at time.Time) {
 	id := ServedID(p)
 	path := servedPath()
 	servedAt.Lock()
-	defer servedAt.Unlock()
+	moved := false
+	defer func() {
+		servedAt.Unlock()
+		if moved {
+			servedMoved()
+		}
+	}()
 	mine := ours(path)
 	if at.Before(mine[id]) {
 		return
 	}
 	mine[id] = at
+	if of := servedOf(id); servedAt.by[of] != id {
+		// the first this process sees too: the menu bar may have taken
+		// another for the one in use until then
+		moved = true
+		servedAt.by[of] = id
+	}
 	m := readServed(path)
 	for k, t := range mine {
 		if t.After(m[k]) {

@@ -180,8 +180,10 @@ var trayServedFresh = time.Hour
 // moves on from a spent account, and under Smart picks any, as soon as it
 // asks, which the account the agent is signed in to can lag (okingkee on
 // X: A used up, B answering, the menu bar still on A) — else the one
-// InUseLogin reckons the gateway goes to first; the provider's first card
-// when magpie can't tell (the account in use first among them).
+// InUseLogin reckons the gateway goes to first; else the one that answered
+// last at all (a plugin's accounts, which InUseLogin doesn't know); the
+// provider's first card when magpie can't tell (the account in use first
+// among them).
 func trayInUseCard(cards []provider.SubscriptionQuota, pid string, now time.Time) (provider.SubscriptionQuota, bool) {
 	var mine []provider.SubscriptionQuota
 	for _, q := range cards {
@@ -196,17 +198,23 @@ func trayInUseCard(cards []provider.SubscriptionQuota, pid string, now time.Time
 	if len(mine) > 1 {
 		last := -1
 		for i, c := range mine {
-			if c.LastServedAt != nil && now.Sub(*c.LastServedAt) < trayServedFresh &&
-				(last < 0 || c.LastServedAt.After(*mine[last].LastServedAt)) {
+			if c.LastServedAt != nil && (last < 0 || c.LastServedAt.After(*mine[last].LastServedAt)) {
 				last = i
 			}
 		}
-		if last >= 0 {
+		in := -1
+		if user := trayInUseAccount(pid); user != "" {
+			in = slices.IndexFunc(mine, func(q provider.SubscriptionQuota) bool { return strings.EqualFold(q.User, user) })
+		}
+		switch {
+		case last >= 0 && now.Sub(*mine[last].LastServedAt) < trayServedFresh:
 			q = mine[last]
-		} else if user := trayInUseAccount(pid); user != "" {
-			if i := slices.IndexFunc(mine, func(q provider.SubscriptionQuota) bool { return strings.EqualFold(q.User, user) }); i >= 0 {
-				q = mine[i]
-			}
+		case in >= 0:
+			q = mine[in]
+		case last >= 0:
+			// a plugin's accounts are no sign-in InUseLogin knows (#1516):
+			// the one that answered last, however long ago, over the first
+			q = mine[last]
 		}
 	}
 	if q.User != "" {

@@ -900,7 +900,11 @@ func SwitchLogin(agent, user string) error {
 	if slices.Contains(loginAgents, agent) {
 		setLoginReturn(agent, loginReturn{})
 	}
-	return switchLogin(agent, user)
+	if err := switchLogin(agent, user); err != nil {
+		return err
+	}
+	servedMoved()
+	return nil
 }
 
 func switchLogin(agent, user string) error {
