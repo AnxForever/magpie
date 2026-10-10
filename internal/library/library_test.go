@@ -875,6 +875,7 @@ func TestReadNoAgents(t *testing.T) {
 func TestPiMCP(t *testing.T) {
 	h := sandbox(t)
 	p := filepath.Join(h, ".pi/agent/mcp.json")
+	write(t, filepath.Join(h, ".pi/agent/settings.json"), `{"packages": ["npm:pi-mcp-adapter@2.9.1"]}`)
 	write(t, p, `{"mcpServers": {"supabase": {"transport": "streamable-http", "url": "https://mcp.supabase.com/mcp", "lifecycle": "eager"}}}`)
 	tg := targetByID("pi")
 	if tg == nil || tg.MCP == nil || tg.MCP.Path != p {
@@ -909,6 +910,7 @@ func TestPiMCPAdapter3(t *testing.T) {
 	d := filepath.Join(h, ".pi/agent")
 	old, adapter := filepath.Join(d, "mcp.json"), filepath.Join(d, "mcp-adapter.json")
 	pkg := filepath.Join(d, "npm/node_modules/pi-mcp-adapter/package.json")
+	write(t, filepath.Join(d, "settings.json"), `{"packages": ["npm:pi-mcp-adapter"]}`)
 	write(t, old, `{"mcpServers": {"mine": {"command": "npx", "args": ["x"]}}}`)
 	write(t, pkg, `{"name": "pi-mcp-adapter", "version": "2.9.1"}`)
 	if tg := targetByID("pi"); tg.MCP.Path != old {
