@@ -536,6 +536,20 @@ first day, `qianfan-token-plan`, is taken too. The plans serve no model list,
 so the preset carries their documented models; pay as you go serves its own
 at `/v2/models`.
 
+Alibaba's Token Plan is sold in two places, each with its own `sk-sp-` key
+that only its own host takes: on the Qwen AI platform as `qwen-token-plan`
+(`token-plan.maas.qianwenaiapi.com`), and on Alibaba Cloud Bailian as
+`bailian-token-plan` (`token-plan.cn-beijing.maas.aliyuncs.com`). Both serve
+Chat Completions at `/compatible-mode/v1` and Anthropic Messages at
+`/apps/anthropic`, and carry the plans' documented text models for when the
+host lists none. Bailian's also answers its decision model,
+`decision-model-preview`, on System One at `/compatible-mode/v1/systemone`
+with the same key, so a routing group can pick it as its classifier. The
+same model on the Qwen AI platform's pay as you go is `qwen-decision`
+(`maas.qianwenaiapi.com`), and on a Bailian workspace `bailian-decision`.
+Neither plan has an API for its credits: the console's subscription page
+shows them, so magpie shows no plan usage for these keys.
+
 ### Google Vertex AI
 
 Google Vertex AI (`google-vertex`), which Google's documentation now calls

@@ -4730,12 +4730,12 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 // Bailian): Qwen's presets, or one of its hosts given as a custom provider.
 func dashScope(p provider.Provider) bool {
 	switch p.Preset {
-	case "qwen", "qwen-cn", "qwen-token-plan":
+	case "qwen", "qwen-cn", "qwen-token-plan", "bailian-token-plan":
 		return true
 	}
 	h := p.Host()
 	return strings.HasPrefix(h, "dashscope") && strings.HasSuffix(h, ".aliyuncs.com") ||
-		strings.HasSuffix(h, ".maas.aliyuncs.com") || strings.HasSuffix(h, ".maas.qianwenaiapi.com")
+		strings.HasSuffix(h, ".maas.aliyuncs.com") || h == "maas.qianwenaiapi.com" || strings.HasSuffix(h, ".maas.qianwenaiapi.com")
 }
 
 func streamOf(body []byte) bool {
