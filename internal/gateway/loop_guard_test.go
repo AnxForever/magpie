@@ -533,8 +533,13 @@ func TestReasoningLoopIsAskedAgain(t *testing.T) {
 			if n := v.asked.Load(); n != 2 {
 				t.Fatalf("the vendor was asked %d times, want 2", n)
 			}
-			if first, second := <-v.letGo, <-v.letGo; !first || second {
-				t.Fatalf("let go: the looping try %v, the next %v", first, second)
+			// The looping try is let go (true) and the next ends whole
+			// (false), in whichever order the two handlers get there: the
+			// next can finish before the first sees its request cancelled.
+			// Only the next try sends false at once; the looping one sends
+			// false only after 20s unreleased.
+			if a, b := <-v.letGo, <-v.letGo; a == b {
+				t.Fatalf("let go: %v and %v, want the looping try let go and the next not", a, b)
 			}
 		})
 	}
