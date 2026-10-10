@@ -20406,6 +20406,12 @@ function renderSearch(s, keep) {
         (v) => savePrefs({ ...keep, searchFirst: v === "api" ? "api" : "" })));
     r.id = "searchFirstRow";
   }
+  // the same search as an MCP server of the gateway's (Kayphoon on
+  // Discord), for an agent to mount as its web_search tool
+  const mcpURL = (s.gateway || providers?.gateway?.url || `http://127.0.0.1:${s.port || 3425}`).replace(/\/+$/, "") + "/mcp/magpie/web-search";
+  const mcp = row(t("MCP server"), t("Cursor, Claude Desktop and other agents can add this search as an MCP server (Streamable HTTP) with one web_search tool. From another computer, send a gateway key as Authorization: Bearer <key>."),
+    el("code", "", mcpURL), copyBtn(mcpURL, t("Address")));
+  mcp.id = "searchMcpRow";
 }
 
 // renderSearcher: the provider that searches the web for a model that

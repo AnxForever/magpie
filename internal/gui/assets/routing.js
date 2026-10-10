@@ -1809,6 +1809,8 @@
       : t("{agent} requested a subagent on {model}.", { agent, model: r.model });
     if (purposeOf(r.kind) === "kind:ambient_suggestions") return t("{agent} drafted the suggested prompts on its home page by itself, in the background, searching the project's files and connected apps, and checked them for safety. Not a turn of the conversation; Codex's Settings › Configuration › Suggested prompts turns it off.", { agent });
     if (r.kind === "luna_reserve") return t("{agent} sent this turn on Luna Reserve, which it turns to once the plan's own allowance is used up; it picks the model itself.", { agent });
+    // the agent called magpie's web search MCP server itself, for no model
+    if (r.kind === "web_search" && r.for?.mcp) return t("{agent} called magpie's web_search MCP tool: {searcher} searched for it. Not a turn of the conversation.", { agent: agentName(r.for.agent), searcher: r.model });
     if (r.kind === "web_search") return r.for
       ? t("magpie ran this web search for {agent}'s {model}, which can't search the web by itself: {searcher} searched, and {model} goes on answering once it has what was found. Not a turn of the conversation.", { agent: agentName(r.for.agent), model: r.for.model, searcher: r.model })
       : t("magpie ran this web search for a model that can't search the web by itself: {searcher} searched, and that model goes on answering once it has what was found. Not a turn of the conversation.", { searcher: r.model });
