@@ -2880,6 +2880,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// what every path to an Anthropic endpoint sends, relayed or
 		// built, with the model named as the vendor names it
 		body = adaptiveThinking(body)
+		body = thinkingOffAsTaken(body, path)
 		asked := askedBetas(in)
 		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
 			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
@@ -3308,7 +3309,13 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
 		res.Body = io.NopCloser(bytes.NewReader(b))
-		if nb, ok := withoutThinkingOff(body); ok && (alwaysThinks.Match(b) || mandatoryReasoning.Match(b)) {
+		// Sonnet 5.5 by a name thinkingOffAsTaken doesn't know asks for
+		// between_tools in place of disabled (#1454)
+		if nb, ok := withBetweenTools(body); ok && asksBetweenTools.Match(b) {
+			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(nb), r.Header); err != nil {
+				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+			}
+		} else if nb, ok := withoutThinkingOff(body); ok && (alwaysThinks.Match(b) || mandatoryReasoning.Match(b) || thinkingOffRefused.Match(b)) {
 			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(nb), r.Header); err != nil {
 				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 			}
