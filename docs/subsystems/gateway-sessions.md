@@ -134,6 +134,14 @@ The page invalidates pending transcript reads on reload or clear. A completed
 read updates the current open transcript after redraw, and an older response
 cannot replace content fetched after clearing the store.
 
+`GET /api/sessions/markdown` and `POST /api/sessions/export` take the same
+choice: a native session is written from its file (`sessions.WriteMarkdown`),
+and otherwise a known gateway session from what its transcript reads
+(`sessions.WriteGatewayMarkdown`, "Recorded by: magpie's gateway", with a note
+when turns or a part's end weren't kept). A magpie that others reach as a
+remote magpie has no file of their agents' sessions, so this is the only way
+it can export them. Verification: `TestGatewaySessionExportsMarkdown`.
+
 Verification: `TestGatewayConversation*` (`TestGatewayConversationNeedsTheClientsSession`
 and `TestGatewayConversationClientRequestPrefixedSession` for the two rules above), `TestGatewaySessionHistoryAndCalendar`,
 `TestGatewaySessionsNativeWinsBeforeLimits`,
