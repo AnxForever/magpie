@@ -341,6 +341,49 @@ func snowIn(at place) *Agent {
 			Options: func(cur map[string]string) []Option {
 				return append(snowOwnOptions(profiles, cur["model"]), viaMagpie("snow", magpieID+"/")...)
 			},
+		}, {
+			// basicModel, the light model Snow's summaries, compaction and
+			// file search ask (utils/config/apiConfig.ts): on magpie's
+			// profile only, where both models go to the gateway; a
+			// profile of the user's is theirs to set in Snow. Empty while
+			// it follows the main model.
+			Key: "small", Label: "small",
+			Get: func() string {
+				if !onOurs() {
+					return ""
+				}
+				b, _ := edit.GetJSON(ours, "snowcfg.basicModel")
+				if b == "" || b == model(snowProfile) {
+					return ""
+				}
+				return magpieID + "/" + b
+			},
+			Set: func(v string) error {
+				if !onOurs() {
+					if v == "" {
+						return nil
+					}
+					return errors.New("Snow CLI's light model can be set here on magpie's profile: pick a model through magpie as its model first")
+				}
+				ref := model(snowProfile)
+				if v != "" {
+					r, ok := strings.CutPrefix(v, magpieID+"/")
+					if !ok || !isMagpie(r) {
+						return errors.New("Snow CLI's light model goes to the gateway with its main model: pick one through magpie")
+					}
+					ref = r
+				}
+				if err := edit.SetJSON(ours, edit.KV{Path: "snowcfg.basicModel", Value: ref}); err != nil {
+					return err
+				}
+				return mirror(snowProfile)
+			},
+			Options: func(cur map[string]string) []Option {
+				if !strings.HasPrefix(cur["model"], magpieID+"/") {
+					return nil
+				}
+				return viaMagpie("snow", magpieID+"/")
+			},
 		}},
 	}, ours, activeFile, config, defaultProfile)
 }
@@ -429,8 +472,18 @@ func snowProfileFor(from []byte, ours bool, v1, key, ref string, wrote map[strin
 	sc["baseUrlMode"] = "base"
 	sc["apiKey"] = key
 	sc["requestMethod"] = "chat"
+	// the light model follows the main one, unless picked apart from it
+	// (the small field): a magpie model of its own stays through a new
+	// main model and a sync
+	small := ref
+	if ours {
+		was, _ := sc["advancedModel"].(string)
+		if b, _ := sc["basicModel"].(string); b != "" && b != was && isMagpie(b) {
+			small = b
+		}
+	}
 	sc["advancedModel"] = ref
-	sc["basicModel"] = ref
+	sc["basicModel"] = small
 	cfg["snowcfg"] = sc
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

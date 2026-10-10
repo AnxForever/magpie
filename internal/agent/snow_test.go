@@ -487,3 +487,88 @@ func TestSnowUsersVisionModel(t *testing.T) {
 		})
 	}
 }
+
+// Snow's light model (basicModel) is picked apart from its main one on
+// magpie's profile, stays through a new main model and a sync, and follows
+// the main one again when cleared; on a profile of the user's it is
+// theirs, and the field offers nothing.
+func TestSnowSmallModel(t *testing.T) {
+	_, dir := snowHome(t)
+	snowUser(t, dir)
+	snowSees(t)
+	ours := filepath.Join(dir, "profiles", "magpie.json")
+	a, _ := Find("snow")
+	if opts := a.Field("small").Options(a.Values()); len(opts) != 0 {
+		t.Fatalf("small offered on the user's profile: %+v", opts)
+	}
+	if err := a.Apply("small", "magpie/relay/glm-4.6"); err == nil {
+		t.Fatal("small set on the user's profile")
+	}
+	if readFile(filepath.Join(dir, "profiles", "default.json")) != snowDefault {
+		t.Fatal("the user's profile was written")
+	}
+
+	if err := a.Apply("model", "magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if v := a.Values()["small"]; v != "" {
+		t.Fatalf("small follows the model, got %q", v)
+	}
+	if opts := a.Field("small").Options(a.Values()); len(opts) == 0 {
+		t.Fatal("no small options on magpie's profile")
+	}
+	if err := a.Apply("small", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	sc := snowCfg(t, ours)
+	if sc["advancedModel"] != "deepseek/pro" || sc["basicModel"] != "relay/glm-4.6" {
+		t.Fatalf("small pick: %v", sc)
+	}
+	if readFile(filepath.Join(dir, "config.json")) != readFile(ours) {
+		t.Fatal("config.json not copied from magpie's profile")
+	}
+	if v := a.Values()["small"]; v != "magpie/relay/glm-4.6" {
+		t.Fatalf("small read back %q", v)
+	}
+	// a model of the user's own can't be Snow's light model beside the
+	// gateway's
+	if err := a.Apply("small", "glm-5"); err == nil {
+		t.Fatal("a non-magpie small model was taken")
+	}
+
+	// a new main model and a sync keep it
+	if err := a.Apply("model", "magpie/relay/glm-4.5v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if sc := snowCfg(t, ours); sc["advancedModel"] != "relay/glm-4.5v" || sc["basicModel"] != "relay/glm-4.6" {
+		t.Fatalf("small after a new model and sync: %v", sc)
+	}
+
+	// cleared: it follows the main model, and keeps following it
+	if err := a.Apply("small", ""); err != nil {
+		t.Fatal(err)
+	}
+	if sc := snowCfg(t, ours); sc["basicModel"] != "relay/glm-4.5v" {
+		t.Fatalf("small cleared: %v", sc)
+	}
+	if err := a.Apply("model", "magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if sc := snowCfg(t, ours); sc["basicModel"] != "deepseek/pro" {
+		t.Fatalf("small doesn't follow the model: %v", sc)
+	}
+
+	// Disconnect: the user's profile again, magpie's gone
+	if err := a.Apply("small", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ours); !os.IsNotExist(err) || snowActive(dir) != "default" {
+		t.Fatalf("after Disconnect: %v, active %q", err, snowActive(dir))
+	}
+}

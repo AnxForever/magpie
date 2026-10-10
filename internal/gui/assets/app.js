@@ -298,8 +298,10 @@ function renderAgents() {
     // an effort or ultracode the model has none of (Claude Code on Haiku
     // 4.5, ultracode short of xhigh) isn't drawn at all, nor are subagents
     // with no model to go on, or a sign-in with no other to take (Claude
-    // Code's, until it runs through magpie where magpie takes any key)
-    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in") && !f.options.length && !f.value;
+    // Code's, until it runs through magpie where magpie takes any key), or
+    // a small model with none to pick (Snow CLI's, on a profile of the
+    // user's own)
+    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in" || f.key === "small") && !f.options.length && !f.value;
     const shownFields = a.fields.filter((f) => !TIERS.includes(f.label) && !TIER_EFFORTS.includes(f.label) && !none(f));
     const tiers = tierMenu(a);
     if (tiers) shownFields.push(tiers);
