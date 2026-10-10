@@ -2723,6 +2723,15 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	if relay && from == provider.Gemini && !streamOf(body) {
 		relay = false
 	}
+	// a Qwen model that thinks gives one JSON body only with its thinking
+	// off: DashScope turns the request away with "parameter.enable_thinking
+	// must be set to false for non-streaming calls". One asked for whole is
+	// asked streamed on Chat and given back whole, its thinking as the
+	// model would have done it (ZekeXiao on X: a group's classifier on the
+	// Qwen Token Plan, which magpie asks for one body)
+	if relay && from == provider.Chat && !streamOf(body) && dashScope(p) {
+		relay, ownAPI = false, true
+	}
 	if relay {
 		call.To = from
 		if status, msg, done := s.passthrough(w, r, p, from, model, body, &call.Usage); done {
@@ -4575,6 +4584,18 @@ func render(proto provider.Protocol, res Result, r *Request) []byte {
 }
 
 // ---- small helpers ------------------------------------------------------------
+
+// dashScope reports whether p is Alibaba Cloud's Model Studio (DashScope,
+// Bailian): Qwen's presets, or one of its hosts given as a custom provider.
+func dashScope(p provider.Provider) bool {
+	switch p.Preset {
+	case "qwen", "qwen-cn", "qwen-token-plan":
+		return true
+	}
+	h := p.Host()
+	return strings.HasPrefix(h, "dashscope") && strings.HasSuffix(h, ".aliyuncs.com") ||
+		strings.HasSuffix(h, ".maas.aliyuncs.com") || strings.HasSuffix(h, ".maas.qianwenaiapi.com")
+}
 
 func streamOf(body []byte) bool {
 	var v struct {
