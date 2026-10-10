@@ -220,6 +220,7 @@ magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact  <spa
 magpie group rule add opus-anywhere pause=copilot/claude-opus-5.5 time=14:00-18:00 days=mon-fri  <span class="c"># left out in those hours</span>
 magpie group set coder models+=group/opus-anywhere  <span class="c"># a group in a group</span>
 magpie group rule opus-anywhere      <span class="c"># its rules; rule rm|mv &lt;n&gt;, rule classifier &lt;group&gt; &lt;model&gt;</span>
+magpie group copy opus-anywhere <span class="s">"Opus test"</span>  <span class="c"># the same models, routing and rules, to change on its own</span>
 magpie group rm opus-anywhere        <span class="c"># one magpie found is hidden; magpie group restore &lt;id&gt;</span>
 magpie claude group/opus-anywhere    <span class="c"># use it</span></pre>
     </div>

@@ -220,6 +220,7 @@ magpie group rule add opus-anywhere use=deepseek/deepseek-v4-flash compact  <spa
 magpie group rule add opus-anywhere pause=copilot/claude-opus-5.5 time=14:00-18:00 days=mon-fri  <span class="c"># 这段时间不用它</span>
 magpie group set coder models+=group/opus-anywhere  <span class="c"># 路由组里放路由组</span>
 magpie group rule opus-anywhere      <span class="c"># 查看规则；rule rm|mv &lt;n&gt;，rule classifier &lt;组&gt; &lt;模型&gt; 换判断模型</span>
+magpie group copy opus-anywhere <span class="s">"Opus test"</span>  <span class="c"># 复制一份：模型、路由方式和规则都一样，可单独修改</span>
 magpie group rm opus-anywhere        <span class="c"># 自动发现的组会被隐藏；magpie group restore &lt;id&gt; 恢复</span>
 magpie claude group/opus-anywhere    <span class="c"># 使用它</span></pre>
     </div>
