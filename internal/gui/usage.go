@@ -570,6 +570,18 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 			fail(rw, err)
 			return
 		}
+		if out.Code == "reset" {
+			// routing and the Providers page know the windows started
+			// again by the time the page hears so, not at a later
+			// request's reading (#1491)
+			who := in.User
+			if who == "" {
+				who, _ = provider.CodexSignedIn()
+			}
+			wait, done := context.WithTimeout(ctx, 10*time.Second)
+			provider.AwaitAllowance(wait, "codex", who)
+			done()
+		}
 		writeJSON(rw, out)
 	})
 }

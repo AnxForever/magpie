@@ -15155,6 +15155,10 @@ function askReset(q) {
       const out = await api("usage/codex-reset", { user: q.user || "" });
       closeConfirmAsk();
       status(who + ": " + resetOutcome(out), out.code === "reset" ? "ok" : "err");
+      // the providers' editor reads the account's windows and resets
+      // on its own, kept a minute: read again, as Usage is (#1491)
+      delete loginUsage.codex;
+      if (editing && view === "providers") renderProviders();
       loadQuotas();
     } catch (err) {
       go.disabled = false;
