@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/plugin"
 )
@@ -374,7 +375,7 @@ func fetchSubscriptionUsage(ctx context.Context) []SubscriptionQuota {
 			if ls := accountsOf("codex"); len(ls) > 1 {
 				fetches = append(fetches, perLogin(via("codex"), ls, accountCard("codex"))...)
 			} else {
-				auth := filepath.Join(home, ".codex", "auth.json")
+				auth := filepath.Join(appdir.CodexHomeIn(home), "auth.json")
 				fetches = append(fetches, withUser(ctx, p.Account.User, func() SubscriptionQuota { return codexSubscriptionUsage(viaLogin("codex", p.Account.User), auth) }))
 			}
 		}

@@ -67,6 +67,16 @@ func (p place) getenv(k string) string {
 	return appdir.Getenv(k)
 }
 
+// codexHome is Codex's folder at the place: $CODEX_HOME on this machine
+// (appdir.CodexHome), ~/.codex in a distro, whose variables magpie can't
+// read.
+func (p place) codexHome() string {
+	if p.spell != nil {
+		return filepath.Join(p.home, ".codex")
+	}
+	return appdir.CodexHomeIn(p.home)
+}
+
 // exists is whether there is a file or folder at path, as an agent looks
 // for the one it reads; false at a cold place.
 func (p place) exists(path string) bool {

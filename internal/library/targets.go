@@ -74,12 +74,7 @@ func codebuddyMCP(dir string) string {
 	return all[0]
 }
 
-func codexDir() string {
-	if d := appdir.Getenv("CODEX_HOME"); d != "" {
-		return d
-	}
-	return filepath.Join(home(), ".codex")
-}
+func codexDir() string { return appdir.CodexHomeIn(home()) }
 
 // targetOf is where a known agent keeps them, or nil for one magpie can't
 // give any of them to.

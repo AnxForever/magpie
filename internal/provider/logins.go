@@ -493,10 +493,8 @@ func claudeUser(email, plan string, acct map[string]any) string {
 	return email + " · " + org
 }
 
-func codexAuthPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".codex", "auth.json")
-}
+// codexAuthPath is Codex's sign-in, under its home (appdir.CodexHome).
+func codexAuthPath() string { return filepath.Join(appdir.CodexHome(), "auth.json") }
 
 // CodexAPIKeySignedIn says Codex itself is signed in with an OpenAI
 // API key rather than a ChatGPT account (auth.json's auth_mode): its

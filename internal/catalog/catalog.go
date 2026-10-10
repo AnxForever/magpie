@@ -1088,13 +1088,7 @@ func Providers() []string {
 }
 
 // CodexHome is where Codex CLI keeps its state: $CODEX_HOME, else ~/.codex.
-func CodexHome() string {
-	if dir := appdir.Getenv("CODEX_HOME"); dir != "" {
-		return dir
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".codex")
-}
+func CodexHome() string { return appdir.CodexHome() }
 
 // CodexModelsCache is the model list Codex CLI keeps, under CodexHome.
 func CodexModelsCache() string { return filepath.Join(CodexHome(), "models_cache.json") }

@@ -83,7 +83,7 @@ func KeepCodexDaemonCurrent(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	path := filepath.Join(home, ".codex", "config.toml")
+	path := filepath.Join(here(home).codexHome(), "config.toml")
 	t := time.NewTicker(codexDaemonEvery)
 	defer t.Stop()
 	for {
