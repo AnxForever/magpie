@@ -283,7 +283,7 @@ Find them under Plugins › Discover › Gateway middleware. See [Gateway middle
 
 ## Privacy
 
-Your prompts, replies, keys and accounts go only to the providers you use. Once a day a released magpie tells us it is in use: a random id, its version and system, and which agents, providers and models it is used with, by magpie's own ids (a provider you added yourself is only `custom`), and for each partner listed first in the add sheet, how many times a day it was shown, opened and added (counts only). No names, URLs, accounts, keys, prompts or usage. Turn part or all of it off in **Settings → Privacy**, or with `DO_NOT_TRACK=1`. [What is sent, exactly](docs/reference.md#counting-users).
+Your prompts, replies, keys and accounts go only to the providers you use. Once a day a released magpie tells us it is in use: a random id, its version and system, and which agents, providers and models it is used with, by magpie's own ids (a provider you added yourself is only `custom`), and for each partner listed first in the add sheet, how many times a day it was shown, opened and added (counts only). No names, URLs, accounts, keys, prompts or usage. Turn part or all of it off in **Settings → Privacy**, or with `DO_NOT_TRACK=1`. A partner's website and key links go through `usemagpie.ai/go/…`, which counts the click, and usemagpie.ai counts fetches of the partner list; the server sees these whatever the settings, and keeps no id or address. [What is sent, exactly](docs/reference.md#counting-users).
 
 ## Community
 

@@ -1959,6 +1959,17 @@ Settings → Privacy → Count me as a user, or with `DO_NOT_TRACK=1` or
 `MAGPIE_NO_STATS=1`. Builds from source never send it. The code is
 [internal/stats](../internal/stats/stats.go).
 
+Partners are also counted where usemagpie.ai sees them, whatever these
+settings say, as any website sees its visits. The partner list
+(`/api/partners`) gives each partner's website and key page as a
+`https://usemagpie.ai/go/<id>/site|keys[/<region>]` link, which sends a
+`magpie partner go` event (the partner, which link, the region, and the
+country Cloudflare gives) before sending the browser on; and one in ten
+fetches of the list sends a `magpie partners fetch` event with weight 10
+and the country, while a partner is listed. Each event has an id of its
+own: no install id, address or account goes with it. The code is
+[site/worker.js](../site/worker.js).
+
 ## Community
 
 Questions, setups worth sharing, ideas, bugs: come talk to us and other
