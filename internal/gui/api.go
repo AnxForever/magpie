@@ -330,6 +330,9 @@ type settingsJSON struct {
 	// WSL is whether there is WSL to look in for agents (Windows), for
 	// Settings' Detect agents in WSL (#1264)
 	WSL bool `json:"wsl,omitempty"`
+	// Rekeyed is what an agent beyond loopback, given the sharing key,
+	// couldn't be set again with when sharing changed (agent.Rekey)
+	Rekeyed string `json:"rekeyed,omitempty"`
 	// Mac apps that explicitly handle .command files, for resumed sessions.
 	TerminalApps    []terminalChoice `json:"terminalApps,omitempty"`
 	TerminalDefault string           `json:"terminalDefault,omitempty"`
@@ -1522,6 +1525,9 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
+		// the agents reaching the gateway now: one in a WSL distro under NAT
+		// is given the sharing key, which this changes
+		on := agent.OnGateway()
 		if err := access.ConfigureLAN(in.On, in.NewKey); err != nil {
 			fail(rw, err)
 			return
@@ -1532,7 +1538,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 				return
 			}
 		}
-		writeJSON(rw, settingsState())
+		out := settingsState()
+		if _, err := agent.Rekey(on); err != nil {
+			out.Rekeyed = err.Error()
+		}
+		writeJSON(rw, out)
 	})
 	// the web pages that may call the gateway from a browser (#1051), as
 	// their origins; none takes them all away
