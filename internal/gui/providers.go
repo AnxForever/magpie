@@ -28,6 +28,7 @@ type modelJSON struct {
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`              // the user's name for it, if they gave one
 	Default  string   `json:"default,omitempty"` // its own name, when the user gave it another
+	Plain    string   `json:"plain,omitempty"`   // a remote magpie's model's name there alone, when Name has its provider there after it (catalog.Model's)
 	Kept     []string `json:"kept,omitempty"`    // the reasoning levels the user keeps of Efforts, when not all
 	Efforts  []string `json:"efforts,omitempty"`
 	Given    bool     `json:"given,omitempty"`     // its levels aren't known: Efforts are those it can be given, Kept those it was
@@ -560,6 +561,8 @@ func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 		if n, ok := names[m.ID]; ok {
 			j.Default = cmp.Or(m.Name, m.ID)
 			j.Name = n
+		} else {
+			j.Plain = m.Plain
 		}
 		if api, ok := p.ModelAPI(m.ID); ok {
 			j.API = string(api)

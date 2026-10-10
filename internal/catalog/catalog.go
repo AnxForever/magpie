@@ -54,6 +54,11 @@ type Model struct {
 	// window it is told when Context is longer. 0 is none set, for the
 	// one for every model (settings.Compact).
 	Compact int `json:",omitempty"`
+	// Plain, on a model of another magpie's list, is its name there alone
+	// (display_name), when Name is its label there, with that magpie's
+	// provider after it (magpie_label): the name Provider in model names
+	// Off has here (ARNO on Discord).
+	Plain string `json:",omitempty"`
 	// Fast is set on a model Codex may ask for priority processing (its
 	// Fast mode): one a ChatGPT account serves.
 	Fast bool `json:",omitempty"`

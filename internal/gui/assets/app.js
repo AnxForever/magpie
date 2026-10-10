@@ -9620,7 +9620,12 @@ function renderModels(p) {
     const first = p.models.find((x) => x.id === ids[0]) || { id: ids[0], name: ids[0] };
     const sayLabel = (mode) => {
       const name = prefs[first.id]?.name ?? (first.default ? first.name : "");
-      sfxSaid.textContent = t("Agents’ lists show “{label}”", { label: suffixed(name || first.default || first.name || first.id, p.name || p.id, !!name, mode) });
+      const base = name || first.default || first.name || first.id;
+      let label = suffixed(base, p.name || p.id, !!name, mode);
+      // a remote magpie's model, named there with its provider after it,
+      // is that name alone when none is put after it here (ARNO on Discord)
+      if (!name && first.plain && label === base) label = first.plain;
+      sfxSaid.textContent = t("Agents’ lists show “{label}”", { label });
     };
     sayLabel();
     sfx.append(el("span", "", t("Provider in model names")), suffixSegs(sayLabel), sfxSaid);

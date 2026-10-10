@@ -296,9 +296,12 @@ func fetchOne(ctx context.Context, url, key string, anthropic bool, headers map[
 		if !drawer && !films && !decision && headers["X-Magpie-Drawers"] == "" && !textModel(mdModel{ID: id}) {
 			continue
 		}
-		name := r.DisplayName
+		name, plain := r.DisplayName, ""
 		if r.Label != "" {
 			name = r.Label
+			if r.DisplayName != "" && r.DisplayName != r.Label {
+				plain = r.DisplayName
+			}
 		}
 		if name == "" {
 			name = id
@@ -311,7 +314,7 @@ func fetchOne(ctx context.Context, url, key string, anthropic bool, headers map[
 		if len(apis) == 0 {
 			apis = targetAPIs(r.TypeTarget)
 		}
-		m := Model{ID: id, Name: name, ImageInput: input, APIs: apis, Draws: drawer, Films: films, Decides: decision}
+		m := Model{ID: id, Name: name, Plain: plain, ImageInput: input, APIs: apis, Draws: drawer, Films: films, Decides: decision}
 		if n, ok := r.ContextLength.(float64); ok && n > 0 {
 			m.Context = int(n)
 		}

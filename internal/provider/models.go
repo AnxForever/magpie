@@ -1183,10 +1183,13 @@ func (p Provider) Chosen(id string) bool {
 
 // Entry is one model as the agents see it.
 type Entry struct {
-	ID         string   `json:"id"`                // what the agent sends magpie
-	Model      string   `json:"model"`             // what magpie sends the vendor
-	Name       string   `json:"name"`              // the user's name for it, when they gave one (SetModelName)
-	Default    string   `json:"default,omitempty"` // the model's own name, when the user gave it another
+	ID      string `json:"id"`                // what the agent sends magpie
+	Model   string `json:"model"`             // what magpie sends the vendor
+	Name    string `json:"name"`              // the user's name for it, when they gave one (SetModelName)
+	Default string `json:"default,omitempty"` // the model's own name, when the user gave it another
+	// Plain is a remote magpie's model's name there alone, when Name is
+	// its label there with that magpie's provider after it (catalog.Model's)
+	Plain      string   `json:"-"`
 	Efforts    []string `json:"efforts,omitempty"`
 	Provider   Provider `json:"-"`                // a group's: its first member's
 	Group      string   `json:"group,omitempty"`  // set on a routing group (group.go)
@@ -1298,6 +1301,8 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 		Images: images, ImageInput: imageInput, Context: ctx, Output: output, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas}
 	if n, ok := modelNameIn(s.ModelNames, p.ID, m.ID); ok {
 		e.Name, e.Default = n, name
+	} else {
+		e.Plain = m.Plain
 	}
 	// a model that thinks still does with the levels the user kept or
 	// none at all; one its source says nothing of thinks as most of the
