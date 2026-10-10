@@ -1640,7 +1640,10 @@ magpie restore --no-library b.magpie-backup # the library here left as it is
 A backup holds your providers (with their keys, unless `--no-keys`), the
 pictures picked for them, the settings, the profiles, every agent's model and
 the library (unless `--no-library`): the instruction sets, the MCP servers and
-the skills with their files (a file over 2 MB is left out). Without keys, a
+the skills with their files, templates and other binaries included (a file
+over 16 MB is left out, and so are the biggest once the skills' files come to
+32 MB; restoring keeps the copy of such a file the other machine already
+has). Without keys, a
 server's environment variables and headers that look like a key go empty.
 Gateway credentials, their names, ids and disabled state travel encrypted
 with Settings too. Restoring Settings replaces the gateway-key store with
