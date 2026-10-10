@@ -1,11 +1,11 @@
 package gui
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 )
 
@@ -43,11 +43,17 @@ func TestTrayMenuOpeningIsNoClick(t *testing.T) {
 // click handler on the menu's "opened" event; an upgrade that renames it
 // or stops calling the handler there fails here.
 func TestTrayMenuOpenFrameIsWails(t *testing.T) {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/wailsapp/wails/v3").Output()
+	// go list -m names no folder for a module not yet unpacked, as on CI;
+	// go mod download unpacks it and names its folder
+	out, err := exec.Command("go", "mod", "download", "-json", "github.com/wailsapp/wails/v3").Output()
 	if err != nil {
-		t.Skip("go list:", err)
+		t.Skip("go mod download:", err)
 	}
-	src, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), "pkg", "application", "systemtray_linux.go"))
+	var mod struct{ Dir string }
+	if err := json.Unmarshal(out, &mod); err != nil || mod.Dir == "" {
+		t.Fatalf("go mod download named no folder: %s", out)
+	}
+	src, err := os.ReadFile(filepath.Join(mod.Dir, "pkg", "application", "systemtray_linux.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
