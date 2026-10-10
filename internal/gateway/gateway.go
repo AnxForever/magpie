@@ -2890,6 +2890,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	body = deepseekToolPatterns(p, to, body)
 	body = toolOneOfAsAnyOf(p, to, body)
 	body = kimiToolEnumTypes(p, to, body)
+	body = kimiLockedSampling(p, to, body)
 	body = clinePin(p, to, body)
 	if to == provider.Gemini && !p.FactoryGemini() {
 		// the model is in a Gemini API's path (upstreamPath); Factory's
