@@ -16,13 +16,21 @@ type KV struct {
 	Value any
 }
 
+// unBOM drops a leading UTF-8 BOM: Windows tools write one in front of an
+// agent's settings.json (Claude Code's channel switchers among them), and
+// json.Valid and gjson refuse what follows it. An edit writes the file back
+// without it.
+func unBOM(raw []byte) []byte {
+	return bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+}
+
 // GetJSON reads a dot-separated key path from a JSON or JSONC file.
 func GetJSON(path, keyPath string) (string, bool) {
 	raw, err := Read(path)
 	if err != nil || len(raw) == 0 {
 		return "", false
 	}
-	r := gjson.GetBytes(jsonc.ToJSONInPlace(raw), keyPath)
+	r := gjson.GetBytes(jsonc.ToJSONInPlace(unBOM(raw)), keyPath)
 	if !r.Exists() {
 		return "", false
 	}
@@ -36,6 +44,7 @@ func SetJSON(path string, kvs ...KV) error {
 	if err != nil {
 		return err
 	}
+	raw = unBOM(raw)
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}\n")
 	}
@@ -63,6 +72,7 @@ func keepCRLF(out, orig []byte) []byte {
 
 // PatchJSON computes a config change without writing a file.
 func PatchJSON(raw []byte, set []KV, del []string) ([]byte, error) {
+	raw = unBOM(raw)
 	if len(bytes.TrimSpace(raw)) == 0 {
 		raw = []byte("{}\n")
 	}
@@ -251,6 +261,7 @@ func DelJSON(path string, keyPaths ...string) error {
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return err
 	}
+	raw = unBOM(raw)
 	changed := false
 	for _, kp := range keyPaths {
 		out, ok, err := delJSONBytes(raw, kp)

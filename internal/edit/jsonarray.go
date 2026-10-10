@@ -22,7 +22,7 @@ func GetJSONItem(path string, where map[string]string) (string, bool) {
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return "", false
 	}
-	r, ok := findItem(jsonc.ToJSONInPlace(raw), where)
+	r, ok := findItem(jsonc.ToJSONInPlace(unBOM(raw)), where)
 	if !ok {
 		return "", false
 	}
@@ -37,6 +37,7 @@ func SetJSONItem(path string, where map[string]string, value any) error {
 	if err != nil {
 		return err
 	}
+	raw = unBOM(raw)
 	if len(bytes.TrimSpace(raw)) == 0 {
 		v, _ := json.MarshalIndent(value, "\t", "\t")
 		return WriteAtomic(path, []byte("[\n\t"+string(v)+"\n]\n"))
@@ -85,6 +86,7 @@ func DelJSONItem(path string, where map[string]string) error {
 	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
 		return err
 	}
+	raw = unBOM(raw)
 	changed := false
 	for {
 		stripped := jsonc.ToJSONInPlace(append([]byte(nil), raw...))
