@@ -9451,6 +9451,16 @@ function renderModels(p) {
       if (again) return;
       const acts = [noTest ? { name: "Test this model", icon: "M5.5 3.75v8.5L12.25 8z", off: true, why: noTest, run() {} }
         : { name: "Test this model", icon: "M5.5 3.75v8.5L12.25 8z", run: () => testOne(id) }];
+      // asked as Codex or Claude Code asks, for a relay that serves only
+      // them (耍赖天都爱 on Discord); Claude Code's once it has come
+      // through magpie, its headers being the ones it came with
+      if (!noTest && !decidesModel(p, id)) {
+        for (const [as, agent, name] of [["codex", "Codex", "Test as Codex"], ["claude-code", "Claude Code", "Test as Claude Code"]]) {
+          if (!(as in (p.testsAs || {}))) continue;
+          const why = p.testsAs[as] ? t(p.testsAs[as]) : "";
+          acts.push({ name, icon: "M5.5 3.75v8.5L12.25 8z", off: !!why, why, tip: t("Asked as {agent} asks, for a relay that serves only {agent}", { agent }), run: () => testOne(id, as) });
+        }
+      }
       // its id as agents and the gateway name it, to paste where a model is
       // typed (ARNO, Discord: 右击菜单除了测试模型外，还能添加拷贝模型id的功能)
       acts.push({ name: "Copy model ID", icon: COPY_ICON, tip: id, run: () => copy(id, id, null, t("Model ID {model} copied", { model: id })) });
@@ -9987,12 +9997,12 @@ function renderModels(p) {
   };
   // one model, its dot and title as Test models leaves them, the others'
   // results kept
-  const testOne = async (id) => {
+  const testOne = async (id, as) => {
     const got = modelTests[p.id] = modelTests[p.id] || {};
     got[id] = null;
     draw();
     try {
-      const r = await api("provider/test", { ...asTyped(), id: p.id, test: [id] });
+      const r = await api("provider/test", { ...asTyped(), id: p.id, test: [id], ...(as ? { as } : {}) });
       const x = got[id] = r.results[0];
       const via = x.protocol ? apiLabel(x.protocol) : "";
       const error = (x.status ? x.status + " · " : "") + x.error;

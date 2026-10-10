@@ -2920,12 +2920,16 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		if p.Account == nil && fromClaudeCode(in) {
 			// a relay that serves only Claude Code (#179: "only accessible
 			// via the official Claude CLI") knows it by its own headers,
-			// which go on as it sent them; its key to magpie never does
+			// which go on as it sent them; its key to magpie never does.
+			// A test asked as Claude Code asks with them (provider.TestAs)
+			seen := http.Header{}
 			for k, vs := range in {
 				if claudeCodeHeader(k) {
 					req.Header[k] = slices.Clone(vs)
+					seen[k] = vs
 				}
 			}
+			provider.SawClient(provider.ClientClaudeCode, seen)
 		}
 		if len(betas) > 0 {
 			req.Header.Set("anthropic-beta", strings.Join(betas, ","))
@@ -2938,12 +2942,16 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// allows Codex official clients") knows it by its User-Agent,
 		// originator and x-codex- headers, which go on as Codex sent them,
 		// as they do when Codex talks to the relay itself; its key to
-		// magpie never does
+		// magpie never does. A test asked as Codex asks with them
+		// (provider.TestAs)
+		seen := http.Header{}
 		for k, vs := range in {
 			if codexClientHeader(k) {
 				req.Header[k] = slices.Clone(vs)
+				seen[k] = vs
 			}
 		}
+		provider.SawClient(provider.ClientCodex, seen)
 	}
 	if p.IsOpenCode() {
 		// as OpenCode itself sends it, which Zen's free tier asks for

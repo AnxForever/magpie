@@ -123,6 +123,10 @@ type providerJSON struct {
 	// when they can (provider.ModelTest): the editor says so on a chip's
 	// right-click rather than offer no menu
 	ModelTest string `json:"modelTest,omitempty"`
+	// TestsAs is the agents a model's test can be asked as
+	// (provider.TestAs), for a relay that serves only them: the chip's
+	// right-click offers each, and says why one can't be when it can't
+	TestsAs map[string]string `json:"testsAs,omitempty"`
 	// DecideTest is set when its decision models can each be sent a
 	// System One question (provider.AsksDecideModels): a mixed
 	// provider's Jev too, beside its conversation models
@@ -444,7 +448,7 @@ func agentUses(agents []*agent.Agent, findGroup func(string) (provider.Group, []
 func providerInfo(p provider.Provider, agents []agentUse) providerJSON {
 	out := providerJSON{
 		ID: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Host: p.Host(),
-		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), DecideTest: p.AsksDecideModels(),
+		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), DecideTest: p.AsksDecideModels(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
 		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, Headers: p.Headers, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, ModelsURL: p.ModelsURL,
 		Ready: p.Ready(), Chosen: p.Models, Models: []modelJSON{}, Agents: []providerAgent{},
@@ -951,6 +955,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Test, for test: models to send a request each, in place of
 			// one per endpoint
 			Test []string `json:"test"`
+			// As, for test: the agent the request is asked as
+			// (provider.TestAs: "codex", "claude-code"), "" as magpie
+			As string `json:"as"`
 			// DetectModels, for detect: models to ask on each API, each
 			// answered on its own, in place of Model
 			DetectModels []string `json:"detectModels"`
@@ -1420,12 +1427,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 			if len(req.Test) > 0 {
 				// an image model's test draws a picture, which takes longer
-				ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+				ctx, cancel := context.WithTimeout(provider.TestAs(r.Context(), req.As), 3*time.Minute)
 				defer cancel()
 				writeJSON(rw, map[string]any{"results": p.TestModels(ctx, req.Test)})
 				return
 			}
-			ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+			ctx, cancel := context.WithTimeout(provider.TestAs(r.Context(), req.As), 25*time.Second)
 			defer cancel()
 			writeJSON(rw, struct {
 				Results  []provider.Result `json:"results"`

@@ -39,6 +39,20 @@ func (p Provider) Test(ctx context.Context) []Result {
 		return p.testDecide(ctx)
 	}
 	_, listErr := p.Fetch(ctx)
+	if client := testClient(ctx); client != "" {
+		// the one endpoint that agent's requests go to
+		proto := clientProto(client, p.Speaks())
+		q, ok := p.keyFor(proto)
+		model := p.testModel(q, proto)
+		if why := p.TestsAs(client); why != "" {
+			return []Result{{Protocol: proto, Model: model, Error: why}}
+		}
+		if !ok {
+			return []Result{{Protocol: proto, Model: model, Error: "no key is on for this endpoint"}}
+		}
+		url, body := tiny(q, proto, UpstreamName(p, model))
+		return []Result{probe(ctx, q, proto, url, q.Prepare([]byte(asClient(client, proto, body))), model, testWait)}
+	}
 	if p.isClaudeAccount() {
 		return []Result{p.testClaude(ctx, p.testModel(p, Anthropic))}
 	}
@@ -225,6 +239,10 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 		r.OK, r.Status = true, http.StatusOK
 		return r
 	}
+	client := testClient(ctx)
+	if why := p.TestsAs(client); why != "" {
+		return Result{Protocol: clientProto(client, p.Speaks()), Model: model, Error: why}
+	}
 	if p.isClaudeAccount() {
 		return p.testClaude(ctx, model)
 	}
@@ -241,8 +259,11 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 	// Claude model, else the one it prefers; an image model draws on the
 	// chat endpoint's images API
 	proto := protos[0]
-	draws := p.drawsOnImages(model) && slices.Contains(protos, Chat)
-	if draws {
+	draws := client == "" && p.drawsOnImages(model) && slices.Contains(protos, Chat)
+	if client != "" {
+		// on the API that agent's requests go to (TestAs)
+		proto = clientProto(client, protos)
+	} else if draws {
 		proto = Chat
 	} else if apis := p.APIs(model); apis != nil {
 		if i := slices.IndexFunc(protos, func(pr Protocol) bool { return slices.Contains(apis, pr) }); i >= 0 {
@@ -287,6 +308,9 @@ func (p Provider) testOne(ctx context.Context, model string) Result {
 		return r
 	}
 	url, body := tiny(q, proto, UpstreamName(p, model))
+	if client != "" {
+		body = asClient(client, proto, body)
+	}
 	return probe(ctx, q, proto, url, q.Prepare([]byte(body)), model, testWait)
 }
 
@@ -404,6 +428,9 @@ func probe(ctx context.Context, p Provider, proto Protocol, url string, body []b
 	}
 	if p.IsKilo() {
 		KiloClient(req.Header, p.Key, "")
+	}
+	if client := testClient(ctx); client != "" {
+		clientHeaders(client, req.Header)
 	}
 	if err := p.Sign(ctx, req, proto, body); err != nil {
 		r.Error = err.Error()
