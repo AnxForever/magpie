@@ -1327,19 +1327,33 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		return m
 	}
+	// a name that is a routing group's — its id or name bare, or Codex's
+	// spelling of a group's model (#750) — is that group, as asked for or
+	// as an agent's config names its stand-in
+	grouped := func(m string) string {
+		if id, ok := provider.GroupFor(m); ok {
+			return id
+		}
+		if id, ok := provider.AutoStandIn(m); ok {
+			// a group magpie found, while the user has those off: its
+			// model from one provider, rather than refused
+			return id
+		}
+		return m
+	}
 	if m := claudeTierStandIn(agent, asked); m != "" {
 		// Claude Code (or a wrapper, T3 Code) naming one of Anthropic's
 		// models by its full id: the model it is set to use for that tier,
 		// whether or not magpie serves the id too
-		asked = at(m)
-	} else if id, ok := provider.GroupFor(asked); ok {
-		asked = id
-	} else if id, ok := provider.AutoStandIn(asked); ok {
-		// a group magpie found, while the user has those off: its model
-		// from one provider, rather than refused
-		asked = id
+		asked = grouped(at(m))
+	} else if g := grouped(asked); g != asked {
+		asked = g
 	} else if m := standIn(agent, asked); m != "" {
-		asked = at(m)
+		// Codex's config on a group by its bare name (model = "my-group",
+		// or gpt-6.1-sol for group/auto-gpt-6-1-sol): its turns reached the
+		// group, and its auto-review's codex-auto-review, stood in for by
+		// that same name, went on unresolved, a 404 (Adam on Discord)
+		asked = grouped(at(m))
 	}
 	if m := s.codexMemoryStandIn(r, call.Agent, agent, call.Kind, asked); m != "" {
 		asked = m
