@@ -1453,7 +1453,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		}
 		if !readable() {
 			call.Status, call.Error = 400, "sealed subagent task"
-			writeError(w, from, 400, sealedTaskError(call.Model, sealedLead))
+			// a lead answered by a chat provider, then on one of Codex's
+			// own models, is remembered as answered by the chat provider,
+			// which seals nothing: Codex's model sealed it (plugins#70)
+			earlier := ""
+			if sealedLead != "" && !canSeal(sealedLead) {
+				earlier, sealedLead = sealedLead, ""
+			}
+			writeError(w, from, 400, sealedTaskError(call.Model, sealedLead, earlier))
 			turnedAway()
 			return
 		}

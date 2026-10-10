@@ -163,12 +163,34 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 // answered the lead, "" when magpie didn't (the lead was one of Codex's
 // own models) or has no record of it in the last sealerKeep. A task
 // already sealed opens only where it was sealed, so the way on with it
-// is said too (#1367).
-func sealedTaskError(model, lead string) string {
+// is said too (#1367). earlier is a provider that answered the lead's
+// earlier turns but can't have sealed the task (canSeal): the lead moved
+// on to Codex's own model, whose turns magpie keeps no record of, and the
+// task was sealed there (plugins#70).
+func sealedTaskError(model, lead, earlier string) string {
+	if earlier != "" {
+		return fmt.Sprintf("This subagent's task was sealed by the ChatGPT backend that answered its lead, and only that backend can open it: a ChatGPT account, or the Responses API provider that answered the lead. %s can't. %s answered the lead's earlier turns, but it neither seals a task nor opens one: the lead has since been on one of Codex's own models. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read. To go on with this task, use the lead's model, or have the lead spawn the subagent again.", model, earlier)
+	}
 	if lead != "" {
 		return fmt.Sprintf("This subagent's task was sealed by the server that answered its lead (%s), and only that server can open it; %s can't. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read. To go on with this task, use a model on %s for the lead and the subagent, or have the lead spawn the subagent again.", lead, model, lead)
 	}
 	return fmt.Sprintf("This subagent's task was sealed by the ChatGPT backend that answered its lead, and only that backend can open it: a ChatGPT account, or the Responses API provider that answered the lead. %s is neither: magpie has no record of it answering the lead in the last 30 days. Give the subagent the lead's model, or a lead model that isn't served by the ChatGPT backend, so its subagents get a task they can read. To go on with this task, use the lead's model, or have the lead spawn the subagent again.", model)
+}
+
+// canSeal says whether the provider id names could have sealed a
+// subagent's task, as sealedReader has who can open one: a ChatGPT
+// account, or a provider of no sign-in serving the Responses API (a relay
+// of the ChatGPT backend, #1109). One magpie can't find is taken as one
+// that could.
+func canSeal(id string) bool {
+	p, err := provider.Find(id)
+	if err != nil || p == nil {
+		return true
+	}
+	if p.Account != nil {
+		return p.Account.Agent == "codex"
+	}
+	return slices.Contains(p.Speaks(), provider.Responses)
 }
 
 // sealedReader is who can read a subagent's task its lead sealed: a
