@@ -310,3 +310,61 @@ func TestShellEnvRealFish(t *testing.T) {
 		t.Fatalf("ShellPath(fish) lacks %q", bin)
 	}
 }
+
+// A profile that execs something else in an interactive shell (tmux's or
+// zellij's auto-start in config.fish) or is too slow to come up
+// interactively never prints the probe; the shell is asked again as a
+// login shell only, and MAGPIE_SHELL_PROBE=1 tells the profile who asks
+// (John on Discord, fish set with chsh).
+func TestAskShellProfileExecsOrHangs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	old := shellAsk
+	shellAsk = time.Second
+	t.Cleanup(func() { shellAsk = old })
+	for name, interactive := range map[string]string{
+		"exec": "exec /bin/cat",
+		"slow": "sleep 4",
+	} {
+		sh := filepath.Join(home, name)
+		testenv.Program(t, sh, "#!/bin/sh\ncase \"$1\" in -i*) "+interactive+";; esac\n"+
+			"PATH=/from/login:$PATH\n[ \"$MAGPIE_SHELL_PROBE\" = 1 ] && PATH=/told:$PATH\neval \"$2\"\n")
+		p, vars := askShell(sh)
+		dirs := filepath.SplitList(p)
+		if !slices.Contains(dirs, "/from/login") || vars == nil {
+			t.Fatalf("%s: PATH = %q, vars %v: the login shell wasn't asked again", name, p, vars != nil)
+		}
+		if !slices.Contains(dirs, "/told") {
+			t.Fatalf("%s: MAGPIE_SHELL_PROBE didn't reach the profile: %q", name, p)
+		}
+	}
+}
+
+// The real fish, where it is installed, with a config.fish that starts
+// tmux in an interactive shell, and one that's slow to come up in one:
+// its PATH still comes.
+func TestAskShellRealFishAutostart(t *testing.T) {
+	fish := FindShell("fish")
+	if fish == "" {
+		t.Skip("fish isn't installed")
+	}
+	old := shellAsk
+	shellAsk = 2 * time.Second
+	t.Cleanup(func() { shellAsk = old })
+	for name, block := range map[string]string{
+		"tmux": "if status is-interactive; and not set -q TMUX\n  exec /bin/cat\nend\n",
+		"slow": "if status is-interactive\n  sleep 5\nend\n",
+	} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CONFIG_HOME", "")
+		bin := filepath.Join(home, "fb")
+		os.MkdirAll(bin, 0o755)
+		os.MkdirAll(filepath.Join(home, ".config", "fish"), 0o755)
+		os.WriteFile(filepath.Join(home, ".config", "fish", "config.fish"),
+			[]byte("set -g fish_greeting 'Welcome to fish'\nfish_add_path -g "+bin+"\n"+block), 0o644)
+		if p, _ := askShell(fish); !slices.Contains(filepath.SplitList(p), bin) {
+			t.Fatalf("%s: PATH = %q, want %q in it", name, p, bin)
+		}
+	}
+}

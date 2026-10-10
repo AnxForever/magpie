@@ -299,12 +299,35 @@ func mergeShellEnv(paths []string, vars []map[string]string) (string, map[string
 // the whole group, magpie with it (DD on Discord: magpie web → zsh:
 // suspended (tty input)). A timeout also killed only the shell, leaving
 // what its profile started holding the terminal; a probe's whole group goes.
+//
+// It is asked as an interactive login shell first, since many put PATH in
+// .zshrc/.bashrc or a config.fish block under `status is-interactive`. A
+// profile that hands an interactive shell over to something else — `exec
+// tmux` or zellij's auto-start, common in config.fish — or takes longer
+// than shellAsk to come up never runs the probe, and magpie got no PATH at
+// all (John on Discord, fish set with chsh: an agent fish's PATH has
+// wasn't found). Without an answer it is asked again as a login shell
+// only, which still reads config.fish, .zprofile and .bash_profile.
+// MAGPIE_SHELL_PROBE=1 is in its environment both times, for a profile to
+// tell magpie's question from a terminal.
 func askShell(sh string) (string, map[string]string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	for _, flags := range []string{"-ilc", "-lc"} {
+		if p, vars := askShellAs(sh, flags); p != "" || vars != nil {
+			return p, vars
+		}
+	}
+	return "", nil
+}
+
+// shellAsk is how long one question to a shell may take.
+var shellAsk = 5 * time.Second
+
+func askShellAs(sh, flags string) (string, map[string]string) {
+	ctx, cancel := context.WithTimeout(context.Background(), shellAsk)
 	defer cancel()
-	// interactive too, since many put PATH in .zshrc/.bashrc
-	cmd := ProbeContext(ctx, sh, "-ilc", shellProbe(sh))
+	cmd := ProbeContext(ctx, sh, flags, shellProbe(sh))
 	cmd.Stdin = nil
+	cmd.Env = append(os.Environ(), "MAGPIE_SHELL_PROBE=1")
 	out, _ := cmd.Output()
 	return parseShellEnv(string(out), shellMark)
 }
