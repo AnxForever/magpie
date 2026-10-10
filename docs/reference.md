@@ -380,6 +380,8 @@ magpie gateway-key rotate <id>         # prints the replacement; identity stays 
 magpie gateway-key remove <id>         # revokes remote access
 magpie gateway-key limit <id> week --tokens 2m --cost 5   # its own limit
 magpie gateway-key limit <id>          # limit, used, left and reset
+magpie gateway-key limit <id> 10d --tokens 5m   # every 10 days, from now
+magpie gateway-key limit <id> reset    # count its usage from 0 again
 magpie gateway-key limit <id> off      # no limit
 magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
@@ -389,7 +391,12 @@ magpie gateway-key accounts <id> all    # every account
 
 Each gateway key can have its own **limit**: a token total, an estimated
 cost in US$, or both, per day, week or month (calendar windows in local
-time: from midnight, from Monday, from the 1st). Set it with **Limit** on
+time: from midnight, from Monday, from the 1st), or every N days (#1509;
+N from 1 to 3650). An N-day cycle starts when the limit is set and runs
+N×24 hours, then the next one starts where it ended, so a restart, a
+time-zone change or a daylight-saving shift doesn't move it. Changing only
+the caps or **Count cache reads too** keeps the cycle; changing N or the
+period, or turning the limit on, starts a new one then. Set it with **Limit** on
 the key's row (saved with Save) or `magpie gateway-key limit`; the row shows
 what the key has used, what is left and when it resets. Tokens counted are a
 call's uncached input, output and cache writes, plus cache reads when **Count
@@ -402,6 +409,14 @@ counts are read from the usage log, so they survive a restart. A request in
 flight holds a reservation (its body's size in tokens plus the key's mean
 output per call), so requests sent at once overshoot by about one call; a
 streamed reply is settled when it ends with the usage its vendor reported.
+**Reset usage** in the key's limit editor (or `magpie gateway-key limit
+<id> reset`) counts the key's tokens and cost from 0 together, from now. An
+N-day key starts a new N-day cycle then. A day, week or month key keeps
+its window's end (midnight, Monday, the 1st): only the calls before the
+reset stop counting, so it doesn't drift off the calendar. The reset is
+stored with the key (`since` in caller-keys.json, magpie's own: a value a
+client sends is ignored), so it survives a restart; the usage log itself is
+untouched. Keys saved before keep their JSON as it was.
 A key can read its own status with `GET /v1/magpie/limit`. Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.

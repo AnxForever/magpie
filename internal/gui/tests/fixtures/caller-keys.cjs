@@ -124,8 +124,16 @@ function fixture(lang, theme, events, options = {}) {
       if (action === "limit-key") {
         // what a key has used is the fixture's; a new limit starts unused
         k.limit = body.limit || undefined;
-        k.used = body.limit ? { period: body.limit.period, start: new Date().toISOString(), reset: new Date(Date.now() + 864e5).toISOString(),
+        k.used = body.limit ? { period: body.limit.period, days: body.limit.days, start: new Date().toISOString(), reset: new Date(Date.now() + (body.limit.days || 1) * 864e5).toISOString(),
           calls: 0, tokens: 0, cost: 0, tokenLimit: body.limit.tokens, costLimit: body.limit.cost, tokensLeft: body.limit.tokens, costLeft: body.limit.cost, spent: false } : undefined;
+      }
+      if (action === "reset-limit-key") {
+        // what it used goes back to 0, tokens and cost together (#1509);
+        // an N-day cycle starts again now, a calendar window keeps its end
+        const u = k.used, now = Date.now();
+        k.used = { ...u, start: new Date(now).toISOString(), calls: 0, tokens: 0, cost: 0, inFlight: 0, unpriced: 0, spent: false,
+          tokensLeft: u.tokenLimit || 0, costLeft: u.costLimit || 0,
+          reset: u.period === "days" ? new Date(now + u.days * 864e5).toISOString() : u.reset };
       }
       if (action === "models-key") k.models = body.models?.length ? body.models : undefined;
       if (action === "accounts-key") k.accounts = body.accounts?.length ? body.accounts : undefined;
