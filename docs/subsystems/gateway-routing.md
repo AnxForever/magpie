@@ -110,6 +110,23 @@ on the key that started the video. A gateway key's account and model holds
 apply to all three routes (`videoAsker`, `videoModelHeld`), and to Grok's
 and Volcengine's polls and downloads as well.
 
+## Turning provider search off
+
+[Settings](../../internal/settings/settings.go)' `searcher: "off"` disables magpie's provider-assisted search,
+including Kimi Code's search service and Google sign-ins' separate search
+requests. Configured Search APIs still run in their saved order; failures
+never fall back to a provider while this setting is off. Without a ready
+Search API, [`canSearchFor`](../../internal/gateway/search_kimi.go) does not offer magpie's replacement search tool.
+`searchesOwn` is the one check for a provider searching for its own models (Kimi Code, a Google sign-in), so
+`ownSearcher` and the model list another magpie reads (`webSearchOf`, which then says no search) follow it too.
+A provider's native search on the client's protocol remains unchanged.
+An empty `searcher` still selects a provider automatically; an unavailable
+named provider still falls back to that selection.
+
+[`webSearch`](../../internal/gateway/search.go) enforces the API-only path.
+Covered by `TestSearchProviderOff`, `TestSearchProviderOffForwarding`, `TestSearchProviderOffTellsRemoteMagpie`,
+`TestSearcherChosen`, `TestSettingsSearchProviderOff`, and `searcher-pick.test.cjs`.
+
 ## Verification
 
 ```sh
