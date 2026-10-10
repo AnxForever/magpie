@@ -174,7 +174,7 @@
 /* an email, hidden: stand-in letters of its shape, softly blurred —
    coming in out of focus when asked for */
 .pii { filter: blur(2.2px); opacity: .5; user-select: none; }
-.masking .pii { animation: rtpii .35s ease-out both; }
+.masking .pii { animation: rtpii .35s ease-out backwards; }
 @keyframes rtpii { from { filter: blur(0); opacity: 1; } }
 #view-routing .rt { margin: 0; }
 .rt-more { padding-bottom: 12px; }
