@@ -720,6 +720,177 @@
     return box;
   }
 
+
+  // ---------- tuned for you: the settings that would have spent the fewest tokens ----------
+
+  let tuneData = null, tuneJSON = "", tuneRead = 0, tuneBusy = "";
+
+  const KNOBS = {
+    compact: "Auto-compact",
+    cache_ttl: "Prompt cache · main conversation",
+    subagent_cache_ttl: "Prompt cache · subagents",
+  };
+  const ttlName = (v) => v === "1h" ? t("1 hour") : v === "5m" ? t("5 min") : v || "—";
+
+  // curve draws what the range would have cost at each window, the one
+  // set and the best marked on it
+  function curve(c) {
+    const pts = c.curve || [];
+    if (pts.length < 2) return null;
+    const W = 220, H = 44, pad = 4;
+    const xs = pts.map((p) => p.value), ys = pts.map((p) => p.cost);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const x = (v) => pad + ((v - x0) / (x1 - x0 || 1)) * (W - 2 * pad);
+    const y = (v) => H - pad - ((v - y0) / (y1 - y0 || 1)) * (H - 2 * pad);
+    const d = pts.map((p, i) => (i ? "L" : "M") + x(p.value).toFixed(1) + " " + y(p.cost).toFixed(1)).join(" ");
+    const box = el("div", "ctx-tune-curve");
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    s.setAttribute("preserveAspectRatio", "none");
+    const at = (v) => pts.reduce((a, p) => Math.abs(p.value - v) < Math.abs(a.value - v) ? p : a, pts[0]);
+    const now = at(c.current), best = at(c.best);
+    s.innerHTML = `<path class="line" d="${d}"/>` +
+      (now.value !== best.value ? `<circle class="now" cx="${x(now.value).toFixed(1)}" cy="${y(now.cost).toFixed(1)}" r="3"/>` : "") +
+      `<circle class="best" cx="${x(best.value).toFixed(1)}" cy="${y(best.cost).toFixed(1)}" r="3.5"/>`;
+    box.append(s);
+    const ends = el("div", "ctx-tune-ends");
+    ends.append(el("span", "", fmtK(x0)), el("span", "", fmtK(x1)));
+    box.append(ends);
+    box.dataset.tt = t("What the range would have cost at each window: lower is fewer tokens");
+    return box;
+  }
+
+  function adviceRow(agent, a) {
+    const r = a.compact || a.ttl;
+    const ttl = !!a.ttl;
+    const show = (v) => ttl ? ttlName(v) : fmtK(+v);
+    const cur = ttl ? r.current : r.current, best = r.best;
+    const same = String(cur) === String(best);
+    const saves = r.cost > 0 ? (r.cost - r.low) / r.cost : 0;
+    const set = a.setting || {};
+    const applied = set.ours && String(set.value) === String(best);
+    const row = el("div", "ctx-tune-row" + (same || applied ? " done" : ""));
+
+    const title = el("div", "ctx-tune-title");
+    title.append(el("b", "", t(KNOBS[a.knob] || a.knob)));
+    if (a.model) title.append(el("code", "", a.model));
+    row.append(title);
+
+    const vals = el("div", "ctx-tune-vals");
+    const val = (label, v, cls) => {
+      const f = el("div", "ctx-tune-val " + cls);
+      f.append(el("span", "ctx-k", t(label)), el("b", "", show(v)));
+      return f;
+    };
+    vals.append(val("Now", cur, "now"));
+    if (!same) vals.append(el("span", "ctx-tune-arrow", "→"), val("Best for you", best, "best"));
+    if (a.compact) { const c = curve(a.compact); if (c) vals.append(el("span", "grow"), c); }
+    row.append(vals);
+
+    const why = el("p", "ctx-tune-why");
+    const f = r.facts || {};
+    if (a.compact) {
+      why.textContent = f.compacts
+        ? t("Your conversations grow {growth} a call; a compaction leaves {after}, and reading back what it dropped costs {rework}. {n} compactions in the range.", { growth: fmtK(f.growth), after: fmtK(f.after), rework: fmtK(f.rework), n: f.compacts })
+        : t("Your conversations grow {growth} a call, and none was compacted in the range.", { growth: fmtK(f.growth) });
+    } else {
+      why.textContent = t("{quick} of your calls came within 5 minutes of the one before, {pause} after a pause of 5 to 60 minutes.", { quick: pct(f.quick || 0), pause: pct(f.pause || 0) });
+    }
+    row.append(why);
+
+    const foot = el("div", "ctx-tune-foot");
+    const verdict = same || applied
+      ? el("span", "ctx-chip good", "")
+      : el("span", "ctx-chip info", "");
+    verdict.append(el("i"), same ? t("Already the leanest for how you work") : applied ? t("In use") : t("{pct} fewer tokens · {tokens} over the range", { pct: pct(saves), tokens: fmtK(Math.round(r.cost - r.low)) }));
+    foot.append(verdict, el("span", "grow"));
+    const note = el("div", "ctx-tune-src");
+    title.after(note);
+    if (set.locked) note.textContent = t("{name} is set and comes first", { name: set.locked });
+    else if (set.ours) note.textContent = t("Set by magpie");
+    else if (set.value && a.compact && +set.value > a.compact.window && a.compact.window) note.textContent = t("You set {value}; the model's {window} comes first", { value: show(set.value), window: fmtK(a.compact.window) });
+    else if (set.value) note.textContent = t("You set {value}", { value: show(set.value) });
+    else note.textContent = t("The agent's default");
+    const key = [agent, a.knob, a.model || ""].join("\x00");
+    const send = async (path, value) => {
+      tuneBusy = key;
+      renderContext();
+      try {
+        await api("tune/" + path, { agent, knob: a.knob, model: a.model || "", value: String(value ?? "") });
+        status(path === "apply" ? t("Saved: {agent} reads it from its next session", { agent: agentLabel(agent) }) : t("Put back"), "ok");
+      } catch (e) {
+        status(e.message, "err");
+      }
+      tuneBusy = "";
+      await loadTune(true);
+    };
+    if (set.ours) {
+      const undo = el("button", "text", t("Undo"));
+      undo.type = "button";
+      undo.disabled = tuneBusy === key;
+      undo.onclick = () => send("undo");
+      foot.append(undo);
+    }
+    if (!same && !applied && !set.locked) {
+      const go = el("button", "text primary", t("Use {value}", { value: show(best) }));
+      go.type = "button";
+      go.disabled = tuneBusy === key;
+      if (set.value && !set.ours) go.dataset.tt = t("Replaces your {value}; Undo puts it back", { value: show(set.value) });
+      go.onclick = () => send("apply", best);
+      foot.append(go);
+    }
+    row.append(foot);
+    return row;
+  }
+
+  function tuneCard(ag) {
+    const card = el("div", "ctx-tune");
+    const head = el("div", "ctx-agent-head");
+    const who = el("div", "ctx-who");
+    who.append(agentIcon(ag.agent), el("b", "", agentLabel(ag.agent)));
+    const name = el("div", "ctx-who-box");
+    name.append(who, el("div", "ctx-who-sub", count(ag.calls, "1 call", "{n} calls")));
+    head.append(name, el("span", "grow"));
+    const total = ag.advice.reduce((s, a) => { const r = a.compact || a.ttl; return s + Math.max(0, r.cost - r.low); }, 0);
+    const all = ag.advice.reduce((s, a) => s + (a.compact || a.ttl).cost, 0);
+    // a share that rounds to nothing is no promise
+    if (all > 0 && total / all >= 0.01) head.append(el("span", "ctx-tune-total", t("Up to {pct} fewer", { pct: pct(total / all) })));
+    card.append(head);
+    for (const a of ag.advice) card.append(adviceRow(ag.agent, a));
+    if (!ag.advice.length) card.append(el("p", "usage-note", t("Not enough calls in this range to tune on")));
+    return card;
+  }
+
+  function renderTune(pane) {
+    const head = el("div", "row-head ctx-sess-head");
+    head.append(el("span", "label", t("Tuned for you")), el("span", "grow"));
+    pane.append(head);
+    pane.append(el("p", "usage-note", t("Your own calls of the range, replayed setting by setting from your agents' session files: the settings that would have spent the fewest tokens, for how you work. Tokens are weighed as the vendor charges them: a cache read is a tenth of one.")));
+    if (!tuneData) {
+      pane.append(el("p", "usage-note", t("Working it out from your sessions…")));
+      return;
+    }
+    const shown = tuneData.agents.filter((a) => a.advice.length);
+    if (!shown.length) {
+      pane.append(el("p", "usage-note", t("Not enough calls in this range to tune on")));
+      return;
+    }
+    const grid = el("div", "ctx-agents ctx-tunes");
+    for (const a of shown) grid.append(tuneCard(a));
+    pane.append(grid);
+  }
+
+  async function loadTune(force) {
+    const read = ++tuneRead, days = ctxDays;
+    if (tuneData && tuneData.days !== +days) tuneData = null;
+    const data = await api("tune?days=" + days);
+    if (read !== tuneRead) return;
+    const json = JSON.stringify(data);
+    if (!force && tuneData && json === tuneJSON) return;
+    tuneData = { days: +data.days || +days, agents: (data.agents || []).map((a) => ({ ...a, advice: a.advice || [] })) }, tuneJSON = json;
+    renderContext();
+  }
+
   function renderContext() {
     const pane = $("#contextPane");
     if (!pane) return;
@@ -731,10 +902,14 @@
     }));
     tools.append(el("span", "grow"));
     pane.replaceChildren(tools);
+    renderTune(pane);
     if (!ctxData) {
       pane.append(el("p", "usage-note", t("Reading the routing history…")));
       return;
     }
+    const seen = el("div", "row-head ctx-sess-head");
+    seen.append(el("span", "label", t("Through magpie")), el("span", "grow"));
+    pane.append(seen);
     pane.append(el("p", "usage-note", t("What each agent's prompts hold, as magpie's gateway read them: the score and tags are worked out from the requests of the range.")));
     if (!ctxData.agents.length) {
       const empty = el("div", "ctx-none");
@@ -764,6 +939,7 @@
   async function loadContext() {
     const read = ++ctxRead, days = ctxDays;
     if (!ctxData || ctxData.days !== +days) { ctxData = null; renderContext(); }
+    loadTune().catch((e) => status(e.message, "err"));
     const data = await api("context?days=" + days);
     if (read !== ctxRead) return;
     // the auto refresh redraws only what changed: the same answer keeps the

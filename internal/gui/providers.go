@@ -762,6 +762,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	pluginRoutes(mux, w)
 	traceRoutes(mux)
 	contextRoutesAPI(mux)
+	tuneRoutes(mux)
 	groupRoutes(mux)
 	// how each key's or account's requests stand under its limit on
 	// requests at once (#892), read every two seconds while a provider's
