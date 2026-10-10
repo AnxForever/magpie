@@ -9077,7 +9077,7 @@ function renderImport(im) {
 }
 
 // Which of the vendor's models the agents get to see: click to toggle, type
-// to add one the vendor's list lacks, Refresh to ask the vendor again.
+// to add one the vendor's list lacks, Fetch models to ask the vendor again.
 // The endpoints a provider serves, with a Test that reports against each one.
 function renderEndpoints(p, src) {
   const eps = el("div", "eps");
@@ -9544,7 +9544,7 @@ function renderModels(p) {
       c.onclick = () => { draft.chosen = draft.chosen.filter((x) => x !== id); draw(); };
       chips.append(c);
     }
-    if (!p.models.length && !draft.chosen.length) chips.append(el("span", "hint", t("The vendor's list is empty. Refresh, or type a model id.")));
+    if (!p.models.length && !draft.chosen.length) chips.append(el("span", "hint", t("The vendor's list is empty. Fetch models again, or type a model id.")));
     // the list is of models agents chat with: image, embedding and speech
     // models are left out of it, and an image model is set in Settings
     else if (f && !chips.children.length) chips.append(el("span", "hint", t("No model here matches “{q}”. Image, embedding and speech models aren't listed, as agents can't chat with them: pick an image model in Settings → Images.", { q: q.value.trim() })));
@@ -9928,8 +9928,13 @@ function renderModels(p) {
     if (e.key === "Enter") take();
     else if (e.key === "Escape") cancelEdit();
   };
-  const refresh = el("button", "text action", t("Refresh"));
-  refresh.title = t("Ask the vendor which models it serves");
+  // named as the add form's Fetch models is, the button there before the
+  // Save (耍赖天都爱 on Discord: 模型拉取一次就没有这个按钮了 — a key moved
+  // to another group on a relay serves another list), and "again" once a
+  // list was fetched. It asks with the key typed (asTyped), and merges as
+  // Refetch does: picks the new list lacks go, ids added by hand stay
+  const refresh = el("button", "text action fetch-models", t(p.fetched ? "Fetch models again" : "Fetch models"));
+  refresh.title = t("Ask the vendor for its model list with the key typed here, and again after the key moves to another group: picks it no longer lists are dropped, ids added by hand stay");
   refresh.onclick = async () => {
     refresh.classList.add("busy");
     try {
@@ -9991,14 +9996,14 @@ function renderModels(p) {
   // a plugin's list that failed is its defaults, not the vendor's
   if (p.fetched && !p.listError) foot.append(el("span", "hint", t("vendor list · {when}", { when: ago(p.fetched) })));
   // a signed-in account's list, until the vendor gives one, is magpie's own
-  else if (p.models.length) foot.append(el("span", "hint", t(p.account ? "magpie's list · Refresh asks the vendor" : decideOnly(p) ? "Jev's names · Refresh asks the vendor" : "from models.dev · Refresh asks the vendor")));
+  else if (p.models.length) foot.append(el("span", "hint", t(p.account ? "magpie's list · Fetch models asks the vendor" : decideOnly(p) ? "Jev's names · Fetch models asks the vendor" : "from models.dev · Fetch models asks the vendor")));
   if (p.fetched && !p.account) {
     // the fetched list stands in for the picks when none are made
     const forget = el("button", "text action", t("Forget"));
-    forget.title = t("Drop the list fetched from the vendor; the models.dev one is used until Refresh");
+    forget.title = t("Drop the list fetched from the vendor; the models.dev one is used until models are fetched again");
     forget.onclick = async () => {
       forget.classList.add("busy");
-      try { await api("provider/unfetch", { id: p.id }); await loadProviders(); } // the picks stay in the draft, as on a Refresh
+      try { await api("provider/unfetch", { id: p.id }); await loadProviders(); } // the picks stay in the draft, as on a Fetch models
       catch (e) { status(e.message, "err"); forget.classList.remove("busy"); }
     };
     foot.append(forget);

@@ -37,7 +37,7 @@ const providerUsage = `usage:
   magpie provider fallback <id> <provider/model>…   where requests go when it's out of quota or down (none clears)
   magpie provider models <id> [ids…]      fetch the vendor's model list, or choose which models to expose:
                                           ids… replace the list, +id adds one, -id takes one out, all: the default
-  magpie provider refresh <id>            fetch the vendor's model list again (as the app's Refresh)
+  magpie provider refresh <id>            fetch the vendor's model list again (as the app's Fetch models)
   magpie provider account-models <id> [account|key [ids…|all]]
                                           the models one account or key alone serves; all: every model the provider has
   magpie provider account-cap <id> [account [percent|off]]
