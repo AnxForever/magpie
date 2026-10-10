@@ -7,8 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // snowDefault is a profile as Snow CLI 0.9.2 writes it for someone on a
@@ -338,5 +340,150 @@ func TestSnowCheckSync(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".snow", "profiles", "magpie.json")); !os.IsNotExist(err) {
 		t.Fatal("wrote ~/.snow with SNOW_CONFIG_DIR set")
+	}
+}
+
+// snowSees is a catalog with a model that takes no images (GLM-4.6, as
+// models.dev lists it: text in) and one that does (GLM-4.5V), both on the
+// relay.
+func snowSees(t *testing.T) {
+	t.Helper()
+	os.WriteFile(catalog.CachePath(), []byte(`{"zai":{"models":{
+"glm-4.6":{"id":"glm-4.6","name":"GLM-4.6","modalities":{"input":["text"],"output":["text"]},"limit":{"context":204800,"output":131072}},
+"glm-4.5v":{"id":"glm-4.5v","name":"GLM-4.5V","modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":65536,"output":16384}}}}}`), 0o644)
+	catalog.Reset()
+	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"glm-4.6", "glm-4.5v"}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The window, output and image support of magpie's profile follow its
+// model, from the catalog, until the user sets one of them in Snow's own
+// settings: theirs then stays through later picks and catalog syncs (#1457).
+func TestSnowSyncedKeepsTheUsers(t *testing.T) {
+	_, dir := snowHome(t)
+	snowUser(t, dir)
+	snowSees(t)
+	st := settings.Load()
+	st.Vision = "off"
+	if err := settings.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := Find("snow")
+	ours := filepath.Join(dir, "profiles", "magpie.json")
+	if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	sc := snowCfg(t, ours)
+	// with Vision off, nothing describes GLM-4.6's images: Snow is told
+	// it takes none rather than the user's profile's true for glm-5
+	if sc["maxContextTokens"] != float64(204800) || sc["maxTokens"] != float64(131072) || sc["supportsVision"] != false {
+		t.Fatalf("from the catalog: %v", sc)
+	}
+	// the user sets the window lower in Snow's own settings, on magpie's
+	// profile; Snow writes the profile and config.json whole
+	body := strings.Replace(readFile(ours), `"maxContextTokens": 204800`, `"maxContextTokens": 128000`, 1)
+	os.WriteFile(ours, []byte(body), 0o644)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(body), 0o644)
+	if err := a.Apply("model", "magpie/relay/glm-4.5v"); err != nil {
+		t.Fatal(err)
+	}
+	sc = snowCfg(t, ours)
+	if sc["maxContextTokens"] != float64(128000) {
+		t.Fatalf("the user's window was written over: %v", sc["maxContextTokens"])
+	}
+	// what the user left alone follows the new model
+	if sc["maxTokens"] != float64(16384) || sc["supportsVision"] != true {
+		t.Fatalf("not GLM-4.5V's: %v", sc)
+	}
+	if err := a.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if sc = snowCfg(t, ours); sc["maxContextTokens"] != float64(128000) {
+		t.Fatalf("a sync wrote over the user's window: %v", sc["maxContextTokens"])
+	}
+	if readFile(filepath.Join(dir, "config.json")) != readFile(ours) {
+		t.Fatal("config.json not magpie's profile")
+	}
+	// a model the catalog has no limits for: Snow's own default output,
+	// text-only as the gateway takes it, and the window as the user set it
+	if err := a.Apply("model", "magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	sc = snowCfg(t, ours)
+	if sc["supportsVision"] != false || sc["maxContextTokens"] != float64(128000) || sc["maxTokens"] != float64(snowOutput) {
+		t.Fatalf("unknown model: %v", sc)
+	}
+	// off magpie and on again: the user's profile is the start again
+	if err := a.Apply("model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	if sc = snowCfg(t, ours); sc["maxContextTokens"] != float64(204800) {
+		t.Fatalf("a window from magpie's last profile: %v", sc["maxContextTokens"])
+	}
+}
+
+// With magpie's Vision on, a model that takes no images has them described
+// at the gateway, so Snow is told it takes them and sends them on.
+func TestSnowVisionThroughMagpie(t *testing.T) {
+	_, dir := snowHome(t)
+	snowUser(t, dir)
+	snowSees(t)
+	st := settings.Load()
+	st.Vision = "relay/glm-4.5v"
+	if err := settings.Save(st); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := Find("snow")
+	if err := a.Apply("model", "magpie/relay/glm-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	if sc := snowCfg(t, filepath.Join(dir, "profiles", "magpie.json")); sc["supportsVision"] != true {
+		t.Fatalf("supportsVision %v with GLM-4.5V to describe images", sc["supportsVision"])
+	}
+}
+
+// A vision model of the user's profile comes into magpie's only with an
+// endpoint and key of its own: on the profile's, it would go to the
+// gateway, which doesn't know it, or carry magpie's key to the user's
+// endpoint.
+func TestSnowUsersVisionModel(t *testing.T) {
+	for _, c := range []struct {
+		name, vision string
+		kept         bool
+	}{
+		{"on the profile's endpoint", `"supportsVision": false, "visionModel": "glm-4.5v", "visionBaseUrl": "", "visionApiKey": "", "visionRequestMethod": "chat"`, false},
+		{"own endpoint, the profile's key", `"supportsVision": false, "visionModel": "glm-4.5v", "visionBaseUrl": "https://vision.example.com/v1", "visionApiKey": ""`, false},
+		{"own endpoint and key", `"supportsVision": false, "visionModel": "glm-4.5v", "visionBaseUrl": "https://vision.example.com/v1", "visionApiKey": "vkey"`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, dir := snowHome(t)
+			snowUser(t, dir)
+			prof := strings.Replace(snowDefault, `"supportsVision": true`, c.vision, 1)
+			os.WriteFile(filepath.Join(dir, "profiles", "default.json"), []byte(prof), 0o644)
+			a, _ := Find("snow")
+			if err := a.Apply("model", "magpie/deepseek/pro"); err != nil {
+				t.Fatal(err)
+			}
+			sc := snowCfg(t, filepath.Join(dir, "profiles", "magpie.json"))
+			if !c.kept {
+				for _, k := range snowVision {
+					if _, ok := sc[k]; ok {
+						t.Errorf("%s kept: %v", k, sc[k])
+					}
+				}
+				return
+			}
+			// the protocol and URL mode it was asked on in the user's profile
+			if sc["visionModel"] != "glm-4.5v" || sc["visionApiKey"] != "vkey" || sc["visionRequestMethod"] != "chat" || sc["visionBaseUrlMode"] != "auto" {
+				t.Fatalf("the user's own vision model: %v", sc)
+			}
+			if readFile(filepath.Join(dir, "profiles", "default.json")) != prof {
+				t.Fatal("the user's profile rewritten")
+			}
+		})
 	}
 }
