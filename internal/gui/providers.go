@@ -1611,17 +1611,20 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		st.Moved = moved
 		writeJSON(rw, st)
 	})
-	// Codex's background app-server, left on the account before a switch:
-	// restarting it (which ends the Codex sessions on it), or letting it be.
+	// Codex's background app-server, left on the account before a switch
+	// or on the model list before a change (the Agents row's Restart):
+	// restarting it (Codex 0.162's sessions on it reconnect, after a turn
+	// running, for up to a minute; an older Codex's end), or letting it be.
 	mux.HandleFunc("POST /api/codex/daemon/{action}", func(rw http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("action") {
 		case "restart":
-			ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 			defer cancel()
 			if err := provider.RestartCodexDaemon(ctx); err != nil {
 				fail(rw, err)
 				return
 			}
+			agent.CodexDaemonRestarted()
 		case "dismiss":
 			provider.DismissCodexDaemon()
 		default:

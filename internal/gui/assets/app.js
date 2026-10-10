@@ -1318,6 +1318,29 @@ function desktopLongestLine() {
   return l;
 }
 
+// daemonRestart: the button that restarts Codex's background app-server
+// left on the old list, then shows the row as it is after
+function daemonRestart() {
+  const go = el("button", "ag-quiet accent", t("Restart"));
+  go.type = "button";
+  go.title = "codex app-server daemon restart";
+  go.onclick = async () => {
+    go.disabled = true;
+    go.classList.add("busy");
+    try {
+      await api("codex/daemon/restart", {});
+      state = await api("state");
+      renderAgents();
+      status(t("Codex's background service restarted"));
+    } catch (e) {
+      go.disabled = false;
+      go.classList.remove("busy");
+      status(e.message, "err");
+    }
+  };
+  return go;
+}
+
 // connectPanel: a connected agent's row, opened
 function connectPanel(a, { fields, fieldBtn }) {
   const box = el("div", "ag-exp");
@@ -1365,6 +1388,10 @@ function connectPanel(a, { fields, fieldBtn }) {
         const [pre, post] = t(how[0], { agent: a.name, when: ago(c.since), app: c.app || "" }).split("{cmd}");
         const l = line(pre, ...(how[1] ? [code(how[1]), post || ""] : []));
         l.classList.add("ag-stale-copy");
+        // Codex's daemon, which magpie restarts itself while no codex
+        // session is on it: with one on, here, when the user says (open
+        // sessions of Codex 0.162 reconnect to the new one)
+        if (c.kind === "daemon" && a.id === "codex") l.append(daemonRestart());
         parts.push(l);
       }
     }

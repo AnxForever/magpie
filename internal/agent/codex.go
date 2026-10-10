@@ -987,10 +987,16 @@ func codexIn(at place) *Agent {
 		// codex session keeps the old list: a new one shows Codex's own
 		// models until that daemon is restarted, while the desktop app's
 		// own app-server, restarted with the app, has magpie's (TJHHHH,
-		// luci). magpie doesn't restart it: that ends its sessions.
+		// luci). With no codex session on it magpie restarts it itself
+		// (codexDaemonNotice); with one, the user says when.
 		Notice: func() string {
+			if at.spell == nil {
+				if n, ok := codexDaemonNotice(path); ok {
+					return n
+				}
+			}
 			if codexRunning() {
-				return "Codex builds its model list at start-up — restart the Codex app, open codex sessions and the app-server they share (" + provider.CodexDaemonRestart + ") to see this."
+				return codexRestartAll
 			}
 			return ""
 		},
