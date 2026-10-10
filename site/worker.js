@@ -167,14 +167,26 @@ export function served(list, now) {
 
 // goTarget is where a /go link sends the browser: the partner's own key
 // page or website, the region's where it has one. Only partners.js's own
-// addresses, never one the link names.
+// addresses, never one the link names. It says it came from magpie, as
+// ref=magpie, unless the address names a ref of its own (a referral code).
 export function goTarget(list, id, what, region) {
   const p = list.find((x) => x.id === id);
   const field = what === "keys" ? "keysUrl" : what === "site" ? "website" : "";
   if (!p || !field) return "";
-  if (!region) return p[field] || "";
+  if (!region) return fromMagpie(p[field] || "");
   const r = (p.regions || []).find((x) => x.id === region);
-  return r ? r[field] || p[field] || "" : "";
+  return r ? fromMagpie(r[field] || p[field] || "") : "";
+}
+
+function fromMagpie(to) {
+  if (!to) return "";
+  try {
+    const u = new URL(to);
+    if (!u.searchParams.has("ref")) u.searchParams.set("ref", "magpie");
+    return u.toString();
+  } catch {
+    return to;
+  }
 }
 
 function country(req) {

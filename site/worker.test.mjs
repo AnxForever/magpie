@@ -329,15 +329,19 @@ test("partners: links go through /go", () => {
   assert.equal(served([{ ...LIST[0], until: "2026-10-10T00:00:01Z" }], NOW).length, 1);
 });
 
-test("partners: /go sends the browser on", () => {
-  assert.equal(goTarget(LIST, "acme", "keys"), "https://acme.example/keys");
-  assert.equal(goTarget(LIST, "acme", "site"), "https://acme.example/");
-  assert.equal(goTarget(LIST, "acme", "keys", "cn"), "https://cn.acme.example/keys");
+test("partners: /go sends the browser on, saying it came from magpie", () => {
+  assert.equal(goTarget(LIST, "acme", "keys"), "https://acme.example/keys?ref=magpie");
+  assert.equal(goTarget(LIST, "acme", "site"), "https://acme.example/?ref=magpie");
+  assert.equal(goTarget(LIST, "acme", "keys", "cn"), "https://cn.acme.example/keys?ref=magpie");
   // a region without its own page has the partner's
-  assert.equal(goTarget(LIST, "acme", "keys", "us east"), "https://acme.example/keys");
-  assert.equal(goTarget(LIST, "acme", "site", "cn"), "https://acme.example/");
+  assert.equal(goTarget(LIST, "acme", "keys", "us east"), "https://acme.example/keys?ref=magpie");
+  assert.equal(goTarget(LIST, "acme", "site", "cn"), "https://acme.example/?ref=magpie");
   // ended, still goes
-  assert.equal(goTarget(LIST, "gone", "keys"), "https://gone.example/keys");
+  assert.equal(goTarget(LIST, "gone", "keys"), "https://gone.example/keys?ref=magpie");
+  // the partner's own query and fragment stay; its own ref is its referral code and stays as it is
+  const own = [{ id: "own", keysUrl: "https://own.example/keys?aff=7#signup", website: "https://own.example/?ref=abc" }];
+  assert.equal(goTarget(own, "own", "keys"), "https://own.example/keys?aff=7&ref=magpie#signup");
+  assert.equal(goTarget(own, "own", "site"), "https://own.example/?ref=abc");
   for (const [id, what, region] of [["nobody", "keys"], ["acme", "chat"], ["acme", "keys", "mars"], ["plain", "keys"], ["acme", "constructor"]])
     assert.equal(goTarget(LIST, id, what, region), "", [id, what, region].join(" "));
 });
@@ -356,7 +360,8 @@ test("partners: /go counts the click", async () => {
   captured.length = 0;
   const res = await worker.fetch(new Request("https://usemagpie.ai/go/" + p.id + "/" + what), {}, ctx);
   assert.equal(res.status, 302);
-  assert.equal(res.headers.get("Location"), p.keysUrl || p.website);
+  assert.equal(res.headers.get("Location"), goTarget(PARTNERS, p.id, what));
+  assert.equal(new URL(res.headers.get("Location")).searchParams.has("ref"), true);
   await Promise.resolve();
   assert.equal(captured.length, 1);
   assert.equal(captured[0].event, "magpie partner go");
