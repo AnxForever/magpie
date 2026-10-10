@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,15 +10,13 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // magpie accounts lists, switches and forgets a plugin's accounts by its
 // provider's id, as a built-in subscription's.
 func TestAccountsOfAPlugin(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -65,16 +62,13 @@ func TestAccountsOfAPlugin(t *testing.T) {
 	if rows := list(); len(rows) != 2 || rows[0].User != second || !rows[0].Active {
 		t.Fatalf("after switching to %s: %+v", second, rows)
 	}
-	// the one in use isn't forgotten, as a built-in's isn't; the other is
-	if _, err := said(t, func() error { return accountsCmd([]string{"accounts", "forget", "fakeco", second}) }); err == nil {
-		t.Fatal("the account in use was forgotten")
-	}
+	// forgetting the one in use puts the other first, as a built-in's does
 	first := rows[0].User
-	if _, err := said(t, func() error { return accountsCmd([]string{"accounts", "forget", "fakeco", first}) }); err != nil {
+	if _, err := said(t, func() error { return accountsCmd([]string{"accounts", "forget", "fakeco", second}) }); err != nil {
 		t.Fatal(err)
 	}
-	if rows := list(); len(rows) != 1 || rows[0].User != second || !rows[0].Active {
-		t.Fatalf("after forgetting %s: %+v", first, rows)
+	if rows := list(); len(rows) != 1 || rows[0].User != first || !rows[0].Active {
+		t.Fatalf("after forgetting %s: %+v", second, rows)
 	}
 	if _, err := said(t, func() error { return accountsCmd([]string{"accounts", "switch", "nosuch", "a"}) }); err == nil || !strings.Contains(err.Error(), "can be added and switched") {
 		t.Fatalf("an unknown one: %v", err)

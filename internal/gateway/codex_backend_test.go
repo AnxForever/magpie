@@ -403,6 +403,42 @@ func TestCodexModelListNarrowedByPicks(t *testing.T) {
 	}
 }
 
+// The picks narrow only the models a picker shows. A hidden entry of the
+// backend's, such as codex-auto-review, isn't one: no picker lists it, and
+// Codex's auto-review runs on it when the list has it. Taken out, the review
+// fell back to the conversation's model at low effort, which a relay model
+// charged to the relay (#1460).
+func TestCodexModelListPicksKeepHidden(t *testing.T) {
+	codexSignedIn(t)
+	if err := provider.Save(provider.Provider{ID: "codex", Models: []string{"gpt-6-sol"}}); err != nil {
+		t.Fatal(err)
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"models":[{"slug":"gpt-6-sol","priority":1,"visibility":"list"},{"slug":"gpt-5.5","priority":2,"visibility":"list"},{"slug":"codex-auto-review","priority":3,"visibility":"hide"}]}`)
+	}))
+	defer up.Close()
+	was := provider.CodexBase
+	provider.CodexBase = up.URL + "/backend-api/codex"
+	defer func() { provider.CodexBase = was }()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", CodexPath+"/models", nil)
+	req.Header.Set("Authorization", "Bearer chatgpt-token")
+	New().Handler().ServeHTTP(rec, req)
+	var list struct {
+		Models []map[string]any `json:"models"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	got := map[string]bool{}
+	for _, m := range list.Models {
+		slug, _ := m["slug"].(string)
+		got[slug] = true
+	}
+	if rec.Code != 200 || !got["gpt-6-sol"] || got["gpt-5.5"] || !got["codex-auto-review"] {
+		t.Errorf("after picks: %v (want gpt-6-sol and codex-auto-review, not gpt-5.5); code %d", got, rec.Code)
+	}
+}
+
 // A native model taken out of Codex's list on the Agents page is dropped
 // from the backend's list too, and the ETag changes so Codex asks again.
 func TestCodexModelListHidesOnAgentsPage(t *testing.T) {
@@ -750,5 +786,95 @@ func TestCodexOwnModelKindAccounting(t *testing.T) {
 				t.Fatalf("usage: %+v", recs)
 			}
 		})
+	}
+}
+
+// A turn on one of Codex's own models logs the reasoning Codex asked for,
+// as the others' turns do: the request log's reasoning column was blank
+// for every one (Karen, #feedback), its body sent zstd as Codex sends it.
+func TestCodexOwnModelLogsEffort(t *testing.T) {
+	setup(t, provider.Chat, &fake{t: t})
+	var got []byte
+	chatgpt(t, func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		w.Header()["Content-Type"] = nil
+		io.WriteString(w, sse(`data: {"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":9,"output_tokens":2}}}`))
+	})
+	enc, _ := zstd.NewWriter(nil)
+	z := enc.EncodeAll([]byte(`{"model":"gpt-5.5","stream":true,"input":"hi","reasoning":{"effort":"xhigh","summary":"auto"}}`), nil)
+	s := New()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", CodexPath+"/responses", bytes.NewReader(z))
+	req.Header.Set("Content-Encoding", "zstd")
+	req.Header.Set("Authorization", "Bearer chatgpt-token")
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(string(got), `"effort":"xhigh"`) {
+		t.Fatalf("%d %s, sent %s", rec.Code, rec.Body, got)
+	}
+	if u := usage.Load(time.Time{}); len(u) != 1 || u[0].Effort != "xhigh" {
+		t.Errorf("usage %+v", u)
+	}
+	if rs := s.Trace(t.Context(), 0, 0).Routes; len(rs) != 1 || rs[0].Effort != "xhigh" || rs[0].Tries[0].Effort != "xhigh" {
+		t.Errorf("trace %+v", rs)
+	}
+}
+
+// A Codex that reaches magpie for account failover alone, not connected to
+// it, is handed only its own models, and an ETag that is neither the full
+// list's nor contains it, so moving between the two has Codex ask again
+// (#1385: 62 of magpie's models were in its list). Its replies' models ETag
+// carries the same tag.
+func TestCodexModelListOwnOnlyForFailover(t *testing.T) {
+	setup(t, provider.Chat, &fake{t: t})
+	chatgpt(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("ETag", `"v1"`)
+			io.WriteString(w, `{"models":[{"slug":"gpt-5.5","priority":1}]}`)
+			return
+		}
+		w.Header().Set("X-Models-Etag", `W/"v1"`)
+		io.WriteString(w, sse(
+			`data: {"type":"response.created","response":{"id":"r1"}}`,
+			`data: {"type":"response.completed","response":{"id":"r1"}}`))
+	})
+	ownOnly := false
+	was := CodexOwnOnly
+	CodexOwnOnly = func() bool { return ownOnly }
+	t.Cleanup(func() { CodexOwnOnly = was })
+	list := func() ([]string, string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", CodexPath+"/models", nil)
+		req.Header.Set("Authorization", "Bearer chatgpt-token")
+		New().Handler().ServeHTTP(rec, req)
+		var got struct {
+			Models []map[string]any `json:"models"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &got)
+		var slugs []string
+		for _, m := range got.Models {
+			slug, _ := m["slug"].(string)
+			slugs = append(slugs, slug)
+		}
+		return slugs, rec.Header().Get("ETag")
+	}
+	full, fullTag := list()
+	if len(full) < 2 || !strings.Contains(strings.Join(full, " "), "fake/m1") {
+		t.Fatalf("connected list %v", full)
+	}
+	ownOnly = true
+	own, ownTag := list()
+	if len(own) != 1 || own[0] != "gpt-5.5" {
+		t.Errorf("failover-only list = %v, want just gpt-5.5", own)
+	}
+	if ownTag == fullTag || ownTag != `"v1+magpie-`+provider.CodexOwnListTag()+`"` ||
+		codexcat.Tagged(ownTag, provider.CodexListTag()) || codexcat.Tagged(fullTag, provider.CodexOwnListTag()) {
+		t.Errorf("ETag own %q, full %q", ownTag, fullTag)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":[]}`))
+	req.Header.Set("Authorization", "Bearer chatgpt-token")
+	New().Handler().ServeHTTP(rec, req)
+	if got := rec.Header().Get("X-Models-Etag"); rec.Code != 200 || !codexcat.Tagged(got, provider.CodexOwnListTag()) {
+		t.Errorf("%d X-Models-Etag %q", rec.Code, got)
 	}
 }

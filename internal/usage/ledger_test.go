@@ -90,8 +90,8 @@ func TestLedger(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := strings.Join(CSVHeader, ",") + "\n" +
-		rows[1].Time.Format(time.RFC3339) + ",codex,relay/sol,relay,relay.example,sol,sol-2026-01-01,false,,10,1,0,0,0,0.000028,100,,200,false,,,,,,,,,,,,false,,,false,,,\n" +
-		rows[2].Time.Format(time.RFC3339) + ",codex,fast,relay,relay.example,sol,luna,true,high,2000,500,1000,4000,0,0.012500,3200,400,200,false,s1,,,,,123,,,,,,false,,,false,,,\n"
+		rows[1].Time.Format(time.RFC3339) + ",codex,relay/sol,relay,relay.example,sol,sol-2026-01-01,false,,10,1,0,0,0,0.000028,100,,200,false,,,,,,,,,,,,false,,,false,,,,,0,0\n" +
+		rows[2].Time.Format(time.RFC3339) + ",codex,fast,relay,relay.example,sol,luna,true,high,2000,500,1000,4000,0,0.012500,3200,400,200,false,s1,,,,,123,,,,,,false,,,false,,,,,1000,0\n"
 	if b.String() != want {
 		t.Fatalf("csv:\n%s\nwant:\n%s", b.String(), want)
 	}
@@ -181,11 +181,12 @@ func TestLedgerWithSessionLogCalls(t *testing.T) {
 	// a models.dev catalog pricing Claude Sonnet 5: $3 in, $15 out, $0.3 a cached read, $3.75 a cache write, per million
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
 	os.WriteFile(catalog.CachePath(), []byte(`{"anthropic":{"id":"anthropic","models":{"claude-sonnet-5":{"id":"claude-sonnet-5","cost":{"input":3,"output":15,"cache_read":0.3,"cache_write":3.75}}}}}`), 0o644)
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
 
-	// noon today, so that what the test lists a few hours before it is still today,
-	// whenever the test runs
-	t0 := time.Now()
-	now := time.Date(t0.Year(), t0.Month(), t0.Day(), 12, 0, 0, 0, t0.Location())
+	// noon of the day Clock is held at, so that what the test lists a few
+	// hours before it is that day's
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
 	// the gateway's: an answered request of session s1 that began at -10m and
 	// took 20 s, and a failure of another with what the vendor said
 	Append(Record{Time: now.Add(-10 * time.Minute), Agent: "claude", Provider: "claude", Model: "claude-sonnet-5", Input: 5, Output: 5,
@@ -260,7 +261,7 @@ func TestLedgerWithSessionLogCalls(t *testing.T) {
 	if err := WriteCSV(&b, rows[2:4]); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{",req_log,,,,log,false,,,false,,,\n", ",true,s2,,,,,,req_lim,,You've hit your limit,rate_limit,log,false,,,false,,,\n"} {
+	for _, want := range []string{",req_log,,,,log,false,,,false,,,,,500,0\n", ",true,s2,,,,,,req_lim,,You've hit your limit,rate_limit,log,false,,,false,,,,,0,0\n"} {
 		if !strings.Contains(b.String(), want) {
 			t.Fatalf("csv lacks %q:\n%s", want, b.String())
 		}
@@ -272,7 +273,7 @@ func TestLedgerWithSessionLogCalls(t *testing.T) {
 // with its calls, failures, tokens and cost; a row of before the period is
 // in none.
 func TestLedgerSeries(t *testing.T) {
-	now := time.Now()
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	row := func(at time.Time, in, out, cr, cw int, cost float64, priced bool, status int, errText string) Row {
 		return Row{Record: Record{Time: at, Provider: "p", Input: in, Output: out, CacheRead: cr, CacheWrite: cw, Status: status, Error: errText}, Cost: cost, Priced: priced}
@@ -325,13 +326,43 @@ func TestLedgerSeries(t *testing.T) {
 	}
 }
 
+// A point's part of each model says how fast that model's replies came,
+// as the point's own sums do, for a chart of speed to tell the models
+// apart (#860): a failed call and one too fast to time count in neither.
+func TestLedgerSeriesSpeed(t *testing.T) {
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	at := time.Date(now.Year(), now.Month(), now.Day(), 0, 10, 0, 0, now.Location())
+	row := func(model string, out int, ms, ttft int64, status int) Row {
+		return Row{Record: Record{Time: at, Provider: "p", Model: model, Output: out, Millis: ms, TTFT: ttft, Status: status}}
+	}
+	rows := []Row{
+		row("fast", 1000, 2500, 500, 200), // 1000 tokens in 2 s
+		row("fast", 300, 1500, 500, 200),  // 300 in 1 s
+		row("slow", 100, 6000, 1000, 200), // 100 in 5 s
+		row("slow", 900, 9000, 2000, 500), // failed
+		row("slow", 50, 1001, 1000, 200),  // 1 ms: no speed, its TTFT counts
+	}
+	_, pts := LedgerSeries(Today, rows)
+	h := pts[0]
+	fast, slow := h.By["model"]["fast"], h.By["model"]["slow"]
+	if fast.Timed != 2 || fast.TTFT != 1000 || fast.DecodeMs != 3000 || fast.DecodeOut != 1300 {
+		t.Fatalf("fast: %+v", fast)
+	}
+	if slow.Calls != 3 || slow.Timed != 2 || slow.TTFT != 2000 || slow.DecodeMs != 5000 || slow.DecodeOut != 100 {
+		t.Fatalf("slow: %+v", slow)
+	}
+	if h.DecodeMs != fast.DecodeMs+slow.DecodeMs || h.DecodeOut != fast.DecodeOut+slow.DecodeOut || h.Timed != 4 {
+		t.Fatalf("the point's own: %+v", h.Totals)
+	}
+}
+
 // Calls are told apart by provider, agent and model: a filter to one
 // provider, the providers that had calls (whatever the filter), the sums of
 // each with the most tokens first, and the parts of each point of the
 // timeline for a chart to stack — the ones with the most tokens over the
 // period, the rest left to the point's own sums.
 func TestLedgerByProvider(t *testing.T) {
-	now := time.Now()
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
 	at := time.Date(now.Year(), now.Month(), now.Day(), 0, 10, 0, 0, now.Location())
 	rec := func(agent, prov, model string, in, cw int, mins int) Record {
 		return Record{Time: at.Add(time.Duration(mins) * time.Minute), Agent: agent, Provider: prov, Model: model, Input: in, CacheRead: cw, Output: 1, Status: 200}
@@ -448,6 +479,8 @@ func TestLedgerUsesTheStatedPrice(t *testing.T) {
 	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
 	os.WriteFile(catalog.CachePath(), []byte(`{"openai":{"id":"openai","models":{"sol":{"id":"sol",`+
 		`"cost":{"input":2,"output":8,"cache_read":0.5,"cache_write":2.5}}}}}`), 0o644)
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
 	if err := provider.Save(provider.Provider{ID: "relay", Name: "Relay", Key: "k", Chat: "https://relay.example/v1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -653,5 +686,71 @@ func TestLedgerAntigravityReplyNamingTheFamilyIsNoSwap(t *testing.T) {
 	}
 	if !Swapped("flash-9-medium", "flash-8") || !Swapped("flash-9-medium", "flash-9-high") {
 		t.Error("another model or level is still a swap")
+	}
+}
+
+// A relay that sells a model under a name of its own (moonshot-kimi-k3)
+// answers with the model's own name (kimi-k3), which the record keeps as
+// served: a call no price is known for by the name asked is priced as the
+// one that answered, at the same provider (#1498, liuweifeng). A model
+// with a price of its own keeps it, a zero the user set included, however
+// its reply names itself.
+func TestLedgerPricesARenamedModelAsTheOneServed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
+	os.WriteFile(catalog.CachePath(), []byte(`{"moonshotai":{"id":"moonshotai","models":{"kimi-k3":{"id":"kimi-k3",`+
+		`"cost":{"input":3,"output":15,"cache_read":0.3,"cache_write":3}}}},`+
+		`"openai":{"id":"openai","models":{"sol":{"id":"sol","cost":{"input":2,"output":8}}}}}`), 0o644)
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	if err := provider.Save(provider.Provider{ID: "relay-a", Name: "Relay A", Key: "k", Chat: "https://relay.example/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	free := new(float64(0))
+	if err := settings.Save(settings.Settings{ModelPrices: map[string]settings.ModelPrice{
+		"relay-a/house-free": {Input: free, Output: free, CacheRead: free, CacheWrite: free},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(Path()), 0o755)
+	now := time.Now()
+	// the reporter's record, as the gateway wrote it
+	Append(Record{Time: now, Provider: "relay-a", Model: "moonshot-kimi-k3", Requested: "relay-a/moonshot-kimi-k3",
+		Served: "kimi-k3", Input: 74, Output: 227, CacheRead: 288256, CacheWrite: 512, Status: 200})
+	// priced by its own name, answered as kimi-k3 all the same
+	Append(Record{Time: now.Add(-time.Second), Provider: "relay-a", Model: "sol", Served: "kimi-k3", Input: 1000000, Status: 200})
+	// set free by the user
+	Append(Record{Time: now.Add(-2 * time.Second), Provider: "relay-a", Model: "house-free", Served: "kimi-k3", Input: 1000000, Status: 200})
+	// no price by either name
+	Append(Record{Time: now.Add(-3 * time.Second), Provider: "relay-a", Model: "mystery", Served: "mystery-2", Input: 1000000, Status: 200})
+
+	rows, _, _ := Ledger(Month, Filter{})
+	page := QueryPage(Month, Filter{}, 0, 20)
+	for _, got := range [][]Row{rows, page.Rows} {
+		if len(got) != 4 {
+			t.Fatalf("rows: %+v", got)
+		}
+		cost := map[string]float64{}
+		priced := map[string]bool{}
+		for _, r := range got {
+			cost[r.Model], priced[r.Model] = r.Cost, r.Priced
+		}
+		// (74*3 + 227*15 + 288256*0.3 + 512*3) / 1e6
+		if want := 0.0916398; !priced["moonshot-kimi-k3"] || math.Abs(cost["moonshot-kimi-k3"]-want) > 1e-9 {
+			t.Fatalf("renamed: priced=%v cost=%v, want %v", priced["moonshot-kimi-k3"], cost["moonshot-kimi-k3"], want)
+		}
+		if !priced["sol"] || cost["sol"] != 2 {
+			t.Fatalf("sol: priced=%v cost=%v, want its own 2", priced["sol"], cost["sol"])
+		}
+		if !priced["house-free"] || cost["house-free"] != 0 {
+			t.Fatalf("house-free: priced=%v cost=%v, want the user's 0", priced["house-free"], cost["house-free"])
+		}
+		if priced["mystery"] {
+			t.Fatalf("mystery priced at %v", cost["mystery"])
+		}
 	}
 }

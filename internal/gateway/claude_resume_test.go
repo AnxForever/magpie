@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,9 +26,24 @@ type resumeHarness struct {
 	p      provider.Provider
 	logs   string
 	config string
+	extra  string // fields each request has besides its own, each with a comma after it
 }
 
 func newResumeHarness(t *testing.T) *resumeHarness {
+	t.Helper()
+	return newReplyHarness(t, "ok")
+}
+
+// newReplyHarness is a resumeHarness whose Claude Code answers reply.
+func newReplyHarness(t *testing.T, reply string) *resumeHarness {
+	t.Helper()
+	return newScriptHarness(t, reply, "")
+}
+
+// newScriptHarness is a resumeHarness whose Claude Code answers reply,
+// after it has run start, shell lines of its own ($sid is its session,
+// $file its file, $log its log).
+func newScriptHarness(t *testing.T, reply, start string) *resumeHarness {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("a shell script stands in for Claude Code")
@@ -36,6 +52,7 @@ func newResumeHarness(t *testing.T) *resumeHarness {
 	testenv.SetHome(t, home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("CLAUDE_CODE_TMPDIR", t.TempDir())
 	config := filepath.Join(home, ".claude")
 	t.Setenv("CLAUDE_CONFIG_DIR", config)
 	dir, logs := t.TempDir(), t.TempDir()
@@ -54,18 +71,25 @@ case " $* " in
      mkdir -p "$CLAUDE_CONFIG_DIR/projects/$proj"
      file="$CLAUDE_CONFIG_DIR/projects/$proj/$sid.jsonl" ;;
 esac
+` + start + `
 echo '{"type":"system","subtype":"init","session_id":"'$sid'"}'
 while read -r line; do
+  case $line in *'"type":"control_request"'*)
+    # acknowledged as Claude Code does: initialize, a settings change
+    id=$(printf '%s' "$line" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+    echo '{"type":"control_response","response":{"subtype":"success","request_id":"'$id'"}}'
+    continue ;;
+  esac
   echo "told $line" >> $log
   if [ -n "$file" ]; then echo "$line" >> "$file"; fi
   echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m","model":"claude-sonnet-5","usage":{"input_tokens":1}}}}'
-  echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}}'
+  echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":` + strconv.Quote(reply) + `}}}'
   echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}'
   echo '{"type":"stream_event","event":{"type":"message_stop"}}'
   echo '{"type":"result","subtype":"success","is_error":false,"result":""}'
 done
 `
-	os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755)
+	testenv.Program(t, filepath.Join(dir, "claude"), script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	s := New()
 	t.Cleanup(s.subscription.abortAll)
@@ -83,7 +107,7 @@ func (h *resumeHarness) ask(system string, said ...string) {
 		}
 		msgs = append(msgs, fmt.Sprintf(`{"role":"user","content":%q}`, m))
 	}
-	body := `{"model":"claude-sonnet-5","max_tokens":100,"system":"` + system + `","tools":[{"name":"read","input_schema":{"type":"object"}}],"messages":[` + strings.Join(msgs, ",") + `]}`
+	body := `{"model":"claude-sonnet-5","max_tokens":100,` + h.extra + `"system":"` + system + `","tools":[{"name":"read","input_schema":{"type":"object"}}],"messages":[` + strings.Join(msgs, ",") + `]}`
 	rec := httptest.NewRecorder()
 	var u Usage
 	if code, msg := h.s.serveClaudeSubscription(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body)), provider.Anthropic, h.p, "claude-sonnet-5", []byte(body), &u); code != 200 {
@@ -231,14 +255,13 @@ func TestClaudeOldSessionsAreSwept(t *testing.T) {
 	long := time.Now().Add(-2 * idleLongest)
 	os.Chtimes(old, long, long)
 	newSubscriptionBridge().sweepSessions([]string{dir})
-	eventually(t, "the old session stayed", func() bool { _, err := os.Stat(old); return os.IsNotExist(err) })
+	// The sweep removes the session's file, then its folder: wait for both.
+	gone := func(p string) bool { _, err := os.Stat(p); return os.IsNotExist(err) }
+	eventually(t, "the old session stayed", func() bool { return gone(old) && gone(filepath.Join(dir, "old")) })
 	for _, f := range []string{recent, filepath.Join(dir, "notes.txt")} {
 		if _, err := os.Stat(f); err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(dir, "old")); !os.IsNotExist(err) {
-		t.Fatal("the old session's folder stayed")
 	}
 }
 

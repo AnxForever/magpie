@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/yetone/magpie/internal/agent"
@@ -11,7 +12,8 @@ import (
 )
 
 // Which of the catalog an agent's lists show, picked one model at a time
-// on the Agents page (settings.HiddenModels): the line under an agent's
+// on the Agents page (settings.HiddenModels, or settings.PickedModels for an
+// agent shown only the models picked, #1337): the line under an agent's
 // name counts them, and opens the list to pick in.
 
 // modelCountJSON is how many models an agent's lists show, of those its
@@ -54,6 +56,9 @@ type agentModelJSON struct {
 	Hidden  bool   `json:"hidden,omitempty"`
 	// InUse: the agent is set to it, so it can't be taken out
 	InUse bool `json:"inUse,omitempty"`
+	// Own: one of Codex's own, a ChatGPT account's, which Codex lists
+	// ahead of magpie's until the user puts them in an order (#855)
+	Own bool `json:"own,omitempty"`
 }
 
 // takesCatalog reports whether an agent picks among magpie's catalog: some
@@ -88,11 +93,11 @@ func agentFields(a *agent.Agent, vals map[string]string) []fieldJSON {
 // with every one taken out they have no catalog entry left, yet the line is
 // the one way to put them back (#356): it stays while any is hidden.
 func agentModelCount(a *agent.Agent, fields []fieldJSON) *modelCountJSON {
-	id := a.ID
+	id := a.ListsFor()
 	if takesCatalog(fields) || a.ListsModels {
 		return modelCount(id)
 	}
-	if len(provider.HiddenModels(id)) == 0 {
+	if _, only := provider.PickedModels(id); !only && len(provider.HiddenModels(id)) == 0 {
 		return nil
 	}
 	if c := modelCount(id); c.Shown < c.Listed {
@@ -103,11 +108,11 @@ func agentModelCount(a *agent.Agent, fields []fieldJSON) *modelCountJSON {
 
 func modelCount(id string) *modelCountJSON {
 	listed, _ := provider.ListedFor(id)
-	off := provider.HiddenModels(id)
+	off := provider.ModelOff(id)
 	c := &modelCountJSON{Listed: len(listed)}
 	at := map[string]int{}
 	for _, e := range listed {
-		if off[e.ID] {
+		if off(e.ID) {
 			continue
 		}
 		c.Shown++
@@ -140,7 +145,7 @@ func usedBy(a *agent.Agent, vals map[string]string, e provider.Entry) bool {
 		if v == e.ID || strings.HasSuffix(v, "/"+e.ID) {
 			return true
 		}
-		if acc := e.Provider.Account; e.Group == "" && acc != nil && acc.Agent == a.ID && v == e.Model {
+		if acc := e.Provider.Account; e.Group == "" && acc != nil && acc.Agent == a.ListsFor() && v == e.Model {
 			return true
 		}
 	}
@@ -148,13 +153,14 @@ func usedBy(a *agent.Agent, vals map[string]string, e provider.Entry) bool {
 }
 
 func agentModelList(a *agent.Agent) []agentModelJSON {
-	listed, _ := provider.ListedFor(a.ID)
-	off := provider.HiddenModels(a.ID)
+	id := a.ListsFor()
+	listed, _ := provider.ListedFor(id)
+	off := provider.ModelOff(id)
 	vals := a.Values()
 	out := []agentModelJSON{}
 	for _, e := range listed {
 		m := agentModelJSON{ID: e.ID, Name: e.Name, Group: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context,
-			Hidden: off[e.ID], InUse: usedBy(a, vals, e)}
+			Hidden: off(e.ID), InUse: usedBy(a, vals, e), Own: id == "codex" && provider.CodexOwn(e)}
 		if m.Name == "" {
 			m.Name = e.Model
 		}
@@ -173,18 +179,52 @@ func agentModelList(a *agent.Agent) []agentModelJSON {
 }
 
 func agentModelsAPI(mux *http.ServeMux) {
+	// a model the agent picks sent in its vendor's fast mode, or not (#954):
+	// for is the option's fastFor, the agent whose requests it goes on
+	mux.HandleFunc("POST /api/agent-fast", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			For, Ref string
+			Fast     bool
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetFastPick(in.For, in.Ref, in.Fast); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]any{"fast": provider.IsFastPick(in.For, in.Ref)})
+	})
 	mux.HandleFunc("GET /api/agent-models/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		a, err := agent.Find(r.PathValue("id"))
 		if err != nil {
 			fail(rw, err)
 			return
 		}
-		writeJSON(rw, map[string]any{"models": agentModelList(a)})
+		_, only := provider.PickedModels(a.ListsFor())
+		writeJSON(rw, map[string]any{"models": agentModelList(a), "ordered": len(provider.ModelOrder(a.ListsFor())) > 0, "only": only})
 	})
 	// hidden is every entry to take out of the agent's lists; the others
 	// are shown, and one the agent is set to is kept in whatever is asked
+	//
+	// order, instead, is the order the agent's list puts them in (#855):
+	// the ones named first, as named; none puts back magpie's own. Every
+	// agent's (#1052): its list, the gateway's /models and the files magpie
+	// writes for it all come from provider.CatalogFor, which keeps it
+	//
+	// only switches the agent between being shown new models and being
+	// shown only the models picked for it (#1337), the ones shown now
+	// staying as they are; shown, for an agent shown only its picks, is
+	// every entry its lists show, the others not, a model that comes later
+	// among them
 	mux.HandleFunc("POST /api/agent-models/{id}", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct{ Hidden []string }
+		var in struct {
+			Hidden []string
+			Shown  *[]string
+			Order  *[]string
+			Only   *bool
+		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			fail(rw, err)
 			return
@@ -194,20 +234,78 @@ func agentModelsAPI(mux *http.ServeMux) {
 			fail(rw, err)
 			return
 		}
+		if in.Order != nil {
+			if err := provider.SetModelOrder(a.ListsFor(), *in.Order); err != nil {
+				fail(rw, err)
+				return
+			}
+			writeJSON(rw, map[string]any{"models": agentModelList(a), "ordered": len(provider.ModelOrder(a.ListsFor())) > 0})
+			return
+		}
+		id := a.ListsFor()
+		answer := func() {
+			_, only := provider.PickedModels(id)
+			writeJSON(rw, map[string]any{"models": agentModelList(a), "count": modelCount(id), "only": only})
+		}
+		if in.Only != nil {
+			if err := provider.SetOnlyPicked(id, *in.Only); err != nil {
+				fail(rw, err)
+				return
+			}
+			answer()
+			return
+		}
 		used := map[string]bool{}
-		for _, m := range agentModelList(a) {
+		listed := agentModelList(a)
+		for _, m := range listed {
 			used[m.ID] = m.InUse
 		}
-		var hidden []string
-		for _, id := range in.Hidden {
-			if !used[id] {
-				hidden = append(hidden, id)
+		// one the agent is set to is kept in whatever is asked, so it is
+		// among the picks too
+		if _, only := provider.PickedModels(id); only {
+			shown := map[string]bool{}
+			if in.Shown != nil {
+				for _, s := range *in.Shown {
+					shown[s] = true
+				}
+			} else {
+				// a list still sending what it hides, as it did before
+				// there were picks (one opened before the switch, in
+				// another window): every other listed one is shown
+				for _, m := range listed {
+					shown[m.ID] = !slices.Contains(in.Hidden, m.ID)
+				}
 			}
+			var picks []string
+			for _, m := range listed {
+				if shown[m.ID] || used[m.ID] {
+					picks = append(picks, m.ID)
+				}
+			}
+			if err := provider.SetPickedModels(id, picks); err != nil {
+				fail(rw, err)
+				return
+			}
+			answer()
+			return
 		}
-		if err := provider.SetHiddenModels(a.ID, hidden); err != nil {
+		var hidden []string
+		if in.Shown != nil {
+			// a list opened while the agent was shown only its picks, sent
+			// after it was switched back: every other listed one is hidden
+			for _, m := range listed {
+				if !slices.Contains(*in.Shown, m.ID) {
+					hidden = append(hidden, m.ID)
+				}
+			}
+		} else {
+			hidden = in.Hidden
+		}
+		hidden = slices.DeleteFunc(slices.Clone(hidden), func(s string) bool { return used[s] })
+		if err := provider.SetHiddenModels(id, hidden); err != nil {
 			fail(rw, err)
 			return
 		}
-		writeJSON(rw, map[string]any{"models": agentModelList(a), "count": modelCount(a.ID)})
+		answer()
 	})
 }

@@ -40,6 +40,7 @@ type Listing struct {
 	Providers []string          `json:"providers,omitempty"` // OpenCode's ids of those it signs in to
 	Community bool              `json:"community,omitempty"` // written by magpie's community
 	Replaces  string            `json:"replaces,omitempty"`  // the built-in subscription it does the work of
+	Kind      string            `json:"kind,omitempty"`      // "middleware" for gateway middleware; none for a provider
 	Summary   map[string]string `json:"summary,omitempty"`   // by language: en, zh
 }
 
@@ -321,7 +322,10 @@ type npmLatest struct {
 	Homepage    string `json:"homepage"`
 	Repository  any    `json:"repository"`
 	Author      any    `json:"author"`
-	NPMUser     struct {
+	// Main and Exports are what importing it loads (pkgEntry)
+	Main    string          `json:"main"`
+	Exports json.RawMessage `json:"exports"`
+	NPMUser struct {
 		Name string `json:"name"`
 	} `json:"_npmUser"`
 }
@@ -524,6 +528,15 @@ type Page struct {
 // from a folder on this computer or a git repository — the one its folder
 // carries.
 func Readme(ctx context.Context, name string) (Page, error) {
+	if IsGit(name) {
+		// one not installed yet (a repository tagged magpie-plugin): its
+		// README as GitHub has it
+		if _, err := os.Stat(Target(name)); err != nil {
+			if repo := githubRepo(name); repo != "" {
+				return githubReadme(ctx, repo)
+			}
+		}
+	}
 	if IsPath(name) || IsGit(name) {
 		return folderReadme(Target(name))
 	}
@@ -602,7 +615,7 @@ func Installed(spec string) string {
 }
 
 // Upgrade installs the newest version of one plugin: npm's, or its git
-// repository's commit now.
+// repository's commit now. One bun won't install says why.
 func Upgrade(ctx context.Context, name string) error {
 	for _, e := range Load().Plugins {
 		if (Name(e.Spec) == name || e.Spec == name) && IsGit(e.Spec) {
@@ -611,7 +624,9 @@ func Upgrade(ctx context.Context, name string) error {
 			return err
 		}
 		if Name(e.Spec) == name && !IsPath(e.Spec) {
-			_, err := Add(ctx, name)
+			// the version npm has now, not bun's "latest" (installAt);
+			// npm not answering, bun's as before
+			_, err := add(ctx, name, newestOf(ctx, name))
 			return err
 		}
 	}

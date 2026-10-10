@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -79,6 +81,36 @@ type pluginEntryJSON struct {
 	Moved []string `json:"moved"`
 	// AutoUpdated is the update magpie made to it by itself lately
 	AutoUpdated *plugin.Updated `json:"autoUpdated,omitempty"`
+	// Middleware is the gateway middleware it has, run in the gateway
+	// rather than the host: its hooks, how often they ran and how long
+	// they took, and why it didn't load
+	Middleware *middleware.State `json:"middleware,omitempty"`
+	// OptionsExample is what its package suggests for its options, which
+	// the options editor starts from when none are set
+	OptionsExample map[string]any `json:"optionsExample,omitempty"`
+	// IsMiddleware is whether its package has gateway middleware, said of
+	// one switched off too, which Middleware leaves out; MiddlewareOnly is
+	// whether that is all it has, no provider to sign in to
+	IsMiddleware   bool `json:"isMiddleware,omitempty"`
+	MiddlewareOnly bool `json:"middlewareOnly,omitempty"`
+	// Agent is the agent it adds (internal/agentplug), or why it isn't
+	// listed; IsAgent is whether its package has one, said of one switched
+	// off too; InMagpieOnly is whether all it has runs in magpie itself,
+	// middleware and an agent, no provider to sign in to
+	Agent        *pluginAgentJSON `json:"agent,omitempty"`
+	IsAgent      bool             `json:"isAgent,omitempty"`
+	InMagpieOnly bool             `json:"inMagpieOnly,omitempty"`
+	// Clashes are the providers it signs in to that another plugin signs
+	// in to as well (a plugin of the user's own beside a third party's):
+	// the host runs one plugin for each, and the row says which, with a
+	// way to pick this one
+	Clashes []pluginClashJSON `json:"clashes,omitempty"`
+}
+
+// pluginClashJSON is a provider two plugins sign in to, as a row says it.
+type pluginClashJSON struct {
+	plugin.Clash
+	Name string `json:"name"` // the provider's, as the plugin serving it names it
 }
 
 // autoUpdatedFor is how long a plugin's row says magpie updated it.
@@ -105,6 +137,8 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 	l := plugin.Load()
 	errs := map[string]string{}
 	names := map[string][]string{}
+	clashes := map[string][]plugin.Clash{}
+	idName := map[string]string{}
 	if len(l.Plugins) > 0 && (plugin.Running() || plugin.HasBun()) {
 		loaded, err := plugin.Plugins(ctx)
 		if err != nil {
@@ -113,14 +147,24 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		for _, p := range loaded {
 			errs[p.Spec] = p.Error
 		}
+		clashes = plugin.Clashes(loaded)
 		if ps, err := plugin.Providers(ctx); err == nil {
 			for _, p := range ps {
 				names[p.Spec] = append(names[p.Spec], p.Name)
+				idName[p.ID] = p.Name
 			}
 		}
 	}
 	// npm's newest, as it said last: asking it again is /api/plugins/npm's
 	known := plugin.InfoCached(npmNames(l.Plugins))
+	mws := middleware.States()
+	var agentErrs map[string]string
+	for _, e := range l.Plugins {
+		if f, _ := plugin.Agent(plugin.Target(e.Spec)); f != "" && !e.Off {
+			agentErrs = agent.PluginErrors()
+			break
+		}
+	}
 	for _, e := range l.Plugins {
 		j := pluginEntryJSON{Entry: e, Error: errs[e.Spec], Providers: names[e.Spec], Version: plugin.Installed(e.Spec)}
 		if npmPlugin(e.Spec) {
@@ -134,6 +178,27 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		}
 		if u, ok := plugin.LastUpdated(plugin.Name(e.Spec), time.Now().Add(-autoUpdatedFor)); ok && !plugin.IsPath(e.Spec) {
 			j.AutoUpdated = &u
+		}
+		if m, ok := mws[e.Spec]; ok {
+			j.Middleware = &m
+		}
+		if file, only := plugin.Middleware(plugin.Target(e.Spec)); file != "" {
+			j.IsMiddleware, j.MiddlewareOnly = true, only
+			j.OptionsExample = plugin.OptionsExample(plugin.Target(e.Spec))
+		}
+		if file, _ := plugin.Agent(plugin.Target(e.Spec)); file != "" {
+			j.IsAgent = true
+			j.InMagpieOnly = plugin.InMagpieOnly(plugin.Target(e.Spec))
+			if !e.Off {
+				j.Agent = pluginAgentOf(e.Spec, agentErrs)
+			}
+		}
+		for _, c := range clashes[e.Spec] {
+			n := idName[c.ID]
+			if n == "" {
+				n = c.ID
+			}
+			j.Clashes = append(j.Clashes, pluginClashJSON{Clash: c, Name: n})
 		}
 		j.Moved = provider.MovedOnto(e.Spec)
 		if j.Moved == nil {
@@ -232,6 +297,21 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("GET /api/plugins/listings", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, map[string]any{"listings": pluginListings(r.Context())})
 	})
+	// repositories on GitHub tagged magpie-plugin: nobody's list, shown
+	// apart as not reviewed, installed from the repository
+	mux.HandleFunc("GET /api/plugins/github", func(rw http.ResponseWriter, r *http.Request) {
+		// each one's own picture as the page can show it, kept here as an
+		// installed plugin's is (a data URI isn't sent on to the page)
+		repos := append([]plugin.Tagged(nil), plugin.TaggedRepos(r.Context())...)
+		said := make([]string, len(repos))
+		for i := range repos {
+			said[i] = repos[i].Icon
+		}
+		for i, ic := range provider.RepoIcons(said, 3*time.Second) {
+			repos[i].Icon = ic
+		}
+		writeJSON(rw, map[string]any{"repos": repos, "topic": plugin.Topic})
+	})
 	mux.HandleFunc("GET /api/plugins/npm", func(rw http.ResponseWriter, r *http.Request) {
 		names := []string{}
 		for _, n := range strings.Split(r.URL.Query().Get("names"), ",") {
@@ -303,8 +383,11 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 	// add, remove, update, turn on or off: each answers with the list
 	mux.HandleFunc("POST /api/plugins/{op}", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Spec string
-			Off  bool
+			Spec    string
+			Off     bool
+			Options map[string]any
+			// prefer's: the provider id the plugin is to serve
+			Provider string
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&in); err != nil && err != io.EOF {
 			fail(rw, err)
@@ -325,6 +408,10 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			err = plugin.Upgrade(ctx, plugin.Name(in.Spec))
 		case "off":
 			err = provider.SetPluginOff(ctx, in.Spec, in.Off)
+		case "options":
+			err = plugin.SetOptions(in.Spec, in.Options)
+		case "prefer":
+			err = plugin.Prefer(in.Spec, in.Provider)
 		default:
 			http.NotFound(rw, r)
 			return
@@ -446,6 +533,26 @@ func setChinaMirror(on bool) error {
 	}
 	if on {
 		plugin.RefreshMarket()
+	}
+	return nil
+}
+
+// pluginAgentJSON is the agent a plugin adds, as its row says it.
+type pluginAgentJSON struct {
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Icon  string `json:"icon,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+func pluginAgentOf(spec string, errs map[string]string) *pluginAgentJSON {
+	if err := errs[spec]; err != "" {
+		return &pluginAgentJSON{Error: err}
+	}
+	for _, a := range agent.All() {
+		if a.Plugin == spec {
+			return &pluginAgentJSON{ID: a.ID, Name: a.Name, Icon: a.Icon}
+		}
 	}
 	return nil
 }

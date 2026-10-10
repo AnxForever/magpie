@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	"github.com/yetone/magpie/internal/omarchy"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -27,13 +28,16 @@ import (
 // makeMain makes the main window, hidden, on url, with its hooks.
 func (h *host) makeMain(url string) *application.WebviewWindow {
 	z := h.zoom()
-	// the window opens at the size it was last given
-	width, height := 660, 600
-	if s := settings.Load().Window; len(s) == 2 && s[0] >= 560 && s[1] >= 420 {
-		width, height = s[0], s[1]
-	}
-	// and no smaller than its page's least at the text size
+	// the window opens at the size it was last given, no smaller than its
+	// page's least at the text size (window_rule.go); maximised again, if it
+	// was: on Linux as it is made, elsewhere once it is first shown
+	// (placeMain)
 	minW, minH := windowMin(z, 0, 0)
+	width, height := openSize(settings.Load().Window, minW, minH)
+	state := application.WindowStateNormal
+	if runtime.GOOS == "linux" && settings.Load().WindowMaximised {
+		state = application.WindowStateMaximised
+	}
 	// Windows' title bar in the page's colour from the first frame; the
 	// page keeps it so as its theme changes (TintTitleBar)
 	winOpts, winBg := windowChrome(cmp.Or(os.Getenv("MAGPIE_THEME"), settings.Load().Theme))
@@ -41,40 +45,40 @@ func (h *host) makeMain(url string) *application.WebviewWindow {
 		Name:             "main",
 		Title:            "magpie",
 		URL:              url,
-		Width:            max(width, minW),
-		Height:           max(height, minH),
+		Width:            width,
+		Height:           height,
 		MinWidth:         minW,
 		MinHeight:        minH,
 		Zoom:             z,
 		Hidden:           true,
+		StartState:       state,
 		Mac:              mainMacWindow(),
 		Windows:          winOpts,
 		BackgroundColour: winBg,
 	})
-	// A resize is kept once it settles; a maximised or full-screen window
-	// is the screen's size, not one the user gave it.
+	// A resize is kept once it settles (settle): the size, or that the
+	// window is maximised. Nothing is kept of a window not placed and shown
+	// yet (placeMain: a text size can resize it, unmaximised as yet), one
+	// let go (0×0), or one full screen or minimised, which keeps what was
+	// kept before it went so; nor, on Linux, of one hidden by then, since
+	// X11 drops a hidden window's maximised state.
 	var resized *time.Timer
 	w.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) {
 		if resized != nil {
 			resized.Stop()
 		}
 		resized = time.AfterFunc(500*time.Millisecond, func() {
-			if w.IsMaximised() || w.IsFullscreen() || w.IsMinimised() {
+			if h.placed.Load() != w || w.IsFullscreen() || w.IsMinimised() || runtime.GOOS == "linux" && !w.IsVisible() {
 				return
 			}
 			wd, ht := w.Size()
-			if wd < 560 || ht < 420 {
+			if wd == 0 {
 				return
 			}
-			// macOS reports a window a pixel short of the size it was
-			// opened at; kept as it is, the window would shrink a pixel at
-			// every start
-			s := settings.Load()
-			if len(s.Window) == 2 && abs(s.Window[0]-wd) <= 2 && abs(s.Window[1]-ht) <= 2 {
-				return
+			sw, sh := fitScreen(w)
+			if s := settings.Load(); settle(&s, wd, ht, sw, sh, w.IsMaximised()) {
+				settings.Save(s)
 			}
-			s.Window = []int{wd, ht}
-			settings.Save(s)
 		})
 	})
 	// Closing the window keeps the tray alive; quitting is a menu action.
@@ -90,10 +94,14 @@ func (h *host) makeMain(url string) *application.WebviewWindow {
 		}
 		h.hideMain()
 	})
+	// Out of full screen, magpie leaves the Dock again if it was there only
+	// for that (dockOnFullscreen).
 	w.OnWindowEvent(events.Mac.WindowDidExitFullScreen, func(*application.WindowEvent) {
 		if h.closing.Swap(false) {
 			h.hideMain()
+			return
 		}
+		h.dock(settings.Load(), true)
 	})
 	return w
 }
@@ -112,6 +120,21 @@ func (h *host) makePanel() *application.WebviewWindow {
 	trayOwnClicks()
 	w.OnWindowEvent(events.Mac.WindowShow, func(*application.WindowEvent) { trayHighlight(true) })
 	w.OnWindowEvent(events.Mac.WindowHide, func(*application.WindowEvent) { trayHighlight(false) })
+	// The system's close hides the panel, as Escape does: a title bar's X
+	// (KWin's, #1283), Alt+F4 or the window manager's close key. Closed, it
+	// was gone while the tray still opened it, and the icon did nothing
+	// until magpie restarted. One lightweight mode let go (no longer
+	// h.panel by then) is closed.
+	w.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if !application.InvokeSyncWithResult(func() bool { return h.panel == w }) {
+			return
+		}
+		e.Cancel()
+		w.Hide()
+		if omarchy.Hyprland() {
+			go omarchy.StopClicks()
+		}
+	})
 	return w
 }
 
@@ -125,6 +148,7 @@ func (h *host) madeAgain(w *application.WebviewWindow) {
 	}
 	if w.Name() == "panel" {
 		nameWindow(w, panelTitle)
+		ownFrame(w)
 	} else {
 		plainTitlebar(w)
 	}
@@ -172,9 +196,8 @@ func (h *host) lighten() {
 					ticks[i] = 0
 					continue
 				}
-				shown := w.IsVisible() || i == 0 && h.closing.Load()
 				var release bool
-				if ticks[i], release = lightStep(on, shown, ticks[i]); !release {
+				if ticks[i], release = lightStep(on, h.lightShown(w), ticks[i]); !release {
 					continue
 				}
 				ticks[i] = 0
@@ -207,8 +230,17 @@ func (h *host) panelWin() (w *application.WebviewWindow, again bool) {
 	return h.panel, false
 }
 
-// mainShown says whether the main window is up; on the main thread.
-func (h *host) mainShown() bool { return h.main != nil && h.main.IsVisible() }
+// lightShown says whether lightweight mode keeps w: it is up (windowUp),
+// or it is the main window leaving full screen to be closed; on the main
+// thread. A window open under another app's was let go as closed, and
+// Command-Tab back to magpie found it blank or gone (#1381).
+func (h *host) lightShown(w *application.WebviewWindow) bool {
+	return windowUp(w) || w == h.main && h.closing.Load()
+}
+
+// mainShown says whether the main window is up (windowUp), covered or not;
+// on the main thread.
+func (h *host) mainShown() bool { return h.main != nil && windowUp(h.main) }
 
 // openMain shows the main window on url ("" where it is), making it again
 // if lightweight mode let it go; on the main thread.
@@ -224,8 +256,8 @@ func (h *host) openMain(url string) {
 		h.madeAgain(w)
 		h.whenLoaded(w, func() {
 			if h.main == w {
-				w.Show()
-				w.Focus()
+				h.placeMain(w)
+				showHere(w)
 			}
 		})
 		return
@@ -236,6 +268,110 @@ func (h *host) openMain(url string) {
 	if h.loading[h.main] {
 		return // made again, it is shown once its page has come
 	}
-	h.main.Show()
-	h.main.Focus()
+	h.placeMain(h.main)
+	showHere(h.main)
+}
+
+// reopenMain answers a click on magpie's Dock icon (#1252). A window that is
+// open, on whichever Space, is left there, and magpie is activated as any
+// app is: the Mac takes the user to the window's Space. One closed or
+// minimised is shown as openMain shows it, on the Space the user is on.
+func (h *host) reopenMain() {
+	if h.main == nil || h.loading[h.main] || !windowOpen(h.main) {
+		h.openMain("")
+		return
+	}
+	h.closing.Store(false) // reopened while leaving full screen: it stays
+	if h.panel != nil {
+		h.panel.Hide()
+	}
+	activateApp()
+}
+
+// spaceSettle is how long a window just shown keeps moving to the active
+// Space: the Mac moves it once the order to the front is committed, after
+// Show has returned, and not at all if the flag is gone by then.
+const spaceSettle = 500 * time.Millisecond
+
+// showHere shows w and makes it key on the Space the user is on, wherever it
+// was last; on the main thread. It moves only while being shown: left on,
+// activating magpie in any way (the Dock, Command-Tab) would pull the open
+// window off its own Space onto the user's (#1252).
+func showHere(w *application.WebviewWindow) {
+	setMovesToActiveSpace(w, true)
+	w.Show()
+	w.Focus()
+	time.AfterFunc(spaceSettle, func() {
+		application.InvokeAsync(func() { setMovesToActiveSpace(w, false) })
+	})
+}
+
+// placeMain puts the main window, made and not shown yet, as it was last
+// left; on the main thread, before its first Show. On Windows, a size kept
+// on a larger screen is fitted to this one's work area and centred: Windows
+// doesn't, and the title bar would be out of reach. Then, if it was
+// maximised, it is maximised again; on Linux it was made so (StartState),
+// since GTK can't be asked about a window not shown yet.
+//
+// StartState can't do it elsewhere: on the Mac the window is centred after
+// it is zoomed, and so isn't zoomed when shown; on Windows it shows the
+// window before its page has come. Maximised while hidden, it zooms as it
+// appears on the Mac, and Show (SW_SHOW) keeps it so on Windows. Restored,
+// it goes back to the size it opened at. Wails' Maximise lets go of the
+// window's least size until its own UnMaximise, which a restore from the
+// Mac's title bar isn't; the least is put back at once. Before, too: the Mac
+// makes a window a point short, under its least when its size is the
+// least, and the resize to it then would stop the zoom.
+//
+// A Mac window larger than its screen is left to the Mac, which shows it
+// fitted to the screen, and zoomed: zoomed here as well, it would restore
+// to its own size, which the Mac fits to the screen again, so it couldn't
+// be restored at all.
+func (h *host) placeMain(w *application.WebviewWindow) {
+	if h.placed.Swap(w) == w || runtime.GOOS == "linux" {
+		return
+	}
+	if w.IsMaximised() {
+		return
+	}
+	wd, ht := w.Size()
+	sw, sh := h.mainRoom(w)
+	fw, fh, fitted := fitRoom(wd, ht, sw, sh)
+	if fitted && runtime.GOOS == "windows" {
+		w.SetSize(fw, fh)
+		w.Center()
+		fitted = false
+	}
+	if settings.Load().WindowMaximised && !fitted {
+		w.EnableSizeConstraints()
+		w.Maximise()
+		w.EnableSizeConstraints()
+	}
+}
+
+// mainRoom is the work area of the screen the main window is on, in the
+// units of its Size, 0s when unknown: DIPs on Windows, points on the Mac,
+// where GetScreen gives it in pixels (Wails' cScreenToScreen; the Screen
+// manager's copy is laid out only once the app has finished launching,
+// after the window may first be shown).
+func (h *host) mainRoom(w *application.WebviewWindow) (int, int) {
+	switch runtime.GOOS {
+	case "windows":
+		return screenRoom(w)
+	case "darwin":
+		if s, err := w.GetScreen(); err == nil && s != nil && s.ScaleFactor > 0 {
+			return int(float32(s.WorkArea.Width) / s.ScaleFactor), int(float32(s.WorkArea.Height) / s.ScaleFactor)
+		}
+	}
+	return 0, 0
+}
+
+// fitScreen is the work area the main window is fitted to, in the units of
+// its Size: Windows' (DIPs), 0s elsewhere — the Mac fits a window to its
+// screen itself, and GTK's window manager does.
+func fitScreen(w *application.WebviewWindow) (int, int) {
+	if runtime.GOOS != "windows" {
+		return 0, 0
+	}
+	return screenRoom(w)
 }

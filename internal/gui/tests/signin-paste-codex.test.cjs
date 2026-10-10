@@ -48,7 +48,7 @@ const W = {
     field: "Callback URL", finish: "Finish sign-in",
   },
   zh: {
-    say: "如果登录后浏览器停在打不开的页面（magpie 运行在服务器或 Docker 里），请把那个页面的完整地址复制并粘贴到这里。",
+    say: "若浏览器最终停在打不开的页面（magpie 运行在服务器或 Docker 中），请复制其完整地址粘贴到这里。",
     field: "回调 URL", finish: "完成登录",
   },
 };
@@ -70,6 +70,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const errors = [], posted = [];
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", server(lang, posted));
+      // the vendor's sign-in page, opened in a new window, gets an empty page:
+      // the real one is a page the test can't control (ChatGPT's Cloudflare
+      // challenge hung clicks on this page in Chromium, #1307)
+      await page.context().route((url) => url.hostname !== "magpie.test", (route) => route.fulfill({ contentType: "text/html", body: "" }));
       await page.goto("http://magpie.test/?view=providers");
       await page.locator("#addProvider").click();
       const sheet = page.locator("#addSheet");

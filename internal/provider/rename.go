@@ -96,6 +96,7 @@ func Rename(from, to string) error {
 	}
 	// the vendor's list last fetched goes with it
 	os.Rename(catalog.LivePath(from), catalog.LivePath(to))
+	os.Rename(catalog.LivePath(decisionsID(from)), catalog.LivePath(decisionsID(to)))
 	if err := store(f); err != nil {
 		return err
 	}
@@ -167,6 +168,7 @@ func OnAccountIDs() []string {
 func FreeID(id string) string { return freeID(id) }
 
 // hasEndpoint: a provider of the user's, not a subscription's model picks.
+// Vertex AI's has none of the four: it is asked at its project's address.
 func hasEndpoint(p Provider) bool {
-	return p.Chat != "" || p.Responses != "" || p.Anthropic != "" || p.Decide != ""
+	return p.Chat != "" || p.Responses != "" || p.Anthropic != "" || p.Gemini != "" || p.Decide != "" || p.IsVertex()
 }

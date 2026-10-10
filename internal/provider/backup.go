@@ -40,9 +40,12 @@ func Restore(ps []Provider) (added, replaced int, err error) {
 			continue
 		}
 		if p.Key == "" && len(p.Keys) == 0 {
-			p.Key, p.KeyName, p.Keys, p.KeyProtocol = f.Providers[i].Key, f.Providers[i].KeyName, f.Providers[i].Keys, f.Providers[i].KeyProtocol
+			p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight = f.Providers[i].Key, f.Providers[i].KeyName, f.Providers[i].Keys, f.Providers[i].KeyProtocol, f.Providers[i].KeyWeight
 			if p.BalanceToken == "" {
 				p.BalanceToken = f.Providers[i].BalanceToken
+			}
+			if p.AccessKeyID == "" && p.SecretAccessKey == "" {
+				p.AccessKeyID, p.SecretAccessKey = f.Providers[i].AccessKeyID, f.Providers[i].SecretAccessKey
 			}
 		}
 		f.Providers[i] = p
@@ -72,7 +75,7 @@ func RestoreGroups(gs []Group) error {
 		return err
 	}
 	for _, g := range gs {
-		if g.ID == "" || g.ID != Slug(g.ID) {
+		if g.ID == "" || g.ID != GroupSlug(g.ID) {
 			continue
 		}
 		g.Auto = false
@@ -104,14 +107,17 @@ func Mirror(ps []Provider, gs []Group) error {
 			continue
 		}
 		if h, ok := here[p.ID]; ok && p.Key == "" && len(p.Keys) == 0 {
-			p.Key, p.KeyName, p.Keys, p.KeyProtocol = h.Key, h.KeyName, h.Keys, h.KeyProtocol
+			p.Key, p.KeyName, p.Keys, p.KeyProtocol, p.KeyWeight = h.Key, h.KeyName, h.Keys, h.KeyProtocol, h.KeyWeight
 			if p.BalanceToken == "" {
 				p.BalanceToken = h.BalanceToken
+			}
+			if p.AccessKeyID == "" && p.SecretAccessKey == "" {
+				p.AccessKeyID, p.SecretAccessKey = h.AccessKeyID, h.SecretAccessKey
 			}
 		}
 		out = append(out, p)
 	}
 	f.Providers = out
-	f.Groups = slices.DeleteFunc(slices.Clone(gs), func(g Group) bool { return g.ID == "" || g.ID != Slug(g.ID) })
+	f.Groups = slices.DeleteFunc(slices.Clone(gs), func(g Group) bool { return g.ID == "" || g.ID != GroupSlug(g.ID) })
 	return store(f)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -22,8 +23,8 @@ const groupUsage = `usage:
                                           a name in use replaces that group
   magpie group set <id> k=v…              change one: name, models (the whole list, in order, patterns too),
                                           models+=<m>[,m2…] (append), models-=<m>[,m2…] (drop), routing, stays,
-                                          context (how long a request agents are told it takes: 272k; empty is
-                                          its largest model's), levels (the reasoning levels agents are offered:
+                                          context (how long a request agents are told it takes: 272k; smallest
+                                          is its smallest model's; empty is its largest model's), levels (the reasoning levels agents are offered:
                                           levels=none,low,medium,high,xhigh,max; empty is those every model has —
                                           a model without the one asked is sent its nearest),
                                           family (a tag: magpie visible shows agents families, not each group),
@@ -35,7 +36,16 @@ const groupUsage = `usage:
                                           fast=<m1>[,m2…] (the models sent in their vendor's fast mode; empty for none)
   magpie group pick <id> <model>          route the group manually, every request to that one of its models
                                           (as clicking it on the group's card in the Routing view does)
-  magpie group rm <id>                    remove a group (one magpie found is hidden instead)
+  magpie group copy <id> [name]           duplicate a group with its models, routing and rules, listed after it
+                                          (name: "<its name> copy" when left out; also: magpie group duplicate)
+  magpie group template [kind] [name]     a group for a common need, made of your own models in one go; without
+                                          a kind, lists them and the models each would take: smart (hard turns
+                                          to the strongest model, easy ones to a cheap one, a classifier telling
+                                          them apart), thrifty (a cheap model first, the strongest for high
+                                          reasoning or when the cheap ones fail), steady (the strongest model of
+                                          each of up to three providers, each behind the other). A name or id in
+                                          use is numbered, never replaced
+  magpie group rm <id>…                   remove groups (one magpie found is hidden instead)
   magpie group restore <id>               bring back a group magpie found that you removed
   magpie group auto [on|off]              whether magpie finds groups on its own (on by default); off, none is
                                           listed or served — yours, and found ones you changed, stay — and an
@@ -402,8 +412,12 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 		case "context":
 			// what agents are told the group takes; empty or 0 is its
 			// largest model's again
-			g.Context = 0
-			if strings.TrimSpace(v) != "" {
+			switch strings.ToLower(strings.TrimSpace(v)) {
+			case "", "largest", "max":
+				g.Context = 0
+			case "smallest", "min":
+				g.Context = provider.ContextSmallest
+			default:
 				g.Context, err = parseTokens(v)
 			}
 		case "levels", "level":
@@ -503,7 +517,7 @@ func findGroup(ref string) (provider.Group, error) {
 // newGroupID is the id a new group gets, as the Routing view makes it:
 // its name's, else "group", numbered past one taken.
 func newGroupID(name string) string {
-	base := provider.Slug(name)
+	base := provider.GroupSlug(name)
 	if base == "" {
 		base = "group"
 	}
@@ -553,19 +567,25 @@ func groupCmd(args []string) error {
 			return err
 		}
 		fmt.Println(green.Render("✓"), "saved", bold.Render(g.Name))
+		if slices.ContainsFunc(rest[1:], func(kv string) bool { return strings.HasPrefix(strings.ToLower(kv), "name=") }) {
+			// a new name isn't a new id: say what agents still ask for
+			fmt.Println(muted.Render("  its id stays " + g.ID + ": agents ask for " + provider.GroupPrefix + g.ID + " (a client given the name may ask by the name too)"))
+		}
 		return showGroup(g)
 	case "rm", "remove", "delete":
-		if len(rest) != 1 {
-			return fmt.Errorf("magpie group rm <id>")
+		if len(rest) < 1 {
+			return fmt.Errorf("magpie group rm <id>…")
 		}
-		g, err := removeGroup(rest[0])
+		gs, err := removeGroups(rest)
 		if err != nil {
 			return err
 		}
-		if g.Auto {
-			fmt.Println(green.Render("✓"), "removed", bold.Render(g.Name), muted.Render("· magpie found it, so it's hidden: magpie group restore "+g.ID+" brings it back"))
-		} else {
-			fmt.Println(green.Render("✓"), "removed", bold.Render(g.Name))
+		for _, g := range gs {
+			if g.Auto {
+				fmt.Println(green.Render("✓"), "removed", bold.Render(g.Name), muted.Render("· magpie found it, so it's hidden: magpie group restore "+g.ID+" brings it back"))
+			} else {
+				fmt.Println(green.Render("✓"), "removed", bold.Render(g.Name))
+			}
 		}
 		return nil
 	case "pick", "use":
@@ -578,6 +598,25 @@ func groupCmd(args []string) error {
 		}
 		fmt.Println(green.Render("✓"), bold.Render(g.Name), "sends every request to", bold.Render(g.Picked()), muted.Render("· routing manual"))
 		return showGroup(g)
+	case "copy", "duplicate", "dup", "clone":
+		if len(rest) < 1 {
+			return fmt.Errorf("magpie group copy <id> [name]")
+		}
+		src, err := findGroup(rest[0])
+		if err != nil {
+			return err
+		}
+		if src.Hidden {
+			return fmt.Errorf("%s was removed: magpie group restore %s brings it back first", src.ID, src.ID)
+		}
+		g, err := provider.CopyGroup(src.ID, strings.Join(rest[1:], " "))
+		if err != nil {
+			return err
+		}
+		fmt.Println(green.Render("✓"), "copied", bold.Render(src.Name), "to", bold.Render(g.Name), muted.Render("· agents pick it as "+provider.GroupPrefix+g.ID))
+		return showGroup(g)
+	case "template", "templates", "tpl":
+		return templateCmd(rest)
 	case "rule", "rules":
 		return ruleCmd(rest)
 	case "show":
@@ -665,8 +704,8 @@ func setGroup(ref string, pairs []string) (provider.Group, error) {
 	}
 	pruneRules(&g)
 	to := strings.ToLower(strings.TrimSpace(g.ID))
-	if to != from && (to == "" || to != provider.Slug(to)) {
-		return g, fmt.Errorf("a group's id must be lowercase letters, digits and dashes, not %q", g.ID)
+	if to != from && (to == "" || to != provider.GroupSlug(to)) {
+		return g, fmt.Errorf("a group's id must be lowercase letters, digits, dots and dashes, not %q", g.ID)
 	}
 	g.ID = from
 	if err := provider.SaveGroup(g); err != nil { // one magpie found is the user's now
@@ -691,6 +730,27 @@ func removedOnly(ref string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// removeGroups removes the groups refs name, all or none (lc on Discord).
+func removeGroups(refs []string) ([]provider.Group, error) {
+	if len(refs) == 1 {
+		g, err := removeGroup(refs[0])
+		return []provider.Group{g}, err
+	}
+	var gs []provider.Group
+	var ids []string
+	for _, ref := range refs {
+		g, err := findGroup(ref)
+		if err != nil {
+			return nil, err
+		}
+		if g.Hidden {
+			return nil, fmt.Errorf("%s is removed already; magpie group restore %s brings it back", g.ID, g.ID)
+		}
+		gs, ids = append(gs, g), append(ids, g.ID)
+	}
+	return gs, provider.DeleteGroups(ids)
 }
 
 func removeGroup(ref string) (provider.Group, error) {
@@ -733,7 +793,10 @@ func groupUses() map[string][]string {
 			continue
 		}
 		v := strings.TrimPrefix(a.Fields[0].Get(), "magpie/")
-		if id, ok := strings.CutPrefix(v, provider.GroupPrefix); ok {
+		// a group an agent is on carries Claude Code's [1m] mark, as a
+		// model's does, and these are the agents' own settings: the mark
+		// comes off before the id is looked up by it (GroupFinder)
+		if id, ok := provider.GroupIDOf(v); ok {
 			out[id] = append(out[id], a.Name)
 		}
 	}
@@ -873,7 +936,7 @@ func groups() error {
 			shown := typedMember(g, id)
 			switch {
 			case !served:
-				ms = append(ms, faint.Render(shown+" (not served)"))
+				ms = append(ms, faint.Render(shown+" ("+whyNotServed(model)+")"))
 			case picked:
 				ms = append(ms, green.Render("● "+shown))
 			case g.Routing == provider.Manual:
@@ -956,7 +1019,8 @@ func showGroup(g provider.Group) error {
 			}
 			line += muted.Render("  " + l)
 		} else {
-			line = faint.Render(line) + amber.Render("  not served now, skipped")
+			model, _ := provider.MemberEffort(id)
+			line = faint.Render(line) + amber.Render("  "+whyNotServed(model)+" now, skipped")
 		}
 		kv(k, line)
 	}
@@ -1005,4 +1069,58 @@ func showGroup(g provider.Group) error {
 		kv("used by", green.Render(strings.Join(u, ", ")))
 	}
 	return nil
+}
+
+// whyNotServed is why a group's member isn't served: most often a model its
+// provider's list has but doesn't expose, which `magpie provider models
+// <id> +<model>` puts right (MOMO on Discord: opencode-go/deepseek-flash).
+func whyNotServed(member string) string {
+	pid, model, ok := strings.Cut(member, "/")
+	if !ok || strings.HasPrefix(member, provider.GroupPrefix) {
+		return "not served"
+	}
+	p, err := provider.Find(pid)
+	if err != nil {
+		return "not served: no provider " + pid
+	}
+	if !p.On() {
+		return "not served: " + p.Name + " is off"
+	}
+	if slices.ContainsFunc(p.Available(), func(m catalog.Model) bool { return m.ID == model }) &&
+		!slices.ContainsFunc(p.Exposed(), func(m catalog.Model) bool { return m.ID == model }) {
+		return "not served: not exposed · magpie provider models " + p.ID + " +" + model
+	}
+	return "not served"
+}
+
+// templateCmd: magpie group template [kind] [name] (provider.Templates):
+// each template and the models it would take, or one of them added.
+func templateCmd(rest []string) error {
+	if len(rest) == 0 {
+		for _, tp := range provider.Templates() {
+			fmt.Println(bold.Render(tp.Kind), muted.Render("· "+provider.TemplateNames[tp.Kind]))
+			if tp.Why != "" {
+				fmt.Println("  " + muted.Render("can't be made: "+tp.Why))
+				continue
+			}
+			fmt.Println("  " + strings.Join(tp.Group.Members, " → "))
+			if tp.Group.Classifier != "" {
+				fmt.Println("  " + muted.Render("classifier "+tp.Group.Classifier))
+			}
+		}
+		fmt.Println(muted.Render("magpie group template <kind> [name] adds one"))
+		return nil
+	}
+	kind := strings.ToLower(rest[0])
+	for k, id := range provider.TemplateIDs {
+		if kind == id {
+			kind = k
+		}
+	}
+	g, err := provider.AddTemplate(kind, strings.Join(rest[1:], " "))
+	if err != nil {
+		return err
+	}
+	fmt.Println(green.Render("✓"), "added", bold.Render(g.Name), muted.Render("· agents pick it as "+provider.GroupPrefix+g.ID))
+	return showGroup(g)
 }

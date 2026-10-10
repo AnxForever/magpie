@@ -210,6 +210,8 @@ func (s *Server) serveCursor(w http.ResponseWriter, r *http.Request, from provid
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
+	// the vendor's own API is told the answer's format in words
+	req = req.inSystem()
 	req.Model = model
 	if conv := cursorConversation(r.Header, req.CacheKey, body); conv != "" {
 		r = r.WithContext(context.WithValue(r.Context(), cursorConvKey{}, conv))
@@ -226,7 +228,7 @@ func (s *Server) serveCursor(w http.ResponseWriter, r *http.Request, from provid
 	if events == nil {
 		return writeError(w, from, status, msg), msg
 	}
-	return relay(w, r, from, "Cursor", req, events, usage, cancel, func(string, string, bool) {})
+	return relay(w, r, from, "Cursor", req, events, usage, cancel, nil, func(string, string, bool) {})
 }
 
 // askCursor is a round for Cursor's API.
@@ -311,6 +313,7 @@ func (s *Server) cursorRun(ctx context.Context, req *Request, model, id, tok, ba
 		pw.Close()
 		return nil, 502, "Cursor: " + err.Error()
 	}
+	res = notAnAPIReply(res, "") // a web page served 200 (#1012)
 	if res.StatusCode/100 != 2 {
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 		res.Body.Close()
@@ -473,7 +476,7 @@ func cursorMessages(r *Request, tools []bridgeTool) [][]byte {
 			add(map[string]any{"role": "tool", "content": results})
 		}
 	}
-	for _, m := range r.Messages {
+	for _, m := range joinSplitCalls(r.Messages) {
 		if m.Role == "assistant" {
 			answer(nil)
 			var content []any

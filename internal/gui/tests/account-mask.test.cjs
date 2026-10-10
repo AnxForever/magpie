@@ -44,7 +44,7 @@ function serve(lang, panel) {
 
 const words = {
   en: { hide: "Hide accounts", hidden: "Accounts hidden", tip: /^Mask the accounts/, back: /click to show them/ },
-  zh: { hide: "账号打码", hidden: "账号已打码", tip: /^给本页的账号/, back: /点一下即可显示/ },
+  zh: { hide: "账号打码", hidden: "账号已打码", tip: /^给本页的账号/, back: /点击显示/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -63,9 +63,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.goto(url);
         return page;
       };
+      // a new context's storage is empty: no reload to clear it, which
+      // would cancel the page's first reads, each a page error in WebKit (#1350)
       const page = await open("http://magpie.test/?view=usage");
-      await page.evaluate(() => localStorage.removeItem("magpie.maskEmails"));
-      await page.reload();
       await page.waitForSelector(".subscription-account .user");
       const btn = page.locator("#usageMask");
       assert.equal((await btn.textContent()).trim(), w.hide);

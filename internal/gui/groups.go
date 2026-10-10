@@ -26,6 +26,9 @@ type groupsJSON struct {
 	// Moved: the agents turning found groups off moved off one of them,
 	// to its model from one provider (agent.Reseat)
 	Moved []agent.Move `json:"moved,omitempty"`
+	// Templates: groups for common needs made of the user's own models,
+	// which the page adds in a click (provider.Templates)
+	Templates []provider.Template `json:"templates"`
 }
 
 type groupJSON struct {
@@ -55,6 +58,9 @@ type memberJSON struct {
 	Model    string `json:"model,omitempty"` // what the vendor is asked for
 	On       int    `json:"on"`              // its keys or accounts on
 	Group    bool   `json:"group,omitempty"` // a routing group in the group; Name is its
+	// ProviderOff: its provider is switched off, so the group skips it
+	// until it is on again; Provider, Name, Icon and Model are still said
+	ProviderOff bool `json:"providerOff,omitempty"`
 	// Of is the model's id without the effort the member is fixed at, and
 	// Effort that effort ("provider/model:low"); "" for one without
 	Of     string `json:"of,omitempty"`
@@ -63,9 +69,21 @@ type memberJSON struct {
 	// model has one (provider.CanFast)
 	Fast    bool `json:"fast,omitempty"`
 	CanFast bool `json:"canFast,omitempty"`
+	// Efforts: the reasoning levels this member is offered. A model's own,
+	// or — a member that is itself a group — the levels it passes on to
+	// agents, which are the ones every model in it has (provider.groupEntries).
+	// The editor says them in the same chips a model's row does (modelInfo).
+	Efforts []string `json:"efforts,omitempty"`
 	// what a rule may send it: the tokens it takes, when known, and images
 	Context int  `json:"context,omitempty"`
 	Images  bool `json:"images,omitempty"`
+	// ImagesUnknown: nothing was read of its images either way, so it counts
+	// text-only for a describer (gateway.blindTo) without its list having
+	// said it takes none. Sent only when true: a model magpie has an answer
+	// for carries no such key, which is what the page reads as known (its
+	// own `images` decides then). Named apart from the Gateway page's
+	// `imageSet`, which means the user answered for the model themselves
+	ImagesUnknown bool `json:"imagesUnknown,omitempty"`
 }
 
 type modelRef struct {
@@ -81,6 +99,12 @@ type modelRef struct {
 	// CanFast: a group's member of it may be sent in its vendor's fast
 	// mode (provider.CanFast)
 	CanFast bool `json:"canFast,omitempty"`
+	// Images: agents are told it takes images (provider.Entry.Images); a
+	// group's editor says of each member what it says of it (#756).
+	// ImagesUnknown: nothing was read of it either way (imagesUnknown),
+	// sent only when true
+	Images        bool `json:"images,omitempty"`
+	ImagesUnknown bool `json:"imagesUnknown,omitempty"`
 }
 
 type poolJSON struct {
@@ -96,6 +120,16 @@ type poolJSON struct {
 	// made for more than one — each protocol's keys are a pool of their own
 	Protocol provider.Protocol `json:"protocol,omitempty"`
 }
+
+// seesImages is whether agents are told the model takes images: its list
+// says so, and nothing said otherwise (provider.Entry).
+func seesImages(e provider.Entry) bool { return e.Images && (e.ImageInput == nil || *e.ImageInput) }
+
+// imagesUnknown is whether nothing was read of the model's images either way:
+// no list said so, and what magpie reads of it doesn't say it sees. Such a
+// model counts text-only for a describer (gateway.blindTo), which is not its
+// list saying it takes none, and the page says unknown rather than text-only.
+func imagesUnknown(e provider.Entry) bool { return e.ImageInput == nil && !e.Images }
 
 // onOf is who a provider's requests spread over: its accounts, or keys.
 func onOf(p provider.Provider) (kind string, who []string) {
@@ -142,14 +176,14 @@ func keyPools(p provider.Provider) []poolJSON {
 }
 
 func groupsState() groupsJSON {
-	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Found: provider.AutoGroupsOn()}
+	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates()}
 	for _, e := range provider.Deciders() {
 		out.Deciders = append(out.Deciders, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon})
 	}
 	served := provider.Served()
 	for _, e := range served {
 		if e.Group == "" {
-			out.Models = append(out.Models, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model)})
+			out.Models = append(out.Models, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Context: e.Context, Efforts: e.Efforts, CanFast: provider.CanFast(e.Provider, e.Model), Images: seesImages(e), ImagesUnknown: imagesUnknown(e)})
 		}
 	}
 	for _, g := range provider.Groups() {
@@ -179,7 +213,10 @@ func groupsState() groupsJSON {
 					if e.ID == id {
 						_, ms, _ := provider.FindGroup(id)
 						m.Ready, m.Name, m.Icon, m.On = true, e.Name, e.Provider.Icon, len(ms)
-						m.Context, m.Images = e.Context, e.Images && (e.ImageInput == nil || *e.ImageInput)
+						m.Context, m.Images, m.ImagesUnknown = e.Context, seesImages(e), imagesUnknown(e)
+						// the levels it offers agents: those every model in
+						// it has, not one of them its own
+						m.Efforts = e.Efforts
 						gj.Ready = true
 						break
 					}
@@ -199,11 +236,16 @@ func groupsState() groupsJSON {
 				m.Fast = m.CanFast && g.IsFast(id)
 				for _, e := range served {
 					if e.Group == "" && e.Provider.ID == p.ID && e.Model == model {
-						m.Context, m.Images = e.Context, e.Images && (e.ImageInput == nil || *e.ImageInput)
+						m.Context, m.Images, m.ImagesUnknown = e.Context, seesImages(e), imagesUnknown(e)
+						m.Efforts = e.Efforts
 						break
 					}
 				}
 				gj.Ready = true
+			} else if pid, model, ok := strings.Cut(of, "/"); ok {
+				if p, err := provider.Find(pid); err == nil && !p.On() {
+					m.ProviderOff, m.Provider, m.Name, m.Icon, m.Model = true, p.ID, p.Name, p.Icon, model
+				}
 			}
 			gj.Info = append(gj.Info, m)
 		}
@@ -249,6 +291,11 @@ func groupRoutes(mux *http.ServeMux) {
 			// arrange: the groups by id, in the order the Routing page
 			// lists them (#779), which /v1/models follows too
 			Order []string `json:"order"`
+			// delete: several groups at once, all or none
+			IDs []string `json:"ids"`
+			// template: which one, saved under the group's name
+			// (provider.AddTemplate)
+			Kind string `json:"kind"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
@@ -269,8 +316,8 @@ func groupRoutes(mux *http.ServeMux) {
 				err = provider.SaveGroup(in)
 				break
 			}
-			if to == "" || to != provider.Slug(to) {
-				err = fmt.Errorf("a group's id must be lowercase letters, digits and dashes, not %q", in.ID)
+			if to == "" || to != provider.GroupSlug(to) {
+				err = fmt.Errorf("a group's id must be lowercase letters, digits, dots and dashes, not %q", in.ID)
 				break
 			}
 			in.ID = body.From
@@ -278,9 +325,21 @@ func groupRoutes(mux *http.ServeMux) {
 				err = provider.RenameGroup(body.From, to)
 			}
 		case "delete":
-			err = provider.DeleteGroup(in.ID)
+			if len(body.IDs) > 0 {
+				err = provider.DeleteGroups(body.IDs)
+			} else {
+				err = provider.DeleteGroup(in.ID)
+			}
 		case "show":
 			err = provider.ShowGroup(in.ID)
+		case "copy":
+			// a group as it is, under name (provider.CopyGroup)
+			_, err = provider.CopyGroup(in.ID, in.Name)
+		case "template":
+			_, err = provider.AddTemplate(body.Kind, in.Name)
+		case "switch":
+			// a group of the user's on or off, kept as it is (PAMI on Discord)
+			err = provider.SwitchGroup(in.ID, body.On)
 		case "arrange":
 			err = provider.SetGroupOrder(body.Order)
 		default:

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // fakeJWT is a token whose payload is the given claims; nobody checks the
@@ -78,6 +79,11 @@ func isolate(t *testing.T) {
 	forgetClaudeCredential()
 	forgetClaudeStatus()
 	forgetDevinStatus()
+	// nor an account's allowance another test read, which LoginUsage and
+	// the Usage page share
+	loginUsageCache.Lock()
+	loginUsageCache.m, loginUsageCache.pending = nil, nil
+	loginUsageCache.Unlock()
 	t.Cleanup(func() {
 		claudeKeychain, claudeBase, claudeExecutable = oldKeychain, oldBase, oldExe
 		cursorKeychain, DevinExecutable = oldCursor, oldDevin
@@ -511,7 +517,7 @@ func TestClaudeSignedOut(t *testing.T) {
 	status := `{"loggedIn": true, "email": "me@example.com", "subscriptionType": "max"}`
 	exe := filepath.Join(home, "claude")
 	fake := func() {
-		os.WriteFile(exe, []byte("#!/bin/sh\ncat <<'X'\n"+status+"\nX\n"), 0o755)
+		testenv.Program(t, exe, "#!/bin/sh\ncat <<'X'\n"+status+"\nX\n")
 		forgetClaudeStatus()
 	}
 	claudeExecutable = func() string { return exe }
@@ -576,5 +582,31 @@ func TestKeychainText(t *testing.T) {
 	}
 	if _, wasHex := keychainText([]byte("abcd")); wasHex {
 		t.Fatal("hex that isn't JSON taken")
+	}
+}
+
+// The cached credentials are handed out by value, but their raw blob is one
+// map: marshal is called on it from several goroutines at once (the
+// gateway's limitHeaders beside a run's own read, CI's -race on 01e66e0f),
+// so it must not write into it.
+func TestClaudeCredentialsMarshalLeavesTheBlob(t *testing.T) {
+	c, ok := parseClaudeCredentials([]byte(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-a","refreshToken":"sk-ant-ort01-a","expiresAt":1},"mcpOAuth":{"x":{"accessToken":"m"}}}`))
+	if !ok {
+		t.Fatal("not parsed")
+	}
+	c.OAuth.AccessToken, c.OAuth.SubscriptionType = "sk-ant-oat01-b", "max"
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if b, err := c.marshal(); err != nil || !strings.Contains(string(b), "sk-ant-oat01-b") || !strings.Contains(string(b), "mcpOAuth") {
+				t.Errorf("marshal %s %v", b, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if o := c.raw["claudeAiOauth"].(map[string]any); o["accessToken"] != "sk-ant-oat01-a" || o["subscriptionType"] != nil {
+		t.Fatalf("the blob was written into: %v", o)
 	}
 }

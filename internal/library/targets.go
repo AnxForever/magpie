@@ -9,6 +9,7 @@ import (
 
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/desktopdir"
 )
 
 // Target is where one agent keeps each of the three: an empty path is
@@ -55,6 +56,22 @@ func claudeJSON() string {
 		return filepath.Join(d, ".claude.json")
 	}
 	return filepath.Join(home(), ".claude.json")
+}
+
+// codebuddyMCP is the file CodeBuddy Code, its folder dir, reads its
+// user-wide MCP servers from (see targetOf).
+func codebuddyMCP(dir string) string {
+	base := appdir.Getenv("CODEBUDDY_CONFIG_DIR")
+	if base == "" {
+		base = home()
+	}
+	all := []string{filepath.Join(dir, ".mcp.json"), filepath.Join(dir, "mcp.json"), filepath.Join(base, ".codebuddy.json")}
+	for _, p := range all {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return all[0]
 }
 
 func codexDir() string {
@@ -205,6 +222,17 @@ func targetOf(a *agent.Agent) *Target {
 		} else {
 			t.Skills = sharedSkillsDir()
 		}
+	case "alma":
+		// Alma reads personal skills from ~/.config/alma/skills, on every
+		// system (its home, not its data folder), and Claude Code's, Codex's
+		// and ~/.agents/skills besides (its skills service, #824). Its MCP
+		// servers are ~/.config/alma/mcp.json's mcpServers, read as Alma
+		// starts and when its MCP settings refresh (0.4.164's
+		// out/main/index.js, #1292). It has no user-wide instructions file,
+		// its prompts being its settings' own
+		t.Skills = filepath.Join(h, ".config", "alma", "skills")
+		t.MCP = &mcpFile{Path: filepath.Join(h, ".config", "alma", "mcp.json"), Format: fmtAlma}
+		t.SkillsAlso = []string{"claude", "codex"}
 	case "cindy":
 		// Cindy keeps its user-wide skills in ~/.agents/skills
 		t.Skills = sharedSkillsDir()
@@ -257,13 +285,36 @@ func targetOf(a *agent.Agent) *Target {
 		// Command Code reads ~/.commandcode/mcp.json (getUserMcpConfigPath)
 		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtCommandCode}
 		t.Skills = filepath.Join(a.Dir, "skills")
-	case "workbuddy", "hanako", "fx":
-		// a skills folder in the agent's own: WorkBuddy's ~/.workbuddy,
-		// Hanako's $HANA_HOME, fx's ~/.fx — each said by its docs or
-		// source. No MCP servers: WorkBuddy runs one in its mcp.json only
-		// once it is approved in WorkBuddy, OpenHanako only once switched
-		// on for each agent and tool, and fx's mcp.json, which one entry it
-		// refuses makes it read none of, isn't one magpie could try.
+	case "workbuddy", "workbuddy-ai":
+		// WorkBuddy's own servers are mcp.json in its folder (WorkBuddy
+		// AI's, ~/.workbuddy-ai, for the international build)
+		// ($WORKBUDDY_CONFIG_DIR, else ~/.workbuddy: ConnectorService's
+		// customMcpConfigPath in 5.5.6's app.asar), mcpServers as Claude
+		// Code's, which its CodeBuddy engine runs (type stdio, http or sse).
+		// WorkBuddy connects one only once it is trusted there: a server
+		// mcp-approvals.json has no approval for (its command, args and env
+		// names, or its URL's origin) is listed as needing approval until it
+		// is switched on in WorkBuddy, which magpie leaves to the user
+		// (#1266). Its skills are in skills/ there.
+		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtClaude}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "codebuddy":
+		// CodeBuddy Code's user-wide servers are in the first of
+		// .mcp.json, mcp.json (in its folder) and .codebuddy.json (beside
+		// it, or in $CODEBUDDY_CONFIG_DIR) that is there, else the first,
+		// as it reads them and `codebuddy mcp add -s user` writes them
+		// (PathUtils.resolveMcpFilePath, @tencent-ai/codebuddy-code
+		// 2.162.0); mcpServers as Claude Code's, and no approval for a
+		// user's server (isAllowed asks only of a project's). Its skills
+		// are in skills/ in its folder (getHomeSkillsDir) (#1266).
+		t.MCP = &mcpFile{Path: codebuddyMCP(a.Dir), Format: fmtClaude}
+		t.Skills = filepath.Join(a.Dir, "skills")
+	case "hanako", "fx":
+		// a skills folder in the agent's own: Hanako's $HANA_HOME, fx's
+		// ~/.fx — each said by its docs or source. No MCP servers:
+		// OpenHanako runs one only once switched on for each agent and
+		// tool, and fx's mcp.json, which one entry it refuses makes it read
+		// none of, isn't one magpie could try.
 		t.Skills = filepath.Join(a.Dir, "skills")
 	case "atomcode":
 		// AtomCode reads ~/.atomcode/ATOMCODE.md before every conversation
@@ -273,6 +324,14 @@ func targetOf(a *agent.Agent) *Target {
 		t.Instructions = filepath.Join(a.Dir, "ATOMCODE.md")
 		t.MCP = &mcpFile{Path: filepath.Join(a.Dir, "mcp.json"), Format: fmtOmp}
 		t.Skills = filepath.Join(a.Dir, "skills")
+	case "zed":
+		// Zed reads its MCP servers from context_servers in the settings.json
+		// magpie sets its model in (~/.config/zed, $XDG_CONFIG_HOME/zed,
+		// %APPDATA%\Zed or $MAGPIE_ZED_CONFIG_DIR: agent.zed), and reloads
+		// the file as it changes (crates/settings_content/src/project.rs
+		// ProjectSettingsContent.context_servers, zed-industries/zed
+		// 2c99f547; lc on Discord)
+		t.MCP = &mcpFile{Path: a.Path, Format: fmtZed}
 	case "claude-desktop":
 		// Claude Desktop reads only commands from its file: a remote server
 		// is added in its own Connectors settings. In its 3p mode (magpie's
@@ -280,8 +339,10 @@ func targetOf(a *agent.Agent) *Target {
 		// where that folder is the servers go into both: each mode finds
 		// them, a switch between the two leaves nothing behind in either
 		t.MCP = &mcpFile{Path: filepath.Join(filepath.Dir(a.Path), "claude_desktop_config.json"), Format: fmtDesktop}
-		if p := agent.DesktopConfig3p(h); p != t.MCP.Path && isDir(filepath.Dir(p)) {
-			t.MCP.Also = []string{p}
+		for _, p := range agent.DesktopConfigs3p(h) {
+			if p != t.MCP.Path && isDir(filepath.Dir(p)) {
+				t.MCP.Also = append(t.MCP.Also, p)
+			}
 		}
 		// Cowork's skills, in every account's skills-plugin (#638)
 		if t.Desktop = desktopSkillRoots(a.Dir); len(t.Desktop) > 0 {
@@ -296,12 +357,13 @@ func targetOf(a *agent.Agent) *Target {
 // wslTargetOf is where an agent in a WSL distro keeps them: its files at
 // their defaults under the distro's $HOME (the distro's variables that
 // move them aren't read), opened through \\wsl.localhost; nil while the
-// distro is stopped, which opening them would start. What is written is
+// distro is stopped, which opening them would start (asked again here: the
+// agent may have been made before the user stopped it). What is written is
 // the same as for this machine's agent: nothing in it names a place on
 // Windows, and each skill is a copy.
 func wslTargetOf(a *agent.Agent) *Target {
 	h := a.Home
-	if h == "" {
+	if h == "" || !agent.WSLRunning(a.WSL) {
 		return nil
 	}
 	t := &Target{Agent: a, Copy: true}
@@ -310,13 +372,13 @@ func wslTargetOf(a *agent.Agent) *Target {
 	case "claude":
 		d := filepath.Join(h, ".claude")
 		t.Instructions = filepath.Join(d, "CLAUDE.md")
-		t.MCP = &mcpFile{Path: filepath.Join(h, ".claude.json"), Format: fmtClaude, WSL: true}
+		t.MCP = &mcpFile{Path: filepath.Join(h, ".claude.json"), Format: fmtClaude, WSL: true, Distro: a.WSL, Home: linuxHome(h)}
 		t.Skills = filepath.Join(d, "skills")
 	case "codex":
 		d := filepath.Join(h, ".codex")
 		t.Instructions = filepath.Join(d, "AGENTS.md")
 		t.Override = filepath.Join(d, "AGENTS.override.md")
-		t.MCP = &mcpFile{Path: filepath.Join(d, "config.toml"), Format: fmtCodex, WSL: true}
+		t.MCP = &mcpFile{Path: filepath.Join(d, "config.toml"), Format: fmtCodex, WSL: true, Distro: a.WSL, Home: linuxHome(h)}
 		t.Skills = filepath.Join(d, "skills")
 	case "pi":
 		// its MCP servers go where the Pi installed there reads them,
@@ -327,10 +389,46 @@ func wslTargetOf(a *agent.Agent) *Target {
 	case "omo":
 		d := filepath.Join(h, ".omo", "agent")
 		t.Instructions = filepath.Join(d, "AGENTS.md")
-		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative, WSL: true}
+		t.MCP = &mcpFile{Path: filepath.Join(d, "mcp.json"), Format: fmtPiNative, WSL: true, Distro: a.WSL, Home: linuxHome(h)}
 		t.Skills = filepath.Join(d, "skills")
 	default:
+		return wslOwnFolder(a)
+	}
+	return t
+}
+
+// ownFolder are the agents that keep all the library gives them in their
+// own folder (a.Dir, or beside a.Path), read from no variable of this
+// machine's and from nothing under its home: one magpie found in a distro
+// has that folder at the distro's home already, so its target there is
+// the one targetOf makes on this machine, given copies (#1323).
+var ownFolder = map[string]bool{
+	"hermes": true, "omp": true, "opencode": true, "mimocode": true, "droid": true,
+	"grok": true, "commandcode": true, "atomcode": true, "qoder": true, "qoder-cn": true,
+	"minimax-code": true, "fx": true, "dsh": true,
+}
+
+// wslOwnFolder is the target of a, an agent in a running WSL distro that
+// keeps everything in its own folder; nil for any other.
+func wslOwnFolder(a *agent.Agent) *Target {
+	id, at, _ := strings.Cut(a.ID, "@")
+	if !ownFolder[id] {
 		return nil
+	}
+	local := *a
+	local.ID, local.WSL = id, ""
+	t := targetOf(&local)
+	if t == nil {
+		return nil
+	}
+	t.Agent, t.Copy = a, true
+	if t.MCP != nil {
+		t.MCP.WSL, t.MCP.Distro, t.MCP.Home = true, a.WSL, linuxHome(a.Home)
+	}
+	// the skills it reads besides its own are those agents' in the same
+	// distro, not this machine's
+	for i, o := range t.SkillsAlso {
+		t.SkillsAlso[i] = o + "@" + at
 	}
 	return t
 }
@@ -338,15 +436,14 @@ func wslTargetOf(a *agent.Agent) *Target {
 // apps are what the library can give MCP servers to that aren't agents
 // magpie sets up: known by the folder they keep their settings in.
 func apps() []*agent.Agent {
-	d, err := os.UserConfigDir()
-	if err != nil {
-		return nil
-	}
-	// Desktop only ever run in its 3p mode has no Claude folder, only
-	// Claude-3p: its file is the one there
-	dir := filepath.Join(d, "Claude")
-	if p := agent.DesktopConfig3p(home()); !isDir(dir) && isDir(filepath.Dir(p)) {
-		dir = filepath.Dir(p)
+	// Desktop's own folder (%APPDATA%\Claude on Windows, the MSIX
+	// package's for a packaged Desktop, which doesn't see a file written
+	// into %APPDATA%). Desktop only ever run in its 3p mode has no Claude
+	// folder, only Claude-3p: its file is the one there
+	d := desktopdir.Here()
+	dir := d.Data
+	if !isDir(dir) && isDir(d.ThreeP) {
+		dir = d.ThreeP
 	}
 	return []*agent.Agent{
 		{ID: "claude-desktop", Name: "Claude Desktop", Icon: "claude-color", Dir: dir, Path: filepath.Join(dir, "claude_desktop_config.json")},
@@ -385,7 +482,7 @@ func Targets() []*Target {
 
 // readsShared are the agents that read ~/.agents/skills as well as their
 // own folder (each one's docs or source).
-var readsShared = []string{"codex", "gemini", "opencode", "crush", "dsh", "commandcode", "devin", "droid", "cline", "grok", "fx"}
+var readsShared = []string{"codex", "gemini", "opencode", "crush", "dsh", "commandcode", "devin", "droid", "cline", "grok", "fx", "alma"}
 
 // readsWith adds to each agent's SkillsAlso the agents whose folder it
 // reads skills from too: one that is the very same folder (Kimi Code's,
@@ -458,7 +555,7 @@ func Takes(q, kind string) (string, error) {
 	t := targetOf(a)
 	var has bool
 	what := map[string]string{"instructions": "instructions", "mcp": "MCP servers", "skills": "skills"}[kind]
-	if t == nil && a.WSL != "" && a.Home == "" {
+	if t == nil && a.WSL != "" && (a.Home == "" || !agent.WSLRunning(a.WSL)) {
 		return "", fmt.Errorf("WSL %s isn't running: start it, and %s can be given %s", a.WSL, a.Name, what)
 	}
 	if t != nil {
@@ -472,7 +569,40 @@ func Takes(q, kind string) (string, error) {
 		}
 	}
 	if !has {
-		return "", fmt.Errorf("%s has no user-wide place for %s that magpie knows of", a.Name, what)
+		return "", fmt.Errorf("%s%s", noPlace(a, kind, what), takenBy(kind, what))
 	}
 	return a.ID, nil
+}
+
+// noPlace says why an agent can't be given kind, and where it gets it
+// instead when another agent's files are what it reads (MOMO on Discord).
+func noPlace(a *agent.Agent, kind, what string) string {
+	switch {
+	case a.ID == "openchamber":
+		// OpenChamber's server reads the global AGENTS.md, skills folder
+		// and opencode.json from OpenCode's config folder
+		// (packages/web/server/lib/opencode/shared.js), and the OpenCode it
+		// runs reads them there too
+		return fmt.Sprintf("OpenChamber has no place of its own for %s: it runs OpenCode on OpenCode's config, so it has what OpenCode is given · give them to opencode", what)
+	case a.ID == "claude-desktop" && kind == "instructions":
+		// Desktop's chat takes its instructions in its own settings, kept
+		// with the Claude account, not in a file; its Code tab is Claude
+		// Code, which reads Claude Code's CLAUDE.md
+		return "Claude Desktop keeps its instructions in its own settings, with your Claude account, not in a file magpie can write; its Code tab runs Claude Code, which reads Claude Code's · give them to claude"
+	}
+	return fmt.Sprintf("%s has no user-wide place for %s that magpie knows of", a.Name, what)
+}
+
+// takenBy lists the agents here that kind can be given to.
+func takenBy(kind, what string) string {
+	var ids []string
+	for _, t := range Targets() {
+		if kind == "instructions" && t.Instructions != "" || kind == "mcp" && t.MCP != nil || kind == "skills" && t.Skills != "" {
+			ids = append(ids, t.Agent.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	return "\n  agents here that take " + what + ": " + strings.Join(ids, ", ")
 }

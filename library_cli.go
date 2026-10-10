@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +26,9 @@ const libraryUsage = `magpie library                     what the library gives 
   magpie library skill rm <name>     (skills are installed from the app's Library page)
   magpie library skill rm --all [--yes]   every skill out of the library and the agents (asks first; --yes doesn't)
   magpie library skill update [name] fetch a skill from GitHub again; with no name, every one from there
+                                     (one changed here is left as it is; update it by name with --replace-edits)
+  magpie library skill how link|copy [agent]   give skills as links to the library's or as copies: every agent's way, or one agent's
+  magpie library skill how default <agent>     the agent goes the library's way again
   magpie library skill use-library <name> <agent>   an agent's own skill by that name is in the way: set it aside, link the library's
   magpie library skill keep-own <name> <agent>      …or keep the agent's, and take the agent off the library's
   magpie library rtk                 which agents run their shell commands through RTK (rtk-ai.app), to save tokens
@@ -128,12 +132,29 @@ func libraryCmd(args []string) error {
 			res, err = library.UseLibrarySkill(rest[1], rest[2])
 		case len(rest) == 3 && rest[0] == "keep-own":
 			res, err = library.KeepAgentSkill(rest[1], rest[2])
-		case len(rest) == 2 && rest[0] == "update":
-			if res, err = library.UpdateSkill(rest[1]); err == nil {
+		case (len(rest) == 2 || len(rest) == 3 && rest[2] == "--replace-edits") && rest[0] == "update" && !strings.HasPrefix(rest[1], "-"):
+			// a skill changed here is updated only when asked to be, its
+			// changed version kept with the backups (#1449)
+			var edited *library.EditedError
+			if res, err = library.UpdateSkill(rest[1], len(rest) == 3); err == nil {
 				fmt.Println(green.Render("✓"), rest[1], "is up to date")
+			} else if errors.As(err, &edited) {
+				err = fmt.Errorf("%w\n  magpie library skill update %s --replace-edits  takes GitHub's in its place, keeping yours with the backups", err, rest[1])
 			}
 		case len(rest) == 1 && rest[0] == "update":
 			res, err = library.UpdateSkills()
+		case (len(rest) == 2 || len(rest) == 3) && rest[0] == "how":
+			how, agent := rest[1], ""
+			if len(rest) == 3 {
+				agent = rest[2]
+			}
+			if how == "default" {
+				if agent == "" {
+					return fmt.Errorf("usage:\n  %s", libraryUsage)
+				}
+				how = ""
+			}
+			res, err = library.SetSkillHow(agent, how)
 		default:
 			return fmt.Errorf("usage:\n  %s", libraryUsage)
 		}
@@ -374,6 +395,8 @@ func rtkCmd(args []string) error {
 		switch {
 		case v.Note != "":
 			fmt.Println(amber.Render("  " + v.Note))
+		case v.Waiting != "":
+			fmt.Println(amber.Render("  RTK "+v.Latest+" is out · waiting for "+v.Waiting), muted.Render("— "+v.Waiting+" has "+v.WaitingHas+" so far, and usually has a release within a few days"))
 		case v.Latest != "" && v.Version != "" && library.RTKNewer(v.Latest, v.Version):
 			up := "update it the way it was installed"
 			if v.Upgrade != "" {
@@ -410,6 +433,9 @@ func rtkCmd(args []string) error {
 	for _, a := range v.Agents {
 		mark := muted.Render("off")
 		note := ""
+		if a.NoHook {
+			mark, note = muted.Render(" – "), muted.Render(" — "+a.Blocked)
+		}
 		if a.On {
 			mark = green.Render("on ")
 			if v.Path == "" {

@@ -70,12 +70,28 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(await page.locator(`#${id} .opt.on`).textContent(), off);
         }
         const consent = await page.locator("#otelSessionsRow").textContent();
-        for (const phrase of (lang === "zh" ? ["所有本地会话", "未通过 Magpie", "文件内容", "命令输出", "遮蔽敏感信息"] : ["all local sessions", "not routed through Magpie", "file contents", "command output", "secrets masked"])) assert(consent.includes(phrase), phrase);
+        for (const phrase of (lang === "zh" ? ["全部本地会话", "未经 Magpie", "文件内容", "命令输出", "遮蔽敏感信息"] : ["all local sessions", "not routed through Magpie", "file contents", "command output", "secrets masked"])) assert(consent.includes(phrase), phrase);
         const mode = page.locator("#otelBodiesRow .opt.on");
         assert.equal(await mode.textContent(), modes[0]);
         assert.equal(await mode.getAttribute("aria-pressed"), "true");
         assert.equal(await page.locator("#otelHeadersRow input").getAttribute("type"), "password");
         assert((await page.locator("#otelList").textContent()).includes(lang === "zh" ? "环境变量" : "Environment variables"));
+        // the groups are headed as every other Settings tab heads them: a
+        // small label over a card of its own, not a grey band inside one card
+        assert.deepEqual(await page.locator("#otelList > .row-head .label").allTextContents(),
+          lang === "zh" ? ["采集服务连接", "导出范围", "链路内容"] : ["Collector connection", "Export scope", "Trace content"]);
+        const heads = await page.evaluate(() => {
+          const look = (e) => { const c = getComputedStyle(e); return [c.fontSize, c.fontWeight, c.color, c.textTransform, c.letterSpacing, c.backgroundColor].join(" "); };
+          return {
+            otel: look(document.querySelector("#otelList > .row-head .label")),
+            network: look(document.querySelector("#setPage-network .row-head .label")),
+            carded: [...document.querySelectorAll("#otelList > .row-head")].every((h) => h.nextElementSibling?.matches(".list.prefs")),
+            inside: document.querySelectorAll("#otelList .list .row-head, #otelList .otel-section").length,
+          };
+        });
+        assert.equal(heads.otel, heads.network, "Observability's headings look like Network's");
+        assert(heads.carded, "each heading has its own card under it");
+        assert.equal(heads.inside, 0, "no heading inside a card");
         const saved = async (action) => {
           const n = posts.length + 1;
           const response = page.waitForResponse((r) => r.url().endsWith("/api/settings") && r.request().method() === "POST");

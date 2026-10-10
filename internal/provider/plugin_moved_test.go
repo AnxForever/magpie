@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // movedPlugin sets up a built-in moved onto its plugin, id's accounts as
@@ -169,10 +169,7 @@ func TestAllLoginsMoved(t *testing.T) {
 // installed first when it isn't there, the code the page asks about shown
 // to copy, and the account it signs in to named as the one in use.
 func TestMovedSignInAsBuiltIn(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	home := claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -230,7 +227,7 @@ func TestMovedSignInAsBuiltIn(t *testing.T) {
 	runInstaller = func(ctx context.Context, c agentCLI) ([]byte, error) {
 		<-release
 		os.MkdirAll(filepath.Dir(exe), 0o755)
-		return nil, os.WriteFile(exe, []byte("#!/bin/sh\n"), 0o755)
+		return nil, testenv.WriteProgram(exe, "#!/bin/sh\n")
 	}
 	t.Cleanup(func() { runInstaller = oldRun })
 

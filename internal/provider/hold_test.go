@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // A request that only reads builds the catalog once for all its look-ups
@@ -46,6 +47,7 @@ func TestHoldBuildsOnce(t *testing.T) {
 // the agents read settings.json for every model of every agent), and a
 // setting saved meanwhile is seen at once.
 func TestHoldReadsSettingsOnce(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // a run starts from no files, not the last run's
 	defer Hold()()
 	if _, ok := VisibleTo("held-agent"); ok {
 		t.Fatal("a visibility before any was set")
@@ -69,6 +71,7 @@ func TestHoldReadsSettingsOnce(t *testing.T) {
 
 // A provider saved while a request holds the catalog is in it at once.
 func TestHoldSeesWrites(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // a run starts from no files, not the last run's
 	if err := Save(Provider{ID: "held", Name: "Held", Chat: "https://held.example/v1", Key: "k", Models: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +103,7 @@ func TestHoldSeesWrites(t *testing.T) {
 // account written meanwhile has them built again, and a caller changing
 // its list changes no one else's.
 func TestHoldBuildsProvidersOnce(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // a run starts from no files, not the last run's
 	if err := Save(Provider{ID: "once", Name: "Once", Chat: "https://once.example/v1", Key: "k", Models: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +147,7 @@ func TestCursorKeychainReadOnce(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "runs")
 	script := "#!/bin/sh\necho run >> " + log + "\necho tok-$(wc -l < " + log + " | tr -d ' ')\n"
-	if err := os.WriteFile(filepath.Join(dir, "security"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	testenv.Program(t, filepath.Join(dir, "security"), script)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	forgetCursorStatus()
 	t.Cleanup(forgetCursorStatus)
@@ -170,5 +172,28 @@ func TestCursorKeychainReadOnce(t *testing.T) {
 	}
 	if tok := cursorKeychainToken(false); tok != "tok-3" || runs() != 3 {
 		t.Fatalf("after a fresh read: %q, %d runs", tok, runs())
+	}
+}
+
+// migrations.json is read once while a request holds the catalog (the
+// GUI's state looked at it thousands of times, one per provider's API),
+// and a move written meanwhile, even one read from the file as it was
+// before, is seen at once.
+func TestHoldReadsMigrationsOnce(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // a run starts from no files, not the last run's
+	defer Hold()()
+	if Moved("held-sub") {
+		t.Fatal("moved before any move")
+	}
+	os.MkdirAll(filepath.Dir(migrationsPath()), 0o755)
+	os.WriteFile(migrationsPath(), []byte(`{"other-sub":{"state":"plugin"}}`), 0o600)
+	if Moved("other-sub") {
+		t.Fatal("migrations.json read again while held")
+	}
+	if err := setMigration("held-sub", func(m *Migration) { m.State = MovePlugin }); err != nil {
+		t.Fatal(err)
+	}
+	if !Moved("held-sub") || !Moved("other-sub") {
+		t.Fatalf("a move written while held: %v %v", Moved("held-sub"), Moved("other-sub"))
 	}
 }

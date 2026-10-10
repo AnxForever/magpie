@@ -52,8 +52,8 @@ function serve(lang, gate, posts) {
 }
 
 const words = {
-  en: { refresh: "Refresh", forget: "Forget", own: "Added by hand" },
-  zh: { refresh: "刷新", forget: "清除", own: "手动添加" },
+  en: { refresh: "Fetch models again", forget: "Forget", own: "Added by hand" },
+  zh: { refresh: "重新获取模型", forget: "清除", own: "手动添加" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -100,6 +100,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await button(label).click();
         await until(() => posts.slice(n).some((p) => p.path === "/api/provider/" + action) && gate.waiting > 0);
         await page.keyboard.press("Escape");
+        await page.locator("dialog.action-confirm[open] button").last().click();
         await page.locator("#modal").waitFor({ state: "hidden" });
         await open("GPT Relay");
         release();

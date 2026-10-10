@@ -3,6 +3,8 @@ package gateway
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -52,7 +54,39 @@ func antigravityTurnsAway(system string) bool {
 		strings.Contains(system, "built on Anthropic's Claude Agent SDK")
 }
 
-const antigravityTurnedAwayHint = "not a quota: Antigravity turns away Claude Code's and the Claude Agent SDK's system prompt (Claude Code, Claude Desktop's chats) with this 429; use another provider for them"
+// antigravityRefuses is what Antigravity says when it turns such a request
+// away, on either shape the refusal arrives in: a 429's body, or the reply's
+// own error event, where the Code Assist decoder keeps the message and leaves
+// the status and its code out of the event.
+func antigravityRefuses(said string) bool {
+	return strings.Contains(strings.ToLower(said), "resource has been exhausted")
+}
+
+// antigravityTurnedAway says whether what p answered a request with system
+// as its system instruction is that refusal (#666): an Antigravity account,
+// the system prompt it turns away, and its "Resource has been exhausted"
+// words. A 429 that says something else — the plan's own allowance used up
+// ("You have exhausted your capacity on this model. Your quota will reset
+// after …") — is the quota it says, whatever the system prompt (#1425).
+func antigravityTurnedAway(p provider.Provider, system, said string) bool {
+	return accountAgent(p) == "antigravity" && antigravityTurnsAway(system) && antigravityRefuses(said)
+}
+
+// antigravityTurnedAwayHint is what magpie adds to Antigravity's words, after
+// " — ", for the agent and the Routing page, which says it apart from them in
+// its own language (routing.js AG_TURNED_AWAY).
+const antigravityTurnedAwayHint = "Antigravity answers this 429 to the system prompt of Claude Code and the Claude Agent SDK (Claude Desktop's chats) whatever quota is left, so it is not a quota and waiting won't help; use another provider for these chats, or put one after Antigravity in a routing group"
+
+// turnedAwayStatus is what the agent is told when nobody is left to answer
+// what Antigravity turned away: a request it shouldn't send again as it is.
+// Antigravity's own 429 had the Anthropic and OpenAI SDKs — Claude Desktop,
+// Claude Code — retry it ten times over, each one turned away the same
+// (#1425); they retry 408, 409, 429 and 5xx, and not a 400.
+const turnedAwayStatus = http.StatusBadRequest
+
+// turnedAwayErrType is the usage log's ErrType for that refusal, in place of
+// the 429 Antigravity's body calls it.
+const turnedAwayErrType = "prompt_turned_away"
 
 // codeAssistID is the id a request on the account's app goes out under: on
 // Antigravity the variant the effort picks for a model that is a family of
@@ -103,8 +137,10 @@ func buildCodeAssist(r *Request, model, agent string) []byte {
 // with that same id and would otherwise work it out a second time. There is
 // no model but that id in here: on Antigravity the two differ, and the one
 // the request goes out under is the one everything below is shaped from.
+// agent "vertex" is Vertex AI's request (buildVertex).
 func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 	ag := agent == "antigravity"
+	vx := agent == "vertex"
 	at := "" // the level the id says it thinks at
 	if ag {
 		if _, l, ok := antigravityBaseOf(sent); ok {
@@ -125,12 +161,25 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 		if m.Role == "assistant" {
 			role = "model"
 		}
-		var parts []map[string]any
+		var parts, after []map[string]any // after: tools' images held back
+		// signed: a step Gemini signed, whose later calls go without, as
+		// Gemini signs the first (#1445, as chat's #687)
+		signed := false
+		for _, p := range m.Parts {
+			if p.Kind == ToolCall && p.Signature != "" {
+				signed = true
+			}
+		}
 		for _, p := range m.Parts {
 			switch p.Kind {
 			case Text:
-				if p.Text != "" {
-					parts = append(parts, map[string]any{"text": p.Text})
+				if p.Text != "" || (p.Signature != "" && !claude) {
+					part := map[string]any{"text": p.Text}
+					if p.Signature != "" && !claude {
+						// Gemini's signature on its text, back as it gave it
+						part["thoughtSignature"] = p.Signature
+					}
+					parts = append(parts, part)
 				}
 			case Image, File:
 				if p.Data != "" {
@@ -144,7 +193,17 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 				if id := toolID(p.ID); id != "" {
 					call["id"] = id
 				}
-				parts = append(parts, map[string]any{"functionCall": call, "thoughtSignature": skipSignature})
+				part := map[string]any{"functionCall": call}
+				switch {
+				case claude:
+					part["thoughtSignature"] = skipSignature
+				case p.Signature != "":
+					// Gemini's own signature, back as it gave it (#1445)
+					part["thoughtSignature"] = p.Signature
+				case !signed:
+					part["thoughtSignature"] = skipSignature
+				}
+				parts = append(parts, part)
 			case ToolResult:
 				name := names[p.CallID]
 				if name == "" {
@@ -163,17 +222,46 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 				}
 				parts = append(parts, map[string]any{"functionResponse": res})
 				// the images a tool returned follow its response, as Gemini
-				// CLI sends a file it read
+				// CLI sends a file it read. Antigravity hands a Claude model
+				// the turn back as Anthropic blocks, where an image between
+				// two responses splits them from their calls ("tool_use ids
+				// were found without tool_result blocks immediately after"):
+				// there the images wait until every response is in, each
+				// after a line saying whose it is.
+				var ims []map[string]any
 				for _, im := range p.Images {
 					if im.Data != "" {
-						parts = append(parts, map[string]any{"inlineData": map[string]any{"mimeType": im.MediaType, "data": im.Data}})
+						ims = append(ims, map[string]any{"inlineData": map[string]any{"mimeType": im.MediaType, "data": im.Data}})
 					} else if im.URL != "" {
-						parts = append(parts, map[string]any{"fileData": map[string]any{"mimeType": im.MediaType, "fileUri": im.URL}})
+						ims = append(ims, map[string]any{"fileData": map[string]any{"mimeType": im.MediaType, "fileUri": im.URL}})
 					}
+				}
+				if ag && claude && len(ims) > 0 {
+					label := fmt.Sprintf("Image returned by tool %s (call %s):", name, toolID(p.CallID))
+					if len(ims) > 1 {
+						label = fmt.Sprintf("%d images returned by tool %s (call %s):", len(ims), name, toolID(p.CallID))
+					}
+					after = append(after, map[string]any{"text": label})
+					after = append(after, ims...)
+				} else {
+					parts = append(parts, ims...)
 				}
 			}
 			// thinking isn't sent back: its signatures belong to whoever
 			// made them, and Google turns away ones it didn't
+		}
+		if len(after) > 0 {
+			// the responses lead the turn, as an Anthropic tool_result
+			// turn has to; what the user said and the tools' images follow
+			var lead, rest []map[string]any
+			for _, part := range parts {
+				if part["functionResponse"] != nil {
+					lead = append(lead, part)
+				} else {
+					rest = append(rest, part)
+				}
+			}
+			parts = append(append(lead, after...), rest...)
 		}
 		if len(parts) == 0 {
 			continue
@@ -183,6 +271,13 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 			continue
 		}
 		contents = append(contents, map[string]any{"role": role, "parts": parts})
+	}
+	if len(contents) > 0 && contents[0]["role"] == "model" {
+		// Gemini turns away a history that opens with the model's turn
+		// (what an agent's compaction can leave): "function call turn comes
+		// immediately after a user turn". Gemini CLI's hardenHistory puts
+		// this user turn before it, and so does this.
+		contents = append([]map[string]any{{"role": "user", "parts": []map[string]any{{"text": "[Continuing from previous AI thoughts...]"}}}}, contents...)
 	}
 	req := map[string]any{"contents": contents}
 	if r.System != "" {
@@ -241,11 +336,22 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 	if len(r.Stop) > 0 {
 		gen["stopSequences"] = r.Stop
 	}
-	if tc := thinkingConfig(r, sent, claude, at); tc != nil {
+	tc := thinkingConfig(r, sent, claude, at)
+	if vx {
+		tc = vertexThinking(r, sent)
+	}
+	if tc != nil {
 		gen["thinkingConfig"] = tc
 		// Claude's answer has to have room past its thinking
 		if b, ok := tc["thinkingBudget"].(int); ok && claude && gen["maxOutputTokens"] == nil {
 			gen["maxOutputTokens"] = b + 32000
+		}
+	}
+	if r.Format != nil {
+		// the answer as JSON, of the client's schema when it gave one
+		gen["responseMimeType"] = "application/json"
+		if sc := r.Format.schema(); len(sc) > 0 {
+			gen["responseJsonSchema"] = sc
 		}
 	}
 	if catalog.DrawsID(sent) {
@@ -267,8 +373,14 @@ func buildCodeAssistSent(r *Request, sent, agent string) []byte {
 // stop thinking once the request has tools, and give none of it back
 // (#636); Antigravity's own tiered ids, sent a level, don't.
 //
-// Gemini 3's levels: Flash takes minimal, low, medium and high, so medium
-// goes as medium; Pro takes low and high only, so medium goes up to high.
+// Gemini 3's levels: medium goes as medium to Flash, and up to high to
+// Pro, which took low and high only (3 Pro). Minimal goes only to a Flash
+// variant at minimal: 3.7 and 3.8 Flash have none (AI Studio answers 3.8's
+// with a 400), and the id here doesn't say which Flash serves it (Gemini
+// CLI's 3.5 Flash goes out as 3.8 Flash where that is rolled out).
+// Reasoning off otherwise (the auto mode classifier's least level) goes at
+// low, which every Gemini 3 text model takes; an image model may have no
+// low (3.1 Flash Image: minimal and high), and goes at high.
 func thinkingConfig(r *Request, model string, claude bool, at string) map[string]any {
 	m := strings.ToLower(model)
 	if strings.HasPrefix(m, "gpt-oss") || claude && !strings.Contains(m, "thinking") {
@@ -293,6 +405,8 @@ func thinkingConfig(r *Request, model string, claude bool, at string) map[string
 				level = "low"
 			case effort == "minimal" && at != "":
 				level = "minimal"
+			case offEffort(effort) && !catalog.DrawsID(m):
+				level = "low"
 			case effort == "medium" && strings.Contains(m, "flash"):
 				level = "medium"
 			}
@@ -556,7 +670,9 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 					args = json.RawMessage("{}")
 				}
 				d.tools = true
-				emit(Event{Kind: KToolStart, ID: id, Name: toolOfCall(p.FunctionCall.Name)})
+				// its signature rides in the id, and comes back off it
+				// (signedID, unsignCalls), as on chat (#687, #1445)
+				emit(Event{Kind: KToolStart, ID: signedID(id, p.Signature), Name: toolOfCall(p.FunctionCall.Name)})
 				emit(Event{Kind: KToolArgs, Text: string(args)})
 			case p.Thought:
 				d.flush(emit)
@@ -572,8 +688,13 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 				// reasoning above (#620)
 				d.flush(emit)
 				emit(Event{Kind: KImage, Name: p.InlineData.MimeType, Text: p.InlineData.Data})
-			case p.Text != "":
+			case p.Text != "" || p.Signature != "":
 				d.text(p.Text, emit)
+				if p.Signature != "" {
+					// Gemini's signature on its text, after it (#1445)
+					d.flush(emit)
+					emit(Event{Kind: KTextSig, Text: p.Signature})
+				}
 			}
 		}
 		if g := cand.GroundingMetadata; g != nil && !d.searched {

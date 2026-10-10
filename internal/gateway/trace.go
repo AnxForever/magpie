@@ -24,6 +24,9 @@ const traceKeep = 60
 
 // Route is one request's way through routing.
 type Route struct {
+	imageTurn     string
+	imageCaller   string
+	imageProvider string
 	Seq           int64        `json:"seq"` // the trace's count when it last changed
 	ID            int64        `json:"id"`
 	Time          time.Time    `json:"time"`
@@ -42,6 +45,9 @@ type Route struct {
 	Rule          *RuleHit     `json:"rule,omitempty"`          // the group's rules for it, when it has any
 	SealedTask    bool         `json:"sealedTask,omitempty"`    // only ChatGPT accounts can read this subagent's task
 	LeadAccount   string       `json:"leadAccount,omitempty"`   // the parent account put first for a sealed task
+	// Subagent is a Codex subagent's request put on the model set for
+	// Codex's subagents, or kept on the one asked for and why
+	Subagent *SubagentPick `json:"subagent,omitempty"`
 	// Nested: the rules of the groups in the group, down the way to the
 	// one that went first, each as it decided
 	Nested   []NestedRule `json:"nested,omitempty"`
@@ -56,17 +62,30 @@ type Route struct {
 	Millis   int64        `json:"ms,omitempty"`
 	Tokens   int          `json:"tokens,omitempty"`
 	Output   int          `json:"out,omitempty"` // of Tokens, the reply's
+	// Reasoning: of Output, the reply's reasoning, which its speed leaves
+	// out (usage.DecodeOf)
+	Reasoning int `json:"reasoning,omitempty"`
 	// TTFT: ms from the request to its reply's first content (text,
 	// reasoning or a tool call), FirstText to its first text, as Millis
 	// counts: streamed replies only (#196)
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
+	// Flow: the ms its content took to come (Call.Flow)
+	Flow int64 `json:"flow,omitempty"`
 	// Served: the model the reply says answered, as the last try has it;
 	// Swapped: another than the one that try asked for; Routed: that try
 	// asked another magpie's routing group, and Served is its member
 	Served  string `json:"served,omitempty"`
 	Swapped bool   `json:"swapped,omitempty"`
 	Routed  bool   `json:"routed,omitempty"`
+	// Upstream: the provider an aggregator said answered behind it
+	Upstream string `json:"upstream,omitempty"`
+	// Prompt: what the prompt held, part by part, and the window it went
+	// into (prompt.go)
+	Prompt *Prompt `json:"prompt,omitempty"`
+	// Conv: the conversation a request without a session id is part of,
+	// as a digest of its first user turn (conversationID)
+	Conv string `json:"conv,omitempty"`
 }
 
 // RouteUsage is one billable attempt's pricing inputs, kept in routing history.
@@ -103,6 +122,9 @@ type GroupRef struct {
 	Via []string `json:"via,omitempty"`
 	// Fast: those of Members sent in their vendor's fast mode
 	Fast []string `json:"fast,omitempty"`
+	// Paused: the models a pause rule left out of the request, so not in
+	// Members (provider.PausedOut)
+	Paused []provider.Paused `json:"paused,omitempty"`
 }
 
 // SubGroup is a routing group in the group a request asked for.
@@ -189,11 +211,17 @@ type Weighed struct {
 	// Barred: left out as the user set it not to serve the model, its
 	// own list of models leaving it out (#474)
 	Barred bool `json:"barred,omitempty"`
+	// Held: left out as the gateway key asking may not use its account or
+	// key (#905)
+	Held bool `json:"held,omitempty"`
 	// Capped: left out as held at the usage cap the user set on the
 	// account, this cap in percent; Used is then its fullest window's
 	// share, CapBack when the last window at or past it renews
 	Capped  int        `json:"capped,omitempty"`
 	CapBack *time.Time `json:"capBack,omitempty"`
+	// NoCredits: held at 100% (Capped), a Codex account the user set not
+	// to spend its credits once its allowance is used up
+	NoCredits bool `json:"noCredits,omitempty"`
 	// Rank: its place in its provider's own list of accounts or keys, the
 	// order the provider's page shows and a drag sets (#217); routing may
 	// weigh them in another
@@ -228,6 +256,8 @@ type Try struct {
 	// first text, when it streamed any (#196)
 	TTFT      int64 `json:"ttft,omitempty"`
 	FirstText int64 `json:"firstText,omitempty"`
+	// Flow: the ms its content took to come (Call.Flow)
+	Flow int64 `json:"flow,omitempty"`
 	// Served: the model its reply said answered, when it named one;
 	// Swapped: another model than Model, not just its dated name; Routed:
 	// Model is another magpie's routing group, and Served the member it
@@ -235,10 +265,19 @@ type Try struct {
 	Served  string `json:"served,omitempty"`
 	Swapped bool   `json:"swapped,omitempty"`
 	Routed  bool   `json:"routed,omitempty"`
-	Fail    string `json:"fail,omitempty"` // why it failed, as rest tells it
-	Error   string `json:"error,omitempty"`
-	Rest    *Rest  `json:"rest,omitempty"`  // how long it now sits out; none when it was the last to try
-	Again   int64  `json:"again,omitempty"` // ms waited before it was tried again, the last one left
+	// Upstream: the provider an aggregator said answered behind it
+	// (OpenRouter's DeepInfra, Novita …)
+	Upstream string `json:"upstream,omitempty"`
+	Fail     string `json:"fail,omitempty"` // why it failed, as rest tells it
+	Error    string `json:"error,omitempty"`
+	Rest     *Rest  `json:"rest,omitempty"`  // how long it now sits out; none when it was the last to try
+	Again    int64  `json:"again,omitempty"` // ms waited before it was tried again, the last one left
+	// Replan: every member had failed in a way that passes, so after
+	// Again the Replan of them that may answer by then were asked again,
+	// in turn, within the group's Patience (seconds) for the request
+	// (#1418)
+	Replan   int `json:"replan,omitempty"`
+	Patience int `json:"patience,omitempty"`
 	// Queued: ms it waited for one of its key's or account's slots, the
 	// provider's MaxConcurrency out already (concurrency.go)
 	Queued int64 `json:"queued,omitempty"`
@@ -246,6 +285,9 @@ type Try struct {
 	// Codex resets was spent by itself (the user's setting) — on Who, and
 	// what spending it did — and the request asked again
 	Reset *AutoReset `json:"reset,omitempty"`
+	// Auto: the models Copilot's Auto picked for it, in turn — where each
+	// pick came from and Copilot's refusal of it — Model being "auto"
+	Auto []provider.AutoPick `json:"auto,omitempty"`
 }
 
 // AutoReset is a Codex or Claude reset spent by itself, on Who's account.
@@ -257,6 +299,9 @@ type AutoReset struct {
 
 type planned struct {
 	order, left []Weighed
+	// held: the accounts left out (in left) as they won't spend their
+	// credits, for one that spends its resets by itself to spend one
+	held []candidate
 }
 
 func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from provider.Protocol) Weighed {

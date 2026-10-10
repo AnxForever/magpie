@@ -10,12 +10,12 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/desktopdir"
 )
 
 // Call is one model call as an agent's own session file records it.
@@ -207,57 +207,25 @@ func callFiles() []file {
 	return out
 }
 
-// callSources are callFiles and OpenCode's sessions (#680), whose calls are
-// rows of its database or its JSON files rather than lines.
-func callSources() []file { return append(callFiles(), openCodeCallFiles()...) }
-
-// desktopDataDirs are Claude Desktop's Claude and Claude-3p folders on this
-// computer, found as desktopDirs in internal/agent's claudedesktop.go does
-// (that package is not one to import from here).
-func desktopDataDirs() []string {
-	home, _ := os.UserHomeDir()
-	switch runtime.GOOS {
-	case "darwin":
-		d := filepath.Join(home, "Library", "Application Support")
-		return []string{filepath.Join(d, "Claude"), filepath.Join(d, "Claude-3p")}
-	case "windows":
-		d := appdir.Getenv("LOCALAPPDATA")
-		if d == "" {
-			d = filepath.Join(home, "AppData", "Local")
-		}
-		return []string{windowsClaudeDir(d, false), windowsClaudeDir(d, true)}
-	}
-	d := appdir.Getenv("XDG_CONFIG_HOME")
-	if d == "" || !filepath.IsAbs(d) {
-		d = filepath.Join(home, ".config")
-	}
-	return []string{filepath.Join(d, "Claude"), filepath.Join(d, "Claude-3p")}
+// callSources are callFiles and the agents whose calls are read whole
+// rather than line by line: OpenCode's (#680) and ZCode's, whose calls are
+// rows of their database or their JSON files; DeepSeek Harness's, whose
+// session file is packed in frames and so cannot be read on from the middle
+// of one; and WorkBuddy's, whose usage lines repeat a reply's id as it goes
+// on. Every agent here needs an entry in wholeCallReaders.
+func callSources() []file {
+	out := callFiles()
+	out = append(out, openCodeCallFiles()...)
+	out = append(out, zcodeCallFiles()...)
+	out = append(out, dshCallFiles()...)
+	return append(out, workbuddyCallFiles()...)
 }
 
-// windowsClaudeDir is %LOCALAPPDATA%\Claude (or Claude-3p), else the first
-// folder there named Claude… (with -3p in it or not).
-func windowsClaudeDir(local string, threep bool) string {
-	name := "Claude"
-	if threep {
-		name = "Claude-3p"
-	}
-	exact := filepath.Join(local, name)
-	if _, err := os.Stat(exact); err == nil {
-		return exact
-	}
-	ents, _ := os.ReadDir(local)
-	var found []string
-	for _, e := range ents {
-		if n := e.Name(); e.IsDir() && strings.HasPrefix(n, "Claude") && strings.Contains(n, "-3p") == threep {
-			found = append(found, n)
-		}
-	}
-	if len(found) == 0 {
-		return exact
-	}
-	sort.Strings(found)
-	return filepath.Join(local, found[0])
-}
+// desktopDataDirs are Claude Desktop's folders on this computer that
+// hold sessions: its own (%APPDATA%\Claude on Windows, or the MSIX
+// package's, and the real ones beside a package's), the Claude folder
+// magpie writes and Claude-3p, as desktopdir finds them.
+func desktopDataDirs() []string { return desktopdir.Everywhere() }
 
 // headLen is how much of a file's start is kept to know it again.
 const headLen = 256
@@ -339,13 +307,68 @@ func callHead(st *callFile, b []byte) bool {
 }
 
 // sessionOfPath is the session a Claude Code file belongs to by its name:
-// <id>.jsonl, or <id>/subagents/<agent>.jsonl.
+// <id>.jsonl, <id>/subagents/<agent>.jsonl, or a workflow's
+// <id>/subagents/workflows/<run>/<agent>.jsonl.
 func sessionOfPath(p string) string {
-	if d := filepath.Dir(p); filepath.Base(d) == "subagents" {
+	d := filepath.Dir(p)
+	if w := filepath.Dir(d); filepath.Base(w) == "workflows" && filepath.Base(filepath.Dir(w)) == "subagents" {
+		return filepath.Base(filepath.Dir(filepath.Dir(w)))
+	}
+	if filepath.Base(d) == "subagents" {
 		return filepath.Base(filepath.Dir(d))
 	}
 	return strings.TrimSuffix(filepath.Base(p), ".jsonl")
 }
+
+// SubagentOf is the subagent a Claude Code file is the conversation of, by
+// its name: <agent> of <id>/subagents/agent-<agent>.jsonl or a workflow's
+// <id>/subagents/workflows/<run>/agent-<agent>.jsonl — the agentId its
+// lines carry, and the x-claude-code-agent-id Claude Code sends the
+// gateway for it. "" for a session's own file, and any other agent's.
+func SubagentOf(p string) string {
+	d := filepath.Dir(p)
+	if filepath.Base(d) != "subagents" && (filepath.Base(filepath.Dir(d)) != "workflows" || filepath.Base(filepath.Dir(filepath.Dir(d))) != "subagents") {
+		return ""
+	}
+	name := strings.TrimSuffix(filepath.Base(p), ".jsonl")
+	if name == filepath.Base(p) || !strings.HasPrefix(name, "agent-") {
+		return ""
+	}
+	return strings.TrimPrefix(name, "agent-")
+}
+
+// SubagentParent is the subagent that started the one whose Claude Code
+// file p is: the parentAgentId of its agent-<agent>.meta.json beside it,
+// which Claude Code writes for a subagent a subagent started (spawnDepth
+// 2 and on), the x-claude-code-parent-agent-id it sends the gateway. ""
+// for one the conversation itself started, and for a file that is no
+// subagent's. A meta file once read is kept; one not read is read again.
+func SubagentParent(p string) string {
+	if SubagentOf(p) == "" {
+		return ""
+	}
+	meta := strings.TrimSuffix(p, ".jsonl") + ".meta.json"
+	if v, ok := subagentParents.Load(meta); ok {
+		return v.(string)
+	}
+	b, err := os.ReadFile(meta)
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		ParentAgentID string `json:"parentAgentId"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	parent := m.ParentAgentID[:min(len(m.ParentAgentID), 128)]
+	subagentParents.Store(meta, parent)
+	return parent
+}
+
+// subagentParents: SubagentParent's meta files read, by path. Claude Code
+// writes one as it starts the subagent and never changes it.
+var subagentParents sync.Map
 
 // str is s kept once per file, as the calls of a file repeat a few.
 func (st *callFile) str(s string) string {
@@ -392,10 +415,11 @@ type ccCall struct {
 		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage *struct {
-			Input      int `json:"input_tokens"`
-			Output     int `json:"output_tokens"`
-			CacheRead  int `json:"cache_read_input_tokens"`
-			CacheWrite int `json:"cache_creation_input_tokens"`
+			Input      int              `json:"input_tokens"`
+			Output     int              `json:"output_tokens"`
+			CacheRead  int              `json:"cache_read_input_tokens"`
+			CacheWrite int              `json:"cache_creation_input_tokens"`
+			Creation   *ccCacheCreation `json:"cache_creation"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -516,7 +540,7 @@ func claudeCallLine(st *callFile, b []byte) {
 			return
 		}
 		c.Model = st.str(model)
-		c.Tokens = Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
+		c.Tokens = ccTokens(u.Input, u.Output, u.CacheRead, u.CacheWrite, u.Creation)
 		if c.Tokens.zero() && m.Usage == nil {
 			return
 		}

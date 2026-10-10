@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/tidwall/jsonc"
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/settings"
 	_ "modernc.org/sqlite"
 )
 
@@ -127,6 +129,14 @@ func ImportFromApps(picks []AppPick) ([]string, error) {
 			continue
 		case pk.Mode == "replace":
 		default:
+			// an account a provider holds already is not added twice: the
+			// same relay is often both a CC Switch entry and what Claude
+			// Code's settings.json points at, and both are picked at once.
+			// Two of it were added, and once one was removed the other made
+			// the entry "Already added" (#1486)
+			if holds(p) {
+				continue
+			}
 			// the id may have been taken since, by an earlier pick
 			if h, err := Find(p.ID); err == nil {
 				if sameProvider(*h, p) {
@@ -144,6 +154,17 @@ func ImportFromApps(picks []AppPick) ([]string, error) {
 		added = append(added, p.Name)
 	}
 	return added, nil
+}
+
+// holds says a provider of magpie's has p's account: its key at its
+// address, as the import list's "same" says (settle).
+func holds(p Provider) bool {
+	for _, h := range load().Providers {
+		if !h.Hidden && sameProvider(h, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // freeID is id, or id-2, id-3… whichever no provider has.
@@ -323,10 +344,19 @@ func cleanBase(u string) string {
 	return u
 }
 
-// gatewayURL is magpie's own address: importing it would loop.
+// gatewayURL is magpie's own address, on the port it listens on now or
+// the one Settings has: importing it would loop.
 func gatewayURL(u *url.URL) bool {
 	h := u.Hostname()
-	return (h == "127.0.0.1" || h == "localhost") && u.Port() == "3425"
+	if h != "127.0.0.1" && h != "localhost" {
+		return false
+	}
+	for _, a := range []string{settings.GatewayAddr(), settings.SavedAddr()} {
+		if _, p, err := net.SplitHostPort(a); err == nil && u.Port() == p {
+			return true
+		}
+	}
+	return false
 }
 
 // presetAt finds the preset serving an entry's host, the region of it the

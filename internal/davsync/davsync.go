@@ -75,6 +75,27 @@ type Config struct {
 	// WebDAV folder's while an S3 bucket is synced to, or the other way):
 	// moving back finds it as it was, its password too. Nothing syncs to it.
 	Other *Server `json:"other,omitempty"`
+	// AutoEvery is how many minutes apart the gateway's magpie syncs by
+	// itself: 0 is Every's 3, Manual never — then only Sync now syncs
+	// (#847). Set by SetAuto alone; Configure keeps it.
+	AutoEvery int `json:"autoEvery,omitempty"`
+}
+
+// Manual is AutoEvery's never: sync runs only when asked.
+const Manual = -1
+
+// AutoChoices are the minutes SetAuto takes, Manual first.
+var AutoChoices = []int{Manual, 3, 15, 30, 60}
+
+// auto is how often c syncs by itself; 0 when it doesn't.
+func (c Config) auto() time.Duration {
+	switch {
+	case c.AutoEvery == Manual:
+		return 0
+	case c.AutoEvery > 0:
+		return time.Duration(c.AutoEvery) * time.Minute
+	}
+	return Every
 }
 
 // Server is where a Config syncs to, without what it syncs or the
@@ -127,6 +148,9 @@ type Notice struct {
 	Here  []string  `json:"here,omitempty"`  // this computer's parts, replaced by the server's
 	There []string  `json:"there,omitempty"` // the server's parts, replaced by this computer's
 	Saved string    `json:"saved,omitempty"` // the folder the replaced copies are kept in
+	// Restored is a Restore's notice: Here are the parts it brought in,
+	// what was here before kept in Saved, which Undo brings back
+	Restored bool `json:"restored,omitempty"`
 }
 
 // state is what the last sync saw: the parts here and on the server, by
@@ -143,6 +167,12 @@ type state struct {
 	Local  map[string]string `json:"local,omitempty"`
 	Remote map[string]string `json:"remote,omitempty"`
 	Usage  *usageState       `json:"usage,omitempty"`
+	// Undo is the file the last Restore kept this computer's setup in, from
+	// just before it: Undo brings it back
+	Undo string `json:"undo,omitempty"`
+	// File is what the server held where the backup should be, when the
+	// last sync couldn't read it as one
+	File *ServerFile `json:"file,omitempty"`
 }
 
 func path(name string) string { return filepath.Join(settings.Dir(), name) }
@@ -197,6 +227,7 @@ func Configure(c Config) error {
 			// the other kind's server is kept: the one moved from, or the
 			// one kept before
 			c.Other = old.Other
+			c.AutoEvery = old.AutoEvery // SetAuto's, not the form's
 			if old.S3() != c.S3() {
 				o := old.where()
 				c.Other = &o
@@ -297,11 +328,22 @@ func (c Config) sameAccount(o Config) bool {
 		strings.TrimSpace(c.User) == strings.TrimSpace(o.User)
 }
 
-// Off turns sync off. The file on the server stays.
+// Off turns sync off. The file on the server stays, and so does what this
+// computer last synced with it: turned on again to the same server, it is
+// not a new computer, so what was changed here while it was off goes up
+// rather than the server's older setup coming down over it (#939: every
+// agent back to how it was when sync was turned off). How the last sync
+// went, its notice and a restore's undo go.
 func Off() error {
 	return locked(func() error {
-		os.Remove(path("sync-state.json"))
-		os.Remove(path(cacheName))
+		st := loadState()
+		if st.Local == nil {
+			os.Remove(path("sync-state.json"))
+			os.Remove(path(cacheName))
+		} else {
+			st.Error, st.Notice, st.Undo, st.Usage = "", nil, "", nil
+			saveState(st)
+		}
 		usage.DropAllShared() // the others' usage came by sync: it goes with it (#542)
 		if err := os.Remove(path("sync.json")); err != nil && !os.IsNotExist(err) {
 			return err
@@ -333,6 +375,14 @@ type View struct {
 	// Other is the other kind's server, kept for moving back to: not
 	// synced to
 	Other *OtherView `json:"other,omitempty"`
+	// Auto is how many minutes apart it syncs by itself; 0 never: only when
+	// asked
+	Auto int `json:"auto"`
+	// Undo is whether the last Restore can be undone
+	Undo bool `json:"undo,omitempty"`
+	// File is what the server holds instead of a backup, when Error is
+	// that it isn't one; File.Replace offers Upload
+	File *ServerFile `json:"serverFile,omitempty"`
 }
 
 // OtherView is the other kind's server as the Settings page shows it.
@@ -355,9 +405,14 @@ func Status() View {
 	st := loadState()
 	v := View{On: true, URL: c.URL, User: c.User, PasswordSet: c.Password != "", PassphraseSet: c.Passphrase != "",
 		Keys: c.Keys, Agents: c.Agents, Library: c.library(), Error: st.Error, Notice: st.Notice,
-		Kind: strings.ToLower(c.Kind()), Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle}
+		Kind: strings.ToLower(c.Kind()), Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle,
+		Auto: int(c.auto() / time.Minute)}
 	if st.Key == stateKey(c) {
 		v.Last = st.Last
+		v.Undo = st.Undo != "" && isFile(st.Undo)
+		if st.Error != "" {
+			v.File = st.File
+		}
 		if c.Usage && st.Usage != nil {
 			v.UsageError = st.Usage.Error
 		}
@@ -370,11 +425,11 @@ func Status() View {
 	return v
 }
 
-// Dismiss clears the notice.
+// Dismiss clears the notice, and with a restore's, its undo.
 func Dismiss() error {
 	return locked(func() error {
 		st := loadState()
-		st.Notice = nil
+		st.Notice, st.Undo = nil, "" // a restore's undo goes with its notice
 		saveState(st)
 		return nil
 	})
@@ -434,21 +489,27 @@ func cached(want string) []byte {
 // that always answers the same unreadable way) would otherwise pile up a
 // copy each time. The name is sorted by time, so the oldest are the first
 // to go.
-func keepDamaged(data []byte) {
+func keepDamaged(data []byte) { keepAside(data, "server-damaged", 3) }
+
+// keepAside writes data under the sync folder as <time>-<tag>, keeping the
+// newest n so tagged.
+func keepAside(data []byte, tag string, n int) error {
 	dir := path("sync")
-	if os.MkdirAll(dir, 0o700) != nil {
-		return
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
-	name := filepath.Join(dir, time.Now().Format("2006-01-02-150405")+"-server-damaged"+backup.Ext)
-	if edit.WriteAtomic(name, data) != nil {
-		return
+	name := filepath.Join(dir, time.Now().Format("2006-01-02-150405")+"-"+tag+backup.Ext)
+	if err := edit.WriteAtomic(name, data); err != nil {
+		return err
 	}
-	old, _ := filepath.Glob(filepath.Join(dir, "*-server-damaged"+backup.Ext))
+	os.Chmod(name, 0o600)
+	old, _ := filepath.Glob(filepath.Join(dir, "*-"+tag+backup.Ext))
 	slices.Sort(old) // names begin with the time, so oldest first
-	for len(old) > 3 {
+	for len(old) > n {
 		os.Remove(old[0])
 		old = old[1:]
 	}
+	return nil
 }
 
 func sum(b []byte) string {
@@ -494,7 +555,11 @@ func syncNow(ctx context.Context, force bool) error {
 	if errors.Is(err, errChanged) { // another computer got in between: again, over its version
 		err = syncOnce(ctx, c, &st)
 	}
-	st.Error = ""
+	st.Error, st.File = "", nil
+	var nb *notBackup
+	if errors.As(err, &nb) {
+		st.File = &nb.f
+	}
 	if err != nil {
 		st.Error = err.Error()
 	} else {
@@ -517,47 +582,73 @@ const (
 // wait having been prev: Every, but longer for a server limiting requests
 // (429, 503) — as long as its Retry-After says, or else twice the last
 // wait, up to maxWait — so that a limit is not run into again and again.
-func backoff(err error, prev time.Duration) time.Duration {
+func backoff(err error, prev time.Duration) time.Duration { return backoffFrom(err, prev, Every) }
+
+// backoffFrom is backoff for a sync every base.
+func backoffFrom(err error, prev, base time.Duration) time.Duration {
 	var rl *rateLimited
 	if !errors.As(err, &rl) {
-		return Every
+		return base
 	}
 	if rl.after > 0 {
-		return min(max(rl.after, Every), limitWait)
+		return min(max(rl.after, base), max(limitWait, base))
 	}
-	return min(max(2*prev, 2*Every), maxWait)
+	return min(max(2*prev, 2*base), max(maxWait, base))
 }
 
-// Run syncs a little after it starts and every Every after that, until
-// ctx ends — less often while the server is limiting requests. A failure
-// is logged once, not on every try.
-func Run(ctx context.Context) {
-	t := time.NewTimer(20 * time.Second)
+// poll is how often Run looks at the setup: whether sync is on, by
+// itself, and how often (#847). Looking costs no request. A var for tests.
+var poll = time.Minute
+
+// Run syncs a little after it starts and every AutoEvery after that, until
+// ctx ends — less often while the server is limiting requests, and never
+// while sync is set to run only when asked. A failure is logged once, not
+// on every try.
+func Run(ctx context.Context) { run(ctx, 20*time.Second) }
+
+func run(ctx context.Context, first time.Duration) {
+	t := time.NewTimer(first)
 	defer t.Stop()
-	last, next := "", Every
+	last := ""
+	var tried time.Time // the last sync Run made
+	var gap time.Duration
+	limited := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
+		t.Reset(poll)
+		cfg, ok := Load()
+		every := cfg.auto()
+		if !ok || every == 0 {
+			continue
+		}
+		// a server limiting requests is waited for as backoff says; else the
+		// time set now, which may have changed since the last sync
+		w := every
+		if limited {
+			w = max(gap, every)
+		}
+		if !tried.IsZero() && time.Since(tried) < w {
+			continue
+		}
 		// no request is let stand still for long (stallAfter), but a large
 		// backup on a slow line takes what it takes: only an hour ends it
 		c, cancel := context.WithTimeout(ctx, time.Hour)
 		err := Now(c)
 		cancel()
+		tried = time.Now()
 		if msg := fmt.Sprint(err); err != nil && msg != last {
-			kind := "WebDAV"
-			if c, ok := Load(); ok {
-				kind = c.Kind()
-			}
-			log.Printf("syncing through %s: %s", kind, msg)
+			log.Printf("syncing through %s: %s", cfg.Kind(), msg)
 			last = msg
 		} else if err == nil {
 			last = ""
 		}
-		next = backoff(err, next)
-		t.Reset(next)
+		gap = backoffFrom(err, w, every)
+		var rl *rateLimited
+		limited = errors.As(err, &rl)
 	}
 }
 
@@ -644,9 +735,12 @@ func take(to *backup.Bundle, from backup.Bundle, part string) {
 			ps = slices.Clone(ps)
 			for i, p := range ps {
 				if k, ok := keys[p.ID]; ok && p.Key == "" && len(p.Keys) == 0 {
-					ps[i].Key, ps[i].KeyName, ps[i].Keys, ps[i].KeyProtocol = k.Key, k.KeyName, k.Keys, k.KeyProtocol
+					ps[i].Key, ps[i].KeyName, ps[i].Keys, ps[i].KeyProtocol, ps[i].KeyWeight = k.Key, k.KeyName, k.Keys, k.KeyProtocol, k.KeyWeight
 					if p.BalanceToken == "" {
 						ps[i].BalanceToken = k.BalanceToken
+					}
+					if p.AccessKeyID == "" && p.SecretAccessKey == "" {
+						ps[i].AccessKeyID, ps[i].SecretAccessKey = k.AccessKeyID, k.SecretAccessKey
 					}
 				}
 			}
@@ -878,7 +972,7 @@ func syncOnce(ctx context.Context, c Config, st *state) error {
 		// still checked against the server and another computer's parts
 		// survive the way they would on any sync.
 		if !errors.Is(err, backup.ErrCorrupt) || st.Local == nil {
-			return err
+			return described(c, data, err)
 		}
 		good := cached(st.Sum) // the version this computer last read whole
 		// The damaged body must be that version cut short — a prefix of it,
@@ -898,7 +992,7 @@ func syncOnce(ctx context.Context, c Config, st *state) error {
 		// smallest — and a relay cuts a real write deep into the data, well
 		// past "data", so legit rebuilds still go.
 		if good == nil || !bytes.HasPrefix(good, data) || len(data) <= bytes.Index(good, []byte(`"data"`)) {
-			return err
+			return described(c, data, err)
 		}
 		remote, err = backup.Open(good, c.Passphrase)
 		if err != nil {
@@ -980,6 +1074,7 @@ func syncOnce(ctx context.Context, c Config, st *state) error {
 	remember(data)
 	if len(here)+len(there) > 0 {
 		st.Notice = &Notice{At: time.Now(), Here: here, There: there, Saved: saved}
+		st.Undo = "" // a restore's undo goes with its notice
 	}
 	// A rebuild always writes back: the server's file is the damaged one,
 	// so even a merge that matches the cached copy must replace it.

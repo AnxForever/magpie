@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // A plugin's sign-in is followed like a built-in one: the page, then the
@@ -17,10 +17,7 @@ import (
 // done, its provider is there, and removing it signs out. A key signs in
 // at once.
 func TestPluginSignIn(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -102,10 +99,7 @@ func TestPluginSignIn(t *testing.T) {
 // subscription does: each signed in beside the others, one first and the
 // rest on behind it or off, any put first, and removing one signs it out.
 func TestPluginAccounts(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := testenv.Bun(t)
 	claudeHome(t)
 	t.Setenv("MAGPIE_BUN", bun)
 	t.Cleanup(plugin.Settle)
@@ -191,9 +185,6 @@ func TestPluginAccounts(t *testing.T) {
 	}
 	if a := also(); len(a) != 1 || a[0] != "blue@fake@fakeco" {
 		t.Fatalf("also on %v", a)
-	}
-	if err := ForgetLogin("fakeco", "red@fake"); err == nil {
-		t.Fatal("the first account was removed")
 	}
 	if err := ForgetLogin("fakeco", "blue@fake"); err != nil {
 		t.Fatal(err)

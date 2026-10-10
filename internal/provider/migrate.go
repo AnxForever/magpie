@@ -291,7 +291,11 @@ func migrationsPath() string { return filepath.Join(filepath.Dir(Path()), "migra
 
 var migrationsMu sync.Mutex
 
-func readMigrations() map[string]Migration {
+// readMigrations is held while a request reads: the GUI's state asks each
+// provider's move several times over, thousands of looks at the file.
+func readMigrations() map[string]Migration { return heldOf("migrations", readMigrationsFile) }
+
+func readMigrationsFile() map[string]Migration {
 	m, _ := filememo.Read("migrations", migrationsPath(), func(b []byte) (map[string]Migration, error) {
 		var m map[string]Migration
 		_ = json.Unmarshal(b, &m)
@@ -344,7 +348,7 @@ func setMigration(id string, f func(m *Migration)) error {
 	migrationsMu.Lock()
 	defer migrationsMu.Unlock()
 	all := map[string]Migration{}
-	for k, v := range readMigrations() {
+	for k, v := range readMigrationsFile() {
 		all[k] = v
 	}
 	m := all[id]
@@ -392,6 +396,7 @@ func lockMoves() (func(), error) {
 // Hooks the tests stand in for.
 var (
 	installPlugin = func(ctx context.Context, pkg, min string) error {
+		older := false
 		for _, e := range plugin.Load().Plugins {
 			if plugin.PackageName(e.Spec) != pkg {
 				continue
@@ -406,9 +411,18 @@ var (
 			if plugin.IsPath(e.Spec) {
 				return fmt.Errorf("%s at %s is %s; moving needs %s or newer", pkg, e.Spec, v, min)
 			}
+			older = !plugin.IsGit(e.Spec)
 			break
 		}
-		_, err := plugin.Add(ctx, pkg)
+		var err error
+		if older {
+			// npm's newest, which bun says why it won't install (a
+			// minimumReleaseAge), where bun's own latest is an older
+			// version without a word (sweanng424 on Discord)
+			err = plugin.Upgrade(ctx, pkg)
+		} else {
+			_, err = plugin.Add(ctx, pkg)
+		}
 		if err == nil && min != "" {
 			if v := plugin.Version(pkg); update.Newer(min, v) {
 				return fmt.Errorf("%s %s is installed; moving needs %s or newer", pkg, v, min)

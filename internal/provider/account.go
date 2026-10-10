@@ -17,10 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -33,6 +33,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/proc"
 )
@@ -73,6 +74,14 @@ type Account struct {
 	body   func(body []byte) []byte // request tweaks the backend insists on
 	models func() []catalog.Model
 	fetch  func(ctx context.Context) ([]catalog.Model, error)
+	// magpieList is set on an account whose fetch asks no vendor and
+	// keeps a copy of models, magpie's own list (Claude's, from the
+	// models.dev catalog; Factory's, compiled in): the list served is
+	// always models as it is now, never the copy, which held a model
+	// listed after it out until the next Refresh (wakaka on Discord:
+	// Claude Haiku 5.5, in Claude Code on the same account, missing from
+	// magpie).
+	magpieList bool
 
 	// auto is set on a Copilot account: the session of Copilot's Auto,
 	// the model it picks for the account (copilot_auto.go).
@@ -125,7 +134,7 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 		return p.pluginAPIs(model)
 	}
 	// asked for every model of every agent: read once while a request holds
-	ms := heldOf("live:"+p.ID, func() []catalog.Model { ms, _, _ := catalog.Live(p.ID); return ms })
+	ms, _, _ := p.live()
 	for _, m := range ms {
 		if m.ID == model && len(m.APIs) > 0 {
 			out := make([]Protocol, len(m.APIs))
@@ -160,9 +169,10 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 	}
 	// OpenCode serves some models on OpenAI's Responses API only (Grok,
 	// GPT) or Anthropic's (Claude, MiniMax), and turns the others away:
-	// models.dev says which
+	// models.dev says which, in the list of the gateway its URL is at,
+	// whatever catalog the provider was saved with (#1215)
 	if p.IsOpenCode() {
-		for _, c := range p.Catalogs() {
+		for _, c := range p.openCodeCatalogs() {
 			if a := catalog.APIOf(c, model); a != "" {
 				return []Protocol{Protocol(a)}
 			}
@@ -178,17 +188,64 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	if p.Account != nil && p.Account.sign != nil {
 		return p.Account.sign(ctx, req, body)
 	}
+	if p.IsVertex() {
+		// a Google token, which goes nowhere but the project's own address
+		if base := p.vertexBase(); base == "" || !strings.HasPrefix(req.URL.String(), base+"/") {
+			return fmt.Errorf("%s is asked only at Vertex AI, at its project's address", p.Name)
+		}
+		tok, err := p.vertexAccessToken(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	for k, v := range AuthHeaders(p, proto) {
 		req.Header.Set(k, v)
 	}
 	// The user's own headers ride on plain key+URL providers, after auth so
 	// they can override a default when a gateway insists on a private scheme.
-	// Written to the map directly, not via Set, so the name keeps the exact
-	// case the user typed — some gateways match header names case-sensitively.
+	// Written with the name as the user typed it — some gateways match
+	// header names case-sensitively — in place of the same header in any
+	// other case (PutUserHeader), so it is sent once, theirs.
+	// A list the request has its own of (anthropic-beta) is added to, not
+	// replaced: the user's betas go after those the agent asked.
 	for k, v := range p.Headers {
-		req.Header[k] = []string{v}
+		if ListHeader(k) {
+			MergeList(req.Header, k, v)
+			continue
+		}
+		catalog.PutUserHeader(req.Header, k, v)
 	}
 	return nil
+}
+
+// ListHeader is a header whose value is a comma-separated list the request
+// has its own of, which a provider's header of the same name adds to:
+// anthropic-beta, the betas an agent asks on each request.
+func ListHeader(name string) bool { return strings.EqualFold(name, "anthropic-beta") }
+
+// MergeList writes name in h as the items h has under it, in any case,
+// followed by those of add: comma-separated, each once, empty ones left
+// out, under name as written.
+func MergeList(h http.Header, name, add string) {
+	var vals []string
+	for _, k := range slices.Sorted(maps.Keys(h)) {
+		if strings.EqualFold(k, name) {
+			vals = append(vals, h[k]...)
+			delete(h, k)
+		}
+	}
+	var out []string
+	for _, v := range append(vals, add) {
+		for _, it := range strings.Split(v, ",") {
+			if it = strings.TrimSpace(it); it != "" && !slices.Contains(out, it) {
+				out = append(out, it)
+			}
+		}
+	}
+	if len(out) > 0 {
+		h[name] = []string{strings.Join(out, ",")}
+	}
 }
 
 // Retries is whether the account can mend a refusal (Retry), so the
@@ -324,12 +381,15 @@ func parseClaudeCredentials(b []byte) (claudeCredentials, bool) {
 	return c, c.OAuth.AccessToken != ""
 }
 
+// marshal writes into copies: c.raw is shared with every copy of c, the
+// cached one included, which other goroutines marshal at the same time.
 func (c claudeCredentials) marshal() ([]byte, error) {
-	raw := c.raw
+	raw := maps.Clone(c.raw)
 	if raw == nil {
 		raw = map[string]any{}
 	}
 	oauth, _ := raw["claudeAiOauth"].(map[string]any)
+	oauth = maps.Clone(oauth)
 	if oauth == nil {
 		oauth = map[string]any{}
 	}
@@ -497,19 +557,10 @@ func saveClaudeCredential(loc claudeCredentialLocation, c claudeCredentials) err
 	return nil
 }
 
-// claudeExecutable finds the claude CLI; a var so tests can fake it.
-var claudeExecutable = func() string {
-	if p, err := exec.LookPath("claude"); err == nil {
-		return p
-	}
-	home, _ := os.UserHomeDir()
-	for _, p := range []string{filepath.Join(home, ".local", "bin", "claude"), "/usr/local/bin/claude", "/opt/homebrew/bin/claude"} {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p
-		}
-	}
-	return ""
-}
+// claudeExecutable finds the claude CLI (proc.FindTool: claude.exe in
+// ~/.local/bin on Windows too, #839), else the one magpie downloaded
+// (claudecode.Find); a var so tests can fake it.
+var claudeExecutable = claudecode.Find
 
 // claudeIdentity asks Claude Code itself which account is active. Its credential
 // blob intentionally contains tokens and plan metadata but no display identity;
@@ -631,6 +682,7 @@ func claudeProvider(acct *Account) Provider {
 	// one that would go straight to the API with its sign-in is refused
 	acct.sign = func(context.Context, *http.Request, []byte) error { return errClaudeViaCLI }
 	acct.models = func() []catalog.Model { return catalog.Provider("anthropic") }
+	acct.magpieList = true
 	// Claude's models are the ones magpie knows: listing them would ask
 	// Anthropic with the account's sign-in, which magpie never does
 	acct.fetch = func(context.Context) ([]catalog.Model, error) {
@@ -712,6 +764,9 @@ func Accounts() []Provider {
 	if p, ok := mimoAccount(); ok {
 		out = append(out, p)
 	}
+	if p, ok := siwcAccount(); ok {
+		out = append(out, p)
+	}
 	for _, agent := range []string{"gemini", "antigravity"} {
 		if p, ok := googleAccountOf(agent); ok {
 			out = append(out, p)
@@ -724,7 +779,7 @@ func Accounts() []Provider {
 
 // builtinOrder is the built-ins' ids in the order Accounts lists them.
 var builtinOrder = slices.Concat([]string{"claude", "codex", "copilot", "cursor", "grok", "devin", "kiro", "zcode",
-	"workbuddy", WorkBuddyAIID, CommandCodePlanID}, qoderAgents, []string{"zed", "factory", MiMoID, "gemini", "antigravity"})
+	"workbuddy", WorkBuddyAIID, CommandCodePlanID}, qoderAgents, []string{"zed", "factory", MiMoID, ChatGPTAPIID, "gemini", "antigravity"})
 
 // placeMoved adds the plugins' accounts to the built-ins': one a built-in
 // was moved onto stands where the built-in stood, the others go last.
@@ -799,6 +854,14 @@ const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI's own OAuth cl
 // so tests can point it elsewhere.
 var codexTokenURL = "https://auth.openai.com/oauth/token"
 
+// CodexTokenURLForTest points ChatGPT's token endpoint at a test server,
+// for the CLI's tests; the func it returns puts it back.
+func CodexTokenURLForTest(u string) func() {
+	old := codexTokenURL
+	codexTokenURL = u
+	return func() { codexTokenURL = old }
+}
+
 // CodexBase is where a ChatGPT account's Codex requests go; a var so tests
 // can point it elsewhere.
 var CodexBase = "https://chatgpt.com/backend-api/codex"
@@ -817,8 +880,9 @@ type codexAuth struct {
 
 func codexAccount(home string) (Provider, bool) {
 	path := filepath.Join(home, ".codex", "auth.json")
+	b, err := os.ReadFile(path)
 	var a codexAuth
-	if !readJSON(path, &a) || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {
+	if err != nil || json.Unmarshal(b, &a) != nil || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {
 		return Provider{}, false
 	}
 	id := jwtClaims(a.Tokens.IDToken)
@@ -826,6 +890,10 @@ func codexAccount(home string) (Provider, bool) {
 		User: codexUser(id), Plan: claimString(id, "https://api.openai.com/auth", "chatgpt_plan_type")}
 	if acct.User == "" {
 		acct.User = "ChatGPT"
+	} else {
+		// as it is saved, as liveLogin names it: a second Team seat of
+		// the email is "email · Team · <workspace>" (#1424)
+		acct.User = codexLiveName(acct.User, bytes.TrimSpace(b))
 	}
 	acct.sign = codexSign(func(ctx context.Context) (string, string, error) { return codexToken(ctx, path) })
 	acct.body = codexBody
@@ -837,7 +905,7 @@ func codexAccount(home string) (Provider, bool) {
 		}
 		catalog.SaveLive(accountModels("codex", acct.User), CodexBase, ms)
 		codexFetchSaved(ctx)
-		ms = codexPoolLevels(ms)
+		ms = codexPoolModels(ms)
 		return ms, catalog.SaveLive("codex", CodexBase, ms)
 	}
 	return Provider{ID: "codex", Name: "Codex", Icon: "codex-color", Responses: CodexBase, Website: "https://chatgpt.com/codex", Account: acct}, true
@@ -925,11 +993,24 @@ var CopilotTokenURL = "https://api.github.com/copilot_internal/v2/token"
 const copilotBase = "https://api.githubcopilot.com"
 
 var copilotHeaders = map[string]string{
-	"Editor-Version":         "vscode/1.104.0",
-	"Editor-Plugin-Version":  "copilot-chat/0.31.0",
+	"Editor-Version":         "vscode/1.140.0",
+	"Editor-Plugin-Version":  "copilot-chat/0.68.0",
 	"Copilot-Integration-Id": "vscode-chat",
-	"User-Agent":             "GitHubCopilotChat/0.31.0",
+	"User-Agent":             "GitHubCopilotChat/0.68.0",
 }
+
+// copilotAPIHeaders are what the editors' sign-in sends Copilot's API
+// (api.githubcopilot.com, not GitHub's): Copilot Chat's API version, which
+// it sends on every chat request (networking.ts). Without one Copilot
+// leaves Auto's Copilot-Session-Token unread and takes the request as a
+// model picked by hand, which a Student plan is refused for Auto's pick
+// (#256: gpt-5.6-luna, "The requested model is not supported.", served to
+// VS Code on the same account); with it the session is held to its pick.
+var copilotAPIHeaders = func() map[string]string {
+	h := maps.Clone(copilotHeaders)
+	h["X-GitHub-Api-Version"] = "2026-01-09"
+	return h
+}()
 
 type copilotSession struct {
 	Token     string `json:"token"`
@@ -945,7 +1026,7 @@ func (s copilotSession) headers() map[string]string {
 	if s.direct {
 		return copilotCLIHeaders
 	}
-	return copilotHeaders
+	return copilotAPIHeaders
 }
 
 var (
@@ -960,14 +1041,39 @@ type copilotApp struct {
 	// github.com (copilot_ghe.go)
 	Host string `json:"host,omitempty"`
 	cli  bool   // the standalone Copilot CLI's sign-in
+	src  string // the editors' file it was read from, "" for any other
 }
 
-// copilotLogin finds the GitHub token Copilot's editors and CLI keep.
+// copilotLogin finds the GitHub token Copilot's editors and CLI keep: an
+// editor's github.com sign-in first, then the Copilot CLI's, then an
+// editor's on an enterprise's GHE.com. An editor's token GitHub has
+// refused (copilotRefusedToken) gives way to the CLI's sign-in of the same
+// account, never to another account's (#1238).
 func copilotLogin(cfg string) (copilotApp, bool) {
-	var ghe *copilotApp // an editor's sign-in on an enterprise's <name>.ghe.com
+	gh, ghe := copilotEditorLogins(cfg)
+	if gh != nil && !copilotRefusedToken(gh.Token) {
+		return *gh, true
+	}
+	if gh != nil {
+		if cli, ok := copilotCLILogin(); ok && copilotSameAccount(cli, *gh) {
+			return cli, true
+		}
+		return *gh, true
+	}
+	if app, ok := copilotCLILogin(); ok || ghe == nil {
+		return app, ok
+	}
+	return *ghe, true
+}
+
+// copilotEditorLogins are the sign-ins Copilot's editors keep: the first on
+// github.com and the first on an enterprise's <name>.ghe.com, each with the
+// file it was read from.
+func copilotEditorLogins(cfg string) (gh, ghe *copilotApp) {
 	for _, name := range []string{"apps.json", "hosts.json"} {
 		var apps map[string]copilotApp
-		if !readJSON(filepath.Join(cfg, "github-copilot", name), &apps) {
+		src := filepath.Join(cfg, "github-copilot", name)
+		if !readJSON(src, &apps) {
 			continue
 		}
 		var keys []string
@@ -978,30 +1084,105 @@ func copilotLogin(cfg string) (copilotApp, bool) {
 		for _, k := range keys {
 			if strings.HasPrefix(k, "github.com") && apps[k].Token != "" {
 				app := apps[k]
-				app.Host = ""
-				return app, true
+				app.Host, app.src = "", src
+				return &app, ghe
 			}
 			// "acme.ghe.com:Iv1…", as copilot.lua keeps one (#723)
 			host, _, _ := strings.Cut(k, ":")
 			if h, err := CopilotHost(host); ghe == nil && err == nil && h != "" && apps[k].Token != "" {
 				app := apps[k]
-				app.Host = h
+				app.Host, app.src = h, src
 				ghe = &app
 			}
 		}
 	}
-	if app, ok := copilotCLILogin(); ok || ghe == nil {
-		return app, ok
-	}
-	return *ghe, true
+	return nil, ghe
 }
 
-// session is what this sign-in's requests carry.
+// copilotSameAccount says two sign-ins are one GitHub account: the same
+// login on the same host. An editor's sign-in that names no user is no
+// one's to stand in for.
+func copilotSameAccount(a, b copilotApp) bool {
+	return a.User != "" && strings.EqualFold(a.User, b.User) && a.Host == b.Host
+}
+
+// copilotRefusals is when GitHub last turned away the trade of an editor's
+// GitHub token for a session token (401 Bad credentials, or 403), by
+// token: a stale sign-in left in apps.json, or a CLI token put there
+// (#1238). It is tried again after an hour, or at once when traded.
+var copilotRefusals = struct {
+	sync.Mutex
+	at     map[string]time.Time
+	status map[string]int
+}{at: map[string]time.Time{}, status: map[string]int{}}
+
+func copilotRefusedToken(token string) bool {
+	copilotRefusals.Lock()
+	defer copilotRefusals.Unlock()
+	at, ok := copilotRefusals.at[token]
+	return ok && time.Since(at) < time.Hour
+}
+
+// copilotStaleToken says GitHub answered the token's trade 401: the token
+// itself is no good. A 403 can be an account without Copilot as well, so
+// it isn't called stale.
+func copilotStaleToken(token string) bool {
+	copilotRefusals.Lock()
+	defer copilotRefusals.Unlock()
+	return copilotRefusals.status[token] == http.StatusUnauthorized
+}
+
+func copilotRefuse(token string, status int) {
+	copilotRefusals.Lock()
+	defer copilotRefusals.Unlock()
+	copilotRefusals.at[token] = time.Now()
+	copilotRefusals.status[token] = status
+}
+
+// copilotStandIn is the Copilot CLI's sign-in of the same account as a,
+// an editor's sign-in GitHub refused (#1238).
+func copilotStandIn(a copilotApp) (copilotApp, bool) {
+	if a.cli || a.src == "" {
+		return copilotApp{}, false
+	}
+	cli, ok := copilotCLILogin()
+	return cli, ok && copilotSameAccount(cli, a)
+}
+
+// session is what this sign-in's requests carry. An editor's token GitHub
+// refuses is replaced by the Copilot CLI's sign-in of the same account,
+// sent as the CLI sends it; with none, the error names the file the
+// refused token is in, since it is read before the CLI's (#1238).
 func (a copilotApp) session(ctx context.Context) (copilotSession, error) {
 	if a.cli {
 		return copilotDirect(ctx, a)
 	}
-	return copilotToken(ctx, a)
+	// refused before: not asked again at every request
+	if copilotRefusedToken(a.Token) {
+		if cli, ok := copilotStandIn(a); ok {
+			return copilotDirect(ctx, cli)
+		}
+	}
+	s, err := copilotToken(ctx, a)
+	if err == nil || a.src == "" || !copilotRefusedToken(a.Token) {
+		return s, err
+	}
+	cli, ok := copilotCLILogin()
+	if ok && copilotSameAccount(cli, a) {
+		return copilotDirect(ctx, cli)
+	}
+	if !copilotStaleToken(a.Token) {
+		return s, err
+	}
+	who := ""
+	if a.User != "" {
+		who = " for " + CopilotAccountName(a.User, a.Host)
+	}
+	msg := strings.TrimSuffix(err.Error(), "; sign in to Copilot again") + ": the GitHub token Copilot's editors keep in " + a.src + who + " was refused, and it is read before any other sign-in; sign in to Copilot again in your editor or in magpie, or move that file aside"
+	if ok {
+		msg += " (the Copilot CLI is signed in to " + CopilotAccountName(cli.User, cli.Host) + ", another account, so it isn't used in its place)"
+	}
+	return copilotSession{}, errors.New(msg)
 }
 
 // copilotProvider is Copilot as one GitHub account serves it.
@@ -1159,9 +1340,16 @@ func copilotToken(ctx context.Context, app copilotApp) (copilotSession, error) {
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	var s copilotSession
 	if res.StatusCode != 200 || json.Unmarshal(b, &s) != nil || s.Token == "" {
+		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+			copilotRefuse(github, res.StatusCode)
+		}
 		return copilotSession{}, errors.New("Copilot is signed out (" + APIError(b, res.Status) + "); sign in to Copilot again")
 	}
 	copilotSessions[github] = s
+	copilotRefusals.Lock()
+	delete(copilotRefusals.at, github)
+	delete(copilotRefusals.status, github)
+	copilotRefusals.Unlock()
 	return s, nil
 }
 
@@ -1235,6 +1423,10 @@ func copilotAccept(ctx context.Context, app copilotApp, s copilotSession, model 
 }
 
 // copilotModels asks Copilot which chat models this account may use.
+// copilotBaseModel is Copilot's base model, billed to no allowance on any
+// plan.
+const copilotBaseModel = "gpt-4.1"
+
 func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error) {
 	s, err := app.session(ctx)
 	if err != nil {
@@ -1306,18 +1498,23 @@ func copilotModels(ctx context.Context, app copilotApp) ([]catalog.Model, error)
 		case m.Policy != nil && m.Policy.State == "enabled", m.Policy == nil && m.Picker:
 			picks = append(picks, m.ID)
 			// Copilot's base model (VS Code's copilot-base: the list's
-			// is_chat_fallback), then its default, then one billed to no
-			// premium allowance: what a plan that may pick little (a
-			// Student's) is likeliest to be served
+			// is_chat_fallback), then its default, then gpt-4.1, which
+			// the list no longer flags as either but is the one a
+			// Student plan is served picked by hand (#256: it was last
+			// of seven picks, the six before it refused), then one billed
+			// to no premium allowance: what a plan that may pick little
+			// is likeliest to be served
 			switch {
 			case m.Fallback:
 				rank[m.ID] = 0
 			case m.Default:
 				rank[m.ID] = 1
-			case m.Billing != nil && !m.Billing.Premium:
+			case m.ID == copilotBaseModel:
 				rank[m.ID] = 2
-			default:
+			case m.Billing != nil && !m.Billing.Premium:
 				rank[m.ID] = 3
+			default:
+				rank[m.ID] = 4
 			}
 		case m.Policy != nil && m.Policy.Terms != "":
 			waiting[m.ID] = true

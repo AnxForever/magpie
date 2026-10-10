@@ -144,13 +144,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(save.body.modelPrefs, { "m-mixed": { api: "anthropic" } });
 
       const missing = await page.evaluate(() => [
-        "Detect APIs", "Send the smallest request to each API (OpenAI chat completions, Responses, Anthropic messages) at this URL, to see which answer",
+        "Detect APIs", "Send the smallest request to each API (OpenAI chat completions, Responses, Anthropic messages, Gemini generateContent) at this URL, to see which answer",
         "model to try · empty picks one from the vendor's list", "Type the base URL first", "Asking each API…", "model {model}",
         "None answered: check the URL and the key, or type a model the vendor serves", "Use these", "Set the URLs of the APIs that answered; one not found there is cleared",
         "Taken · save to keep", "Ask {model} on {api} only", "Staged in Names & levels and made with the Save; Auto there gives it back", "{model} is asked on {api} once saved",
         "no URL to ask", "no model to try: type one the vendor serves", "no key is on for this endpoint",
         "The API {id} is asked on. Auto: as the vendor's list says, else each URL the provider has; pick one when the vendor serves it on that one only",
-        "Its own name, every reasoning level it has, whether it sees images, the API it is asked on, and the model it is the same as",
+        "Its own name, every reasoning level it has, whether it sees images, the API it is asked on, the model it is the same as, and its list price",
       ].filter((k) => !I18N.zh[k]));
       assert.deepEqual(missing, [], "every string has its Chinese");
       assert.deepEqual(errors, []);

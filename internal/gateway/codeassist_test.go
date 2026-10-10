@@ -2,11 +2,14 @@ package gateway
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 func codeAssistRequest(t *testing.T) *Request {
@@ -195,6 +198,63 @@ func TestCodeAssistAntigravityLevels(t *testing.T) {
 	}
 }
 
+// Claude Code's auto mode classifier turns thinking off and is asked at the
+// least level the model has (fitAutoModeClassifier, #250): minimal, on a
+// Gemini 3 Flash models.dev gives minimal. Code Assist sends minimal only
+// to a variant at minimal, as the id doesn't say which Flash serves it and
+// 3.8 Flash has none, and sent the rest at high, the most: they go at low.
+// An image model asked low, which fits to minimal (3.1 Flash Image has
+// minimal and high), still goes at high.
+func TestCodeAssistReasoningOffAtLow(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755)
+	if err := os.WriteFile(catalog.CachePath(), []byte(`{"google":{"models":{
+	  "gemini-3.5-flash":{"id":"gemini-3.5-flash","reasoning":true,"reasoning_options":[{"type":"effort","values":["minimal","low","medium","high"]}]},
+	  "gemini-3.1-flash-lite":{"id":"gemini-3.1-flash-lite","reasoning":true,"reasoning_options":[{"type":"effort","values":["minimal","low","medium","high"]}]},
+	  "gemini-3.1-flash-image":{"id":"gemini-3.1-flash-image","reasoning":true,"reasoning_options":[{"type":"effort","values":["minimal","high"]}]}}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+	// the level the request goes at, its effort fitted as forwardTranslated
+	// fits it
+	level := func(p provider.Provider, model string, r *Request) string {
+		if r.Effort != "" {
+			r.Effort = fitFor(p, model, r.Effort)
+		}
+		var env struct {
+			Request struct {
+				GenerationConfig struct {
+					ThinkingConfig struct {
+						ThinkingLevel string `json:"thinkingLevel"`
+					} `json:"thinkingConfig"`
+				} `json:"generationConfig"`
+			} `json:"request"`
+		}
+		json.Unmarshal(codeAssistBody(p, r, model, nil), &env)
+		return env.Request.GenerationConfig.ThinkingConfig.ThinkingLevel
+	}
+	for _, c := range []struct{ agent, model string }{{"gemini", "gemini-3.5-flash"}, {"antigravity", "gemini-3.1-flash-lite"}} {
+		p := provider.Provider{ID: c.agent, Account: &provider.Account{Agent: c.agent, User: "u"}}
+		r, err := parseAnthropic([]byte(autoModeAsk(c.model)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fitAutoModeClassifier(p, c.model, r)
+		if got := level(p, c.model, r); r.Effort != "minimal" || got != "low" {
+			t.Errorf("the classifier on %s's %s: %q at %q, want minimal at low", c.agent, c.model, r.Effort, got)
+		}
+	}
+	p := provider.Provider{ID: "antigravity", Account: &provider.Account{Agent: "antigravity", User: "u"}}
+	r, err := parseChat([]byte(`{"model":"gemini-3.1-flash-image","stream":true,"reasoning_effort":"low","messages":[{"role":"user","content":"draw a cat"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := level(p, "gemini-3.1-flash-image", r); got != "high" {
+		t.Errorf("gemini-3.1-flash-image asked low: at %q, want high", got)
+	}
+}
+
 // A call Antigravity's model writes out in its reply's text,
 // call:default_api:<tool>{...}, is the call it meant, however the stream
 // cuts it up, and a call named with Gemini's namespace is the client's
@@ -260,5 +320,80 @@ func TestCodeAssistTextCalls(t *testing.T) {
 				t.Errorf("%s: call %v, want %v", c.name, cl, c.calls[i])
 			}
 		}
+	}
+}
+
+// Two reads that each return a screenshot, as in @sinswing's report: on
+// Antigravity's Claude the responses come first and the images after them,
+// each told whose it is, or Google's Anthropic turn has an image between two
+// tool_results ("tool_use ids were found without tool_result blocks
+// immediately after"). Gemini keeps each image beside its response.
+func TestCodeAssistToolImagesAfterEveryResponse(t *testing.T) {
+	r, err := parseAnthropic([]byte(`{"model":"x","max_tokens":2000,
+		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],
+		"messages":[
+			{"role":"user","content":"look at both"},
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"toolu_bdrk_01AvFfWkjBwUMB97S9vUMAR7","name":"Read","input":{"file_path":"a.png"}},
+				{"type":"tool_use","id":"toolu_bdrk_01TJixAcopSp2JamBfnbfF4V","name":"Read","input":{"file_path":"b.png"}}]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"toolu_bdrk_01AvFfWkjBwUMB97S9vUMAR7","content":[
+					{"type":"text","text":"a.png"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QUFB"}}]},
+				{"type":"tool_result","tool_use_id":"toolu_bdrk_01TJixAcopSp2JamBfnbfF4V","content":[
+					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QkJC"}}]},
+				{"type":"text","text":"which is bigger?"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape := func(model, agent string) []string {
+		var env struct {
+			Request struct {
+				Contents []struct {
+					Parts []map[string]json.RawMessage `json:"parts"`
+				} `json:"contents"`
+			} `json:"request"`
+		}
+		if err := json.Unmarshal(buildCodeAssist(r, model, agent), &env); err != nil {
+			t.Fatal(err)
+		}
+		cs := env.Request.Contents
+		var out []string
+		for _, p := range cs[len(cs)-1].Parts {
+			switch {
+			case p["functionResponse"] != nil:
+				var fr struct{ ID string }
+				json.Unmarshal(p["functionResponse"], &fr)
+				out = append(out, "response "+fr.ID)
+			case p["inlineData"] != nil:
+				var d struct{ Data string }
+				json.Unmarshal(p["inlineData"], &d)
+				out = append(out, "image "+d.Data)
+			case p["text"] != nil:
+				var s string
+				json.Unmarshal(p["text"], &s)
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	want := []string{
+		"response toolu_bdrk_01AvFfWkjBwUMB97S9vUMAR7",
+		"response toolu_bdrk_01TJixAcopSp2JamBfnbfF4V",
+		"Image returned by tool Read (call toolu_bdrk_01AvFfWkjBwUMB97S9vUMAR7):",
+		"image QUFB",
+		"Image returned by tool Read (call toolu_bdrk_01TJixAcopSp2JamBfnbfF4V):",
+		"image QkJC",
+		"which is bigger?",
+	}
+	if got := shape("claude-opus-4-6-thinking", "antigravity"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Antigravity Claude:\n got %q\nwant %q", got, want)
+	}
+	gem := []string{
+		"response toolu_bdrk_01AvFfWkjBwUMB97S9vUMAR7", "image QUFB",
+		"response toolu_bdrk_01TJixAcopSp2JamBfnbfF4V", "image QkJC",
+		"which is bigger?",
+	}
+	if got := shape("gemini-3-flash", "antigravity"); !reflect.DeepEqual(got, gem) {
+		t.Errorf("Antigravity Gemini:\n got %q\nwant %q", got, gem)
 	}
 }

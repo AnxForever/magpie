@@ -44,6 +44,10 @@ for (const engine of engines) for (const lang of ["en", "zh"]) {
       const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];
       return route.fulfill({ body: await fs.readFile(file), contentType });
     });
+    // the sign-in opens GitHub's device page in a new window: it gets an
+    // empty page, not the real github.com or acme.ghe.com, whose pages a
+    // test can't control (ChatGPT's Cloudflare challenge hung clicks, #1307)
+    await page.context().route((url) => url.hostname !== "magpie.test", (route) => route.fulfill({ contentType: "text/html", body: "" }));
     await page.goto("http://magpie.test/");
     await page.waitForFunction((l) => state.settings.lang === l, lang);
     await page.evaluate(() => {
@@ -81,7 +85,7 @@ for (const engine of engines) for (const lang of ["en", "zh"]) {
     assert.deepEqual(canceled, ["c1"]);
     const text = await box.innerText();
     assert.match(text, lang === "zh" ? /你的企业在 GHE\.com 上的地址/ : /Your enterprise on GHE\.com/);
-    assert.match(text, lang === "zh" ? /github\.com 上的账号不用填/ : /An account on github\.com doesn't need it/);
+    assert.match(text, lang === "zh" ? /github\.com 账号无需填写/ : /An account on github\.com doesn't need it/);
     const field = box.locator(".copilot-ghe input");
     const go = box.locator('.copilot-ghe button[type="submit"]');
     assert.equal(await field.getAttribute("placeholder"), "acme.ghe.com");

@@ -4,7 +4,12 @@
 // magpie → host: {id, method, params}; the host answers {id, result} or
 // {id, error}. A fetch streams its reply first: {id, event: "head", status,
 // headers}, then {id, event: "chunk", data} (base64) as the body comes, then
-// {id, result: null}. {method: "abort", params: {id}} cancels one.
+// {id, result: null}. {method: "abort", params: {id}} cancels one, and
+// {method: "credit", params: {id, n}} gives a fetch back the n charged bytes
+// its reader took (the payload it read, and a frame's overhead once the frame
+// is done), so it may send that much more. A fetch starts with the window
+// magpie gave it and sends no more than that ahead of its reader, so a slow
+// reader pauses its upstream instead of the host buffering without bound.
 // host → magpie, unasked: {event: "log", level, message} and {event:
 // "toast", ...} (what a plugin logs or shows), {event: "auth", provider}
 // (a sign-in the host saved or refreshed).
@@ -22,14 +27,186 @@
 
 import { AsyncLocalStorage } from "node:async_hooks"
 import fs from "node:fs"
+import http2 from "node:http2"
 import net from "node:net"
 import path from "node:path"
 import readline from "node:readline"
+import { Duplex } from "node:stream"
 import tls from "node:tls"
 import { pathToFileURL } from "node:url"
 
 const rpcWrite = process.stdout.write.bind(process.stdout)
-const send = (msg) => rpcWrite(JSON.stringify(msg) + "\n")
+
+// Everything the child writes goes through one ordered queue: a line goes out
+// only when the stream can take it, so a parent that stops reading bounds what
+// Bun buffers instead of it growing without bound. A caller may cancel its own
+// wait, which drops its line if it has not been written yet, so an aborted
+// request leaves no listener or closure behind. A write failure or a closed
+// stream fails every line still waiting rather than leaving them pending.
+const outq = [] // {line, settle}
+let pumping = false
+let outFail = null
+
+function waitDrain() {
+  return new Promise((resolve, reject) => {
+    const done = () => { clear(); resolve() }
+    const bad = (e) => { clear(); reject(e ?? new Error("the host's stdout closed")) }
+    const clear = () => {
+      process.stdout.removeListener("drain", done)
+      process.stdout.removeListener("error", bad)
+      process.stdout.removeListener("close", bad)
+    }
+    process.stdout.once("drain", done)
+    process.stdout.once("error", bad)
+    process.stdout.once("close", bad)
+  })
+}
+
+function pump() {
+  if (pumping) return
+  pumping = true
+  while (outq.length) {
+    const item = outq[0]
+    if (outFail) {
+      outq.shift()
+      item.settle(outFail)
+      continue
+    }
+    // write returns false when the stream is full, but the line was still
+    // taken: wait for it to drain before the next one, never write it twice
+    const ok = rpcWrite(item.line)
+    outq.shift()
+    item.settle(null)
+    if (!ok) {
+      waitDrain().then(
+        () => { pumping = false; pump() },
+        (e) => { outFail = e; pumping = false; pump() },
+      )
+      return
+    }
+  }
+  pumping = false
+}
+
+// queueLine queues one line, giving a promise that settles with null once it is
+// written or with the error that stopped it, and a way to give the wait up.
+function queueLine(line) {
+  const item = { line, settle: () => {} }
+  const promise = new Promise((resolve) => { item.settle = (err) => resolve(err ?? null) })
+  outq.push(item)
+  pump()
+  return {
+    promise,
+    cancel: () => {
+      const i = outq.indexOf(item)
+      if (i >= 0) {
+        outq.splice(i, 1)
+        item.settle(null)
+      }
+    },
+  }
+}
+
+// send queues one message, ignoring whether it was written.
+const send = (msg) => queueLine(JSON.stringify(msg) + "\n").promise
+
+// sendCancelable is send, with a way to give the wait up.
+const sendCancelable = (msg) => queueLine(JSON.stringify(msg) + "\n")
+
+// A host cancellation suppresses the answer; a local abort still owes Go
+// its error. The record, rather than the signal, owns pending wire output.
+function transitionFetch(record, state) {
+  if (record.state === "finished") return
+  if (record.state !== "cancelled") record.state = state
+  if (state === "streaming") return
+  record.gate.stop()
+  const body = record.unconsumedBody
+  record.unconsumedBody = undefined
+  try { Promise.resolve(body?.cancel?.()).catch(() => {}) } catch {}
+  if (state === "finishing") return
+  record.pendingSend?.cancel()
+  record.readyCleanup?.()
+  record.readyCleanup = null
+  if (state === "cancelled") record.controller.abort()
+  else record.state = "finished"
+}
+
+function checkFetch(record) {
+  if (record.state === "cancelled" || record.state === "finished") throw new DOMException("Aborted", "AbortError")
+  record.controller.signal.throwIfAborted()
+}
+
+async function sendForFetch(record, msg) {
+  if (record.state === "cancelled" || record.state === "finished") return
+  const ctl = record.controller
+  const pendingSend = sendCancelable(msg)
+  record.pendingSend = pendingSend
+  const onAbort = () => pendingSend.cancel()
+  ctl.signal.addEventListener("abort", onAbort, { once: true })
+  try {
+    const err = await pendingSend.promise
+    if (err) throw err
+  } finally {
+    record.pendingSend = null
+    ctl.signal.removeEventListener("abort", onAbort)
+  }
+}
+
+// The largest decoded bytes one frame carries: the reader credits in larger
+// steps than this, so frames stay small enough that a credit round trip is
+// cheap without one frame dwarfing the window.
+const MAX_FRAME = 64 << 10
+
+// FRAME_OVERHEAD is what one queued frame costs the window besides its bytes,
+// as Go counts it too: the message struct and the decoded slice behind it. It
+// keeps a producer of tiny frames from filling a window with structs.
+const FRAME_OVERHEAD = 2048
+
+// HEAD_MAX and HEAD_ENTRIES are magpie's own head-envelope policy, not HTTP's:
+// a fetch's head carries at most HEAD_MAX header bytes (the UTF-8 bytes of
+// every name and value, plus HEAD_ENTRY_COST an entry) and HEAD_ENTRIES
+// entries, counted the same by Go before it is queued, so a vendor's unbounded
+// header set is not a free 0-charge line.
+const HEAD_MAX = 64 << 10
+const HEAD_ENTRIES = 256
+const HEAD_ENTRY_COST = 4
+
+// headCost is a head's header cost, as Go counts it too: the UTF-8 bytes of
+// every name and value, plus HEAD_ENTRY_COST an entry.
+function headCost(h) {
+  let n = 0
+  for (const [k, v] of Object.entries(h)) n += Buffer.byteLength(k) + Buffer.byteLength(v) + HEAD_ENTRY_COST
+  const entries = Object.keys(h).length
+  return { n, entries }
+}
+
+// makeGate is one fetch's credit: the child may have `window` decoded bytes
+// outstanding, each frame costing its bytes plus FRAME_OVERHEAD. take returns
+// how many bytes of a frame may go now (-1 when the fetch was stopped), spend
+// takes the frame's cost, add is the reader giving credit back.
+function makeGate(window) {
+  let free = window
+  let stopped = false
+  let wake = null
+  const fit = (want) => Math.min(want, free - FRAME_OVERHEAD)
+  return {
+    take(want) {
+      if (stopped) return Promise.resolve(-1)
+      const n = fit(want)
+      if (n > 0) return Promise.resolve(n)
+      return new Promise((resolve) => { wake = (ok) => resolve(ok ? fit(want) : -1) })
+    },
+    spend(cost) { free -= cost },
+    add(n) {
+        free += n
+      if (wake && free > FRAME_OVERHEAD) { const w = wake; wake = null; w(true) }
+    },
+    stop() {
+      stopped = true
+      if (wake) { const w = wake; wake = null; w(false) }
+    },
+  }
+}
 
 // A plugin writing to stdout would break the protocol: everything it
 // prints goes to stderr, which magpie logs.
@@ -43,10 +220,38 @@ process.stdout.write = (chunk, enc, cb) => process.stderr.write(chunk, enc, cb)
 // "Login canceled"), and its stdout is the host's answers. It reads
 // nothing instead and writes to stderr. node:child_process starts every
 // program through Bun.spawn and Bun.spawnSync, so these see all of them.
+//
+// And it has the proxy the plugin's own fetches take, as a built-in's CLI
+// had magpie's (netproxy.Env): the host has its *_PROXY only as
+// MAGPIE_*_PROXY (see below), so `grok login`, which the Grok plugin runs,
+// went out with none and, where x.ai is reached only through one, printed
+// no link to open (𝕏 on Discord). One the plugin set itself is kept.
+// Node's fetch goes past *_PROXY unless NODE_USE_ENV_PROXY=1 says to take
+// them, so a plugin downloading in a Node program it starts went out with
+// none and failed where the vendor is reached only through one (larchsis
+// on 𝕏, Windows 11, a proxy set in magpie only). It is told to, unless
+// the plugin said otherwise.
 const own = (v, fd) => v === "inherit" || v === fd || v === (fd ? process.stdout : process.stdin)
+const PROXY_VARS = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
+function proxied(env) {
+  env = { ...(env ?? process.env) }
+  if (Object.keys(env).some((k) => PROXY_VARS.includes(k.toUpperCase()) && env[k])) return env
+  const mine = via.getStore()
+  if (mine === "direct") return env
+  const set = mine ? { HTTPS_PROXY: mine, HTTP_PROXY: mine } : { HTTPS_PROXY: globalProxy.https, HTTP_PROXY: globalProxy.http, NO_PROXY: proxyVar("NO_PROXY") }
+  if (set.HTTPS_PROXY || set.HTTP_PROXY) set.NODE_USE_ENV_PROXY = "1"
+  for (const [k, v] of Object.entries(set)) {
+    if (!v || Object.keys(env).some((e) => e.toUpperCase() === k)) continue
+    env[k] = v
+    // Windows' names are one whatever their case
+    if (process.platform !== "win32" && k.endsWith("_PROXY") && k !== "NODE_USE_ENV_PROXY") env[k.toLowerCase()] = v
+  }
+  return env
+}
 const guard = (o) => {
-  if (!o || typeof o !== "object") return o
+  if (o != null && typeof o !== "object") return o
   o = { ...o }
+  o.env = proxied(o.env)
   if (Array.isArray(o.stdio)) {
     o.stdio = [...o.stdio]
     if (own(o.stdio[0], 0)) o.stdio[0] = "ignore"
@@ -68,11 +273,14 @@ let modelsDevPath = ""
 let piPath = "" // pi.js, which loads pi's extensions
 let directory = process.cwd()
 let userConfig = {}
+// prefer is the plugin the user picked for a provider id more than one
+// plugin signs in to: id → its spec (plugins.json's prefer)
+let prefer = {}
 const hooks = [] // {spec, hooks}
 const loaded = [] // {spec, id, error}
 const loaders = new Map() // account → options the auth loader returned
 const sessions = new Map() // oauth sign-in in progress → its authorize result
-const inflight = new Map() // fetch id → AbortController
+const inflight = new Map() // fetch id → its lifecycle and owned resources
 const renewing = new Map() // account → its sign-in's renewal under way
 const unrenewed = new Map() // account → its last renewal that failed: {at, secret, gone}
 let config = { provider: {} } // what the plugins' config hooks made of it
@@ -204,9 +412,10 @@ function asked(input, init) {
   if (!l) return sent(input, init)
   l.tried = true
   return sent(input, init).then(
-    (res) => ((l.lastOk = res.ok), res),
+    (res) => ((l.lastOk = res.ok), (l.said = res.ok ? "" : `HTTP ${res.status}`), res),
     (e) => {
       l.lastOk = false
+      l.said = e?.message ?? String(e)
       throw e
     },
   )
@@ -223,6 +432,96 @@ globalThis.fetch = Object.assign(function fetch(input, init) {
     },
   )
 }, bunFetch)
+
+// An HTTP/2 session a plugin opens itself goes through the proxy its
+// fetches take, as a built-in's requests on Go's transport did. Cursor's
+// plugin runs agent.v1.AgentService/Run on node:http2, which Bun connects
+// directly, *_PROXY or not: where Cursor is reached only through magpie's
+// proxy (the system's, or one set in magpie), its sign-in, models and
+// usage came through and every chat went out without it (#1035).
+const h2connect = http2.connect
+http2.connect = function connect(authority, options, listener) {
+  if (typeof options === "function") [listener, options] = [options, undefined]
+  let u
+  try {
+    u = typeof authority === "string" ? new URL(authority) : authority instanceof URL ? authority : new URL(`${authority.protocol ?? "https:"}//${authority.host ?? authority.hostname}`)
+  } catch {
+    return h2connect.call(this, authority, options, listener)
+  }
+  const p = options?.createConnection ? "" : proxyFor(u.href)
+  if (!p) return h2connect.call(this, authority, options, listener)
+  const host = u.hostname.replace(/^\[|\]$/g, "")
+  const port = Number(u.port || (u.protocol === "http:" ? 80 : 443))
+  const raw = tunnel(p, host, port)
+  const createConnection = () =>
+    u.protocol === "http:" ? raw : tls.connect({ ...options, socket: raw, servername: options?.servername || (net.isIP(host) ? undefined : host), ALPNProtocols: ["h2"] })
+  const session = h2connect.call(this, authority, { ...options, createConnection }, listener)
+  // the tunnel's failure is the session's: Bun's TLS over a stream leaves
+  // the stream's errors unheard (one unheard ends the host), and says a
+  // tunnel that never came as "h2 is not supported"
+  raw.on("error", (e) => session.destroy(e))
+  return session
+}
+
+// tunnel is a connection to host:port through the HTTP proxy p (a SOCKS
+// one is handed to the host as an HTTP bridge to it, netproxy.ForBun): its
+// CONNECT is asked first, and what is written waits for the tunnel. A proxy
+// that turns it away fails it in Go's words ("proxyconnect …").
+function tunnel(p, host, port) {
+  const pu = new URL(p)
+  const ph = pu.hostname.replace(/^\[|\]$/g, "")
+  const pp = Number(pu.port || (pu.protocol === "https:" ? 443 : 80))
+  const target = `${host.includes(":") ? `[${host}]` : host}:${port}`
+  let ready = false
+  const queued = []
+  const sock = pu.protocol === "https:" ? tls.connect({ host: ph, port: pp, servername: net.isIP(ph) ? undefined : ph }) : net.connect({ host: ph, port: pp })
+  const conn = new Duplex({
+    read() {},
+    write(chunk, enc, cb) {
+      if (ready) sock.write(chunk, cb)
+      else queued.push([chunk, cb])
+    },
+    final(cb) {
+      sock.end()
+      cb()
+    },
+    destroy(err, cb) {
+      sock.destroy()
+      cb(err)
+    },
+  })
+  sock.once(pu.protocol === "https:" ? "secureConnect" : "connect", () => {
+    let req = `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n`
+    if (pu.username) {
+      const cred = `${decodeURIComponent(pu.username)}:${decodeURIComponent(pu.password)}`
+      req += `Proxy-Authorization: Basic ${Buffer.from(cred).toString("base64")}\r\n`
+    }
+    sock.write(req + "\r\n")
+  })
+  let got = Buffer.alloc(0)
+  const head = (chunk) => {
+    got = Buffer.concat([got, chunk])
+    const end = got.indexOf("\r\n\r\n")
+    if (end < 0) {
+      if (got.length > 8192) conn.destroy(new Error(`proxyconnect tcp: ${ph}:${pp} answered CONNECT with no HTTP`))
+      return
+    }
+    sock.off("data", head)
+    const status = got.subarray(0, got.indexOf("\r\n")).toString("latin1").replace(/^HTTP\/\d(\.\d)?\s+/, "")
+    if (!/^2\d\d/.test(status)) {
+      const body = got.subarray(end + 4, end + 304).toString("utf8").trim()
+      return conn.destroy(new Error(`proxyconnect tcp: ${body ? `${status}: ${body}` : status}`))
+    }
+    ready = true
+    if (got.length > end + 4) conn.push(got.subarray(end + 4))
+    sock.on("data", (d) => conn.push(d))
+    for (const [c, cb] of queued.splice(0)) sock.write(c, cb)
+  }
+  sock.on("data", head)
+  sock.on("end", () => conn.push(null))
+  sock.on("error", (e) => conn.destroy(ready ? e : new Error(`proxyconnect tcp: dial tcp ${ph}:${pp}: ${e?.message || e?.code || e}`)))
+  return conn
+}
 
 // ---- auth.json ---------------------------------------------------------------
 
@@ -537,7 +836,12 @@ function entries(target) {
     const p = path.join(target, f)
     if (fs.existsSync(p)) out.push(p)
   }
-  if (out.length === 0) throw new Error(`plugin ${target} has no entry (package.json main, exports or index file)`)
+  if (out.length === 0) {
+    // a command alone (bin), an MCP server, is no plugin at all (#1327)
+    const cmd = pkg?.bin ? ", only a command (bin). If it is an MCP server, add it under Library → MCP servers instead" : ""
+    // said without a stack: there is no fault in the host to trace
+    throw Object.assign(new Error(`${pkg?.name || target} isn't an OpenCode or magpie plugin: its package names no file to load (no main or exports in package.json, no index file)${cmd}`), { plain: true })
+  }
   return [...new Set(out)]
 }
 
@@ -600,7 +904,7 @@ async function loadPlugins(list) {
       for (const fn of fns) hooks.push({ spec: p.spec, target: p.target, hooks: (await fn(input, p.options)) ?? {} })
       loaded.push({ spec: p.spec })
     } catch (e) {
-      loaded.push({ spec: p.spec, error: String(e?.stack ?? e) })
+      loaded.push({ spec: p.spec, error: e?.plain ? e.message : String(e?.stack ?? e) })
     }
   }
   config = { provider: {}, ...structuredClone(userConfig) }
@@ -615,11 +919,32 @@ async function loadPlugins(list) {
 }
 
 // auths are the auth hooks by provider, the last plugin to name one
-// winning, as in OpenCode.
+// winning, as in OpenCode, unless the user picked one of them for it
+// (prefer): a plugin of their own beside a third party's that signs in to
+// the same provider id is then theirs to choose, not the list's order.
 function auths() {
   const m = new Map()
   for (const h of hooks) if (h.hooks.auth?.provider) m.set(h.hooks.auth.provider, { spec: h.spec, target: h.target, auth: h.hooks.auth })
+  for (const h of hooks) {
+    const id = h.hooks.auth?.provider
+    if (id && prefer[id] === h.spec) m.set(id, { spec: h.spec, target: h.target, auth: h.hooks.auth })
+  }
   return m
+}
+
+// signsIn are the provider ids the plugin spec's auth hooks name.
+const signsIn = (spec) => [...new Set(hooks.filter((h) => h.spec === spec && h.hooks.auth?.provider).map((h) => h.hooks.auth.provider))]
+
+// withProviders is a loaded plugin as init tells magpie of it: the provider
+// ids it signs in to, and for each one another plugin serves (two plugins
+// naming one id: the host runs one), the plugin that does. magpie says so
+// on the plugin's row rather than leave its provider missing.
+function withProviders(l) {
+  const ids = l.error ? [] : signsIn(l.spec)
+  if (!ids.length) return l
+  const a = auths()
+  const servedBy = Object.fromEntries(ids.filter((id) => a.get(id) && a.get(id).spec !== l.spec).map((id) => [id, a.get(id).spec]))
+  return { ...l, provides: ids, ...(Object.keys(servedBy).length ? { servedBy } : {}) }
 }
 
 function authOf(provider) {
@@ -720,9 +1045,13 @@ async function info(id, key, strict) {
       variants: m.variants ?? was?.variants ?? {},
     }
   }
+  const server = auths().get(id)?.spec
   for (const h of hooks) {
     const ph = h.hooks.provider
     if (ph?.id !== id || typeof ph.models !== "function") continue
+    // a plugin that signs in to id too but doesn't serve it: its list
+    // would be asked with the serving plugin's account
+    if (server && h.spec !== server && signsIn(h.spec).includes(id)) continue
     const k = key ?? accountsOf(readAuth(), id)[0] ?? id
     await fresh(id, k)
     const all = readAuth()
@@ -736,6 +1065,9 @@ async function info(id, key, strict) {
       // says so, handing back a list of its own (Symbol.for("magpie.fellBack")
       // on it: Command Code's Go table, ZCode's models)
       out.fellBack = (next === given.models && l.tried && !l.lastOk) || next?.[Symbol.for("magpie.fellBack")] === true
+      // why, as far as the host saw it: the editor says so rather than
+      // show the plugin's short defaults as if they were the account's
+      if (out.fellBack) out.listError = l.said || "the plugin couldn't get its vendor's list"
       out.models = Object.fromEntries(Object.entries(next ?? {}).map(([k, m]) => [k, { ...m, id: k, providerID: id }]))
     } catch (e) {
       // an error the models hook throws may say what it means for the
@@ -751,6 +1083,7 @@ async function info(id, key, strict) {
       // a hook that threw on its vendor's failure has no list to tell:
       // magpie keeps the one it had, as for one that gave its defaults back
       out.fellBack = true
+      out.listError = e?.message ?? String(e)
       send({ event: "log", level: "error", message: `${h.spec}: provider.models: ${e?.message ?? e}` })
     }
   }
@@ -823,7 +1156,7 @@ async function providers({ proxies } = {}) {
     // plan may serve fewer, or others, than the first account's. One that
     // can't be read is taken to have them all, or the ones it was last
     // told to have, as a built-in account whose fetch failed keeps its own.
-    const own = await Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true)).catch(() => ({ failed: true }))))
+    const own = await Promise.all(keys.slice(1).map((k) => via.run(through(k), () => info(id, k, true)).catch((e) => ({ failed: true, listError: e?.message ?? String(e) }))))
     const models = { ...p.models }
     for (const q of own) for (const [k, m] of Object.entries(q?.models ?? {})) models[k] ??= m
     const ids = (q) => Object.values(q.models).filter((m) => m.status !== "deprecated").map((m) => m.id)
@@ -837,11 +1170,13 @@ async function providers({ proxies } = {}) {
       methods: methods(a.auth),
       icon: iconOf(a),
       usage: typeof a.auth.usage === "function",
+      checkin: typeof a.auth.checkin === "function",
       maxConcurrency: concurrencyOf(a),
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
       accountId: whoOf(first),
       fellBack: keys.length > 0 && !!p.fellBack,
+      listError: keys.length > 0 && p.fellBack ? p.listError ?? "" : "",
       accounts: keys.map((k, i) => ({
         key: k,
         type: stored[k]?.type ?? "",
@@ -849,6 +1184,7 @@ async function providers({ proxies } = {}) {
         hint: hintOf(stored[k]),
         models: own.length === 0 ? undefined : i === 0 ? ids(p) : own[i - 1]?.models ? ids(own[i - 1]) : undefined,
         fellBack: i === 0 ? !!p.fellBack : !!(own[i - 1]?.fellBack || own[i - 1]?.failed),
+        listError: (i === 0 ? p.fellBack && p.listError : own[i - 1]?.listError) || "",
       })),
       models: Object.values(models)
         .filter((m) => m.status !== "deprecated")
@@ -872,6 +1208,8 @@ async function providers({ proxies } = {}) {
           // and before a discount running now (Qoder's price_factor)
           rate: rateOf(m.rate),
           rateWas: rateOf(m.rateWas),
+          // run fast when the request's service_tier is priority (Cursor's)
+          fast: m.fast === true,
         })),
     })
   }
@@ -1126,7 +1464,8 @@ async function load({ provider, account, proxy }) {
 //       count, when it counts in amounts: amount of limit used, in unit,
 //       "credits"), span? (seconds the window runs), model? (a
 //       word in the ids of the only models it counts), models? / notModels?
-//       (the ids it counts, or all but these), aside? (using it up doesn't
+//       (the ids it counts, or all but these; a bare id and its id@size
+//       count as one), aside? (using it up doesn't
 //       stop the account) }],
 //     signIn?: "expired" | "kept" | "renewed" (what the read means for the
 //       account's sign-in, as a model request's X-Magpie-Sign-In says;
@@ -1184,6 +1523,43 @@ async function usageOf(provider, account) {
   }
 }
 
+// ---- check-in ----------------------------------------------------------------
+
+// checkin presses the vendor's daily check-in (签到) for the account at key,
+// as the plugin's auth.checkin does it (magpie's own hook, which OpenCode
+// ignores; Lemon on Discord: 签到 belongs in the plugins):
+//   auth.checkin(getAuth, provider) → {
+//     outcome: "claimed" (checked in now) | "done" (in already today) |
+//       "ineligible" (the account can't take part) | "inactive" (no
+//       check-in running) | "captcha" (the vendor asks for a captcha: the
+//       user checks in in its own app; never solved) | "failed",
+//     credit? (what it gave), streak? (days in a row), message?
+//   }
+// magpie asks once a Beijing day per account while the user has it on, and
+// again later that day after a failure; a hook that throws is a failure.
+// Run in the account's scope, a token it renews is saved to that account.
+async function checkin({ provider, account, proxy }) {
+  return via.run(proxy ?? "", () => checkinOf(provider, account))
+}
+
+const checkinOutcomes = ["claimed", "done", "ineligible", "inactive", "captcha", "failed"]
+
+async function checkinOf(provider, account) {
+  const a = auths().get(provider)?.auth
+  if (typeof a?.checkin !== "function") throw new Error(`${provider}'s plugin doesn't check in`)
+  const key = accountKey(provider, account)
+  if (!readAuth()[key]) throw new Error("not signed in")
+  await fresh(provider, key)
+  const p = await info(provider, key)
+  const r = (await inScope(provider, key, () => a.checkin(async () => readAuth()[key], JSON.parse(JSON.stringify(p))))) ?? {}
+  const num = (v) => (typeof v === "number" && isFinite(v) ? Math.max(0, v) : 0)
+  const message = typeof r.message === "string" ? r.message : ""
+  if (!checkinOutcomes.includes(r.outcome)) {
+    return { outcome: "failed", credit: 0, streak: 0, message: message || `the plugin answered no outcome (${JSON.stringify(r.outcome ?? null)})` }
+  }
+  return { outcome: r.outcome, credit: num(r.credit), streak: Math.round(num(r.streak)), message }
+}
+
 // sdkHeaders are what the AI SDK package the model is on sends of the key.
 function sdkHeaders(npm, key) {
   if (!key) return {}
@@ -1205,22 +1581,24 @@ function bodyOf(b64) {
   }
 }
 
-async function doFetch(id, params) {
+async function doFetch(id, record, params) {
   const key = accountKey(params.provider, params.account)
-  return via.run(params.proxy ?? "", () => inScope(params.provider, key, () => fetchAs(id, key, params)))
+  return via.run(params.proxy ?? "", () => inScope(params.provider, key, () => fetchAs(id, record, key, params)))
 }
 
-async function fetchAs(id, key, { provider, model, npm, url, method, headers, body, session }) {
-  const ctl = new AbortController()
-  inflight.set(id, ctl)
+async function fetchAs(id, record, key, params) {
+  const { controller: ctl, gate } = record
+  const { provider, model, npm, url, method, headers, body, session } = params
   try {
     const o = await options(provider, key)
+    checkFetch(record)
     const h = new Headers()
     for (const [k, v] of Object.entries(sdkHeaders(npm, o.apiKey))) h.set(k, v)
     for (const [k, v] of Object.entries(o.headers ?? {})) h.set(k, String(v))
     for (const [k, v] of Object.entries(headers ?? {})) h.set(k, v)
     // chat.headers: what the plugins add to the request, theirs winning
     const p = await info(provider, key)
+    checkFetch(record)
     const m = p.models[model] ?? { id: model, providerID: provider, api: { id: model, npm } }
     for (const x of hooks) {
       const fn = x.hooks["chat.headers"]
@@ -1240,31 +1618,64 @@ async function fetchAs(id, key, { provider, model, npm, url, method, headers, bo
       } catch (e) {
         send({ event: "log", level: "error", message: `${x.spec}: chat.headers: ${e?.message ?? e}` })
       }
+      checkFetch(record)
       for (const [k, v] of Object.entries(out.headers)) h.set(k, String(v))
     }
     const f = typeof o.fetch === "function" ? o.fetch : fetch
+    // the fetch is owned since its message was read: an abort that came while
+    // this setup was awaiting must not let the upstream start
+    checkFetch(record)
     const res = await f(url, {
       method: method ?? "POST",
       headers: h,
       body: bodyOf(body),
       signal: ctl.signal,
     })
+    record.unconsumedBody = res.body
+    checkFetch(record)
+    transitionFetch(record, "streaming")
     const rh = {}
     res.headers.forEach((v, k) => (rh[k] = v))
-    send({ id, event: "head", status: res.status, headers: rh })
+    const head = headCost(rh)
+    if (head.entries > HEAD_ENTRIES || head.n > HEAD_MAX) {
+      // the reply's head is past magpie's envelope: give the fetch up rather
+      // than write a line the host would refuse, and let the body go
+      throw new Error(`the reply's headers are past the host's head envelope (${HEAD_MAX} bytes or ${HEAD_ENTRIES} entries)`)
+    }
+    await sendForFetch(record, { id, event: "head", status: res.status, headers: rh })
+    checkFetch(record)
     if (res.body) {
+      record.unconsumedBody = undefined
+      // an abort gives up this fetch's own pending write, so its wait ends and
+      // the loop leaves rather than parking on a stream that never drains
       for await (const chunk of res.body) {
-        send({ id, event: "chunk", data: Buffer.from(chunk).toString("base64") })
+        checkFetch(record)
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        for (let off = 0; off < bytes.length; ) {
+          // one frame at a time, no more than the reader has credited: a
+          // reader that stopped leaves the upstream paused here
+          const n = await gate.take(Math.min(MAX_FRAME, bytes.length - off))
+          checkFetch(record)
+          if (n <= 0) break
+          const data = bytes.subarray(off, off + n).toString("base64")
+          gate.spend(n + FRAME_OVERHEAD)
+          await sendForFetch(record, { id, event: "chunk", data })
+          checkFetch(record)
+          off += n
+        }
       }
     }
-    send({ id, result: null })
+    checkFetch(record)
+    transitionFetch(record, "finishing")
+    await sendForFetch(record, { id, result: null })
   } catch (e) {
+    transitionFetch(record, "finishing")
     // a fetch hook that threw on its sign-in (a refresh the vendor turned
     // away) marks the account, as a built-in's refused refresh marked it
     if (["expired", "kept", "renewed"].includes(e?.signIn) && key) send({ event: "signIn", provider, account: key, said: e.signIn })
-    send({ id, error: { message: String(e?.message ?? e) } })
-  } finally {
-    inflight.delete(id)
+    // a fetch the host already gave up on needs no late error: its slot is
+    // gone, and queueing an uncancellable line for it would only be noise
+    await sendForFetch(record, { id, error: { message: String(e?.message ?? e) } })
   }
 }
 
@@ -1277,8 +1688,9 @@ const handlers = {
     piPath = p.piPath ?? ""
     directory = p.directory ?? directory
     userConfig = p.config ?? {}
+    prefer = p.prefer ?? {}
     await loadPlugins(p.plugins ?? [])
-    return { plugins: loaded }
+    return { plugins: loaded.map(withProviders) }
   },
   providers: (p) => providers(p ?? {}),
   prompt: async (p) => ({ prompt: await nextPrompt(p.provider, p.method, p.inputs ?? {}) }),
@@ -1288,6 +1700,7 @@ const handlers = {
   apiKey,
   load,
   usage,
+  checkin,
   // check tries one account as a request would: its loader, then its
   // models as the plugin lists them for it, then its usage, which asks the
   // vendor of the account itself. refused is the models hook saying the
@@ -1351,6 +1764,42 @@ const handlers = {
 // Everything waits for init; a request is answered even when magpie has
 // closed stdin behind it, the host leaving once nothing is pending.
 let ready
+let readyState
+const readyWaiters = new Set()
+function setReady(promise) {
+  readyState = undefined
+  ready = promise
+  const settle = (state) => {
+    readyState = state
+    for (const waiter of readyWaiters) waiter(state)
+    readyWaiters.clear()
+  }
+  ready.then(
+    () => settle({}),
+    (error) => settle({ error }),
+  )
+}
+function waitForReady(record) {
+  const signal = record.controller.signal
+  if (!ready) return Promise.reject(new Error("the host has not been initialised"))
+  return new Promise((resolve, reject) => {
+    const finish = (state) => {
+      readyWaiters.delete(finish)
+      signal.removeEventListener("abort", abort)
+      record.readyCleanup = null
+      if ("error" in state) reject(state.error)
+      else resolve()
+    }
+    const abort = () => finish({ error: new DOMException("Aborted", "AbortError") })
+    record.readyCleanup = abort
+    if (signal.aborted) abort()
+    else if (readyState) finish(readyState)
+    else {
+      readyWaiters.add(finish)
+      signal.addEventListener("abort", abort, { once: true })
+    }
+  })
+}
 let pending = 0
 let closed = false
 const done = () => {
@@ -1367,23 +1816,57 @@ rl.on("line", (line) => {
     return
   }
   if (msg.method === "abort") {
-    inflight.get(msg.params?.id)?.abort()
+    const id = msg.params?.id
+    const record = inflight.get(id)
+    if (record) transitionFetch(record, "cancelled")
+    return
+  }
+  if (msg.method === "credit") {
+    const record = inflight.get(msg.params?.id)
+    if (record?.state === "streaming") record.gate.add(msg.params?.n ?? 0)
     return
   }
   pending++
   if (msg.method === "init") {
-    ready = handlers.init(msg.params ?? {})
+    setReady(handlers.init(msg.params ?? {}))
     ready.then(
       (result) => send({ id: msg.id, result }),
       (e) => send({ id: msg.id, error: { message: String(e?.message ?? e) } }),
     ).finally(done)
     return
   }
-  const wait = ready ?? Promise.reject(new Error("the host has not been initialised"))
   if (msg.method === "fetch") {
-    wait.then(() => doFetch(msg.id, msg.params ?? {}), (e) => send({ id: msg.id, error: { message: String(e?.message ?? e) } })).finally(done)
+    const id = msg.id
+    // the fetch is owned the moment its message is read, before the async
+    // setup below: an abort that comes before the upstream is reached still
+    // stops it, and one that comes during the await is not missed
+    const record = {
+      state: "setup", controller: new AbortController(),
+      gate: makeGate(msg.params?.window > 0 ? msg.params.window : 512 << 10),
+      pendingSend: null, readyCleanup: null, unconsumedBody: undefined,
+    }
+    inflight.set(id, record)
+    // waiting for the host to be ready is the host's own await: an abort must
+    // end it too, so a request whose setup never finishes still runs its
+    // finally and lets its controller, gate and body go. The shared setup
+    // promise itself is not cancelled — only this request's wait on it.
+    const start = () => {
+      checkFetch(record)
+      return doFetch(id, record, msg.params ?? {})
+    }
+    waitForReady(record).then(start)
+      .catch((e) => {
+        transitionFetch(record, "finishing")
+        return sendForFetch(record, { id, error: { message: String(e?.message ?? e) } })
+      })
+      .finally(() => {
+        transitionFetch(record, "finished")
+        inflight.delete(id)
+        done()
+      })
     return
   }
+  const wait = ready ?? Promise.reject(new Error("the host has not been initialised"))
   const fn = handlers[msg.method]
   if (!fn) {
     send({ id: msg.id, error: { message: `no method ${msg.method}` } })

@@ -31,7 +31,8 @@ const found = {
   linear: { state: "auth", code: 401, oauth: true },
   fetch: { state: "error", why: "notfound", detail: "uvx" },
   github: { state: "error", why: "exited", code: 1, detail: "Error: GITHUB_PERSONAL_ACCESS_TOKEN is not set" },
-  slow: { state: "error", why: "timeout" },
+  // a step that went unanswered names itself and how long it was waited for (#1467)
+  slow: { state: "error", why: "timeout", step: "tools/list", waited: 60000 },
 };
 
 // checks holds each check asked for; a check's answer waits for release()
@@ -70,16 +71,16 @@ const words = {
     linear: ["needs sign-in", "The server asks for a sign-in — open it to sign in once in magpie"],
     fetch: ["can't start: uvx not found", "Can't start it: there is no uvx on the PATH magpie has"],
     github: ["exited (1)", "It exited with code 1 before listing its tools\nError: GITHUB_PERSONAL_ACCESS_TOKEN is not set"],
-    slow: ["no answer", "No answer in 15 seconds"],
+    slow: ["no answer to tools/list", "No answer to tools/list in 60 seconds"],
     again: "Click to check again", fresh: "13 tools", skills: "Skills",
   },
   zh: {
     checking: "检查中…",
     files: ["12 个工具", "已启动并列出了它的工具"],
-    linear: ["需要登录", "服务器要求登录 — 打开它，在 magpie 里登录一次即可"],
+    linear: ["需要登录", "服务器要求登录：打开它，在 magpie 中登录一次"],
     fetch: ["无法启动：找不到 uvx", "无法启动：magpie 的 PATH 里没有 uvx"],
     github: ["已退出（1）", "列出工具前就退出了，退出码 1\nError: GITHUB_PERSONAL_ACCESS_TOKEN is not set"],
-    slow: ["无响应", "15 秒内没有响应"],
+    slow: ["tools/list 无响应", "等了 60 秒，tools/list 仍没有响应"],
     again: "点击重新检查", fresh: "13 个工具", skills: "技能",
   },
 };
@@ -105,7 +106,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("http://magpie.test/**", server(lang, checks));
         await page.goto("http://magpie.test/");
         await page.locator('button[data-view="library"]').click();
-        await page.locator("#view-library .lib-row").first().waitFor();
+        await page.locator("#view-library .lib-body:not(.lib-skel) .lib-row").first().waitFor();
         const status = (name) => page.locator(`#view-library .lib-health[data-server="${name}"]`);
 
         // every server asked for at once, each showing it's being checked
@@ -133,6 +134,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // it stays on the row's name line, one line high
         const box = await status("fetch").boundingBox();
         assert.ok(box.height <= 18, "status wraps: " + box.height);
+        const slowBox = await status("slow").boundingBox();
+        assert.ok(slowBox.height <= 18 && slowBox.width <= 220, "the step's name widens or wraps the status: " + JSON.stringify(slowBox));
 
         // back from another tab: not checked again
         await page.locator(".lib-tabs button", { hasText: w.skills }).click();

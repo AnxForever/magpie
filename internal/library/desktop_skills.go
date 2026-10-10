@@ -30,7 +30,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/desktopdir"
 	"github.com/yetone/magpie/internal/edit"
 )
 
@@ -40,10 +40,7 @@ const desktopManifest = "manifest.json"
 // Desktop has, in its own folder and Claude-3p's alike: each one with a
 // manifest.json or the plugin's plugin.json.
 func desktopSkillRoots(desktopDir string) []string {
-	dirs := []string{desktopDir, filepath.Dir(agent.DesktopConfig3p(home()))}
-	if d, err := os.UserConfigDir(); err == nil {
-		dirs = append(dirs, filepath.Join(d, "Claude"), filepath.Join(d, "Claude-3p"))
-	}
+	dirs := append([]string{desktopDir}, desktopdir.Everywhere()...)
 	var out []string
 	seen := map[string]bool{}
 	for _, d := range dirs {
@@ -75,20 +72,9 @@ func isFile(p string) bool {
 }
 
 // desktopCopy puts a copy of the library's skill at p, its mark keeping
-// the hash of what was copied.
+// the hash of what was copied (markCopy).
 func desktopCopy(p, name string) error {
-	if err := copyIn(p, name); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(filepath.Join(p, marker), os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(f, "hash %s\n", hashDir(p))
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	return err
+	return copyIn(p, name)
 }
 
 // desktopEdited is whether magpie's copy at p was changed since it was
@@ -106,17 +92,45 @@ func desktopEdited(p string) bool {
 	return false
 }
 
-// desktopStamp is now, as the manifest's other times are written: a
-// number of milliseconds where they are numbers, else an ISO time.
+// desktopStamp is now as the manifest's lastUpdated is written: a number
+// of milliseconds where it is one, else an ISO time.
 func desktopStamp(raw []byte) any {
-	t := gjson.GetBytes(raw, "lastUpdated")
-	if !t.Exists() {
-		t = gjson.GetBytes(raw, "skills.0.updatedAt")
-	}
-	if t.Type == gjson.Number {
+	if gjson.GetBytes(raw, "lastUpdated").Type == gjson.Number {
 		return time.Now().UnixMilli()
 	}
-	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	return isoStamp(time.Now())
+}
+
+// isoStamp is t as a skill's updatedAt is written. Desktop checks the whole
+// list of skills at once and takes each updatedAt to be such a string (or
+// null), whatever lastUpdated is: one number in it and none of the skills
+// are listed (#863).
+func isoStamp(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000Z") }
+
+// fixUpdatedAt is the entry with its updatedAt, when a number of
+// milliseconds (as magpie wrote them before #863), written as Desktop's
+// are, the other keys as they were; "" when it isn't a number.
+func fixUpdatedAt(e gjson.Result) string {
+	if e.Get("updatedAt").Type != gjson.Number {
+		return ""
+	}
+	v, _ := json.Marshal(isoStamp(time.UnixMilli(e.Get("updatedAt").Int())))
+	var b strings.Builder
+	b.WriteByte('{')
+	e.ForEach(func(k, x gjson.Result) bool {
+		if b.Len() > 1 {
+			b.WriteByte(',')
+		}
+		b.WriteString(k.Raw + ":")
+		if k.String() == "updatedAt" {
+			b.Write(v)
+		} else {
+			b.WriteString(x.Raw)
+		}
+		return true
+	})
+	b.WriteByte('}')
+	return b.String()
 }
 
 // manifestEntry is a manifest's entry for the skill with that id, "" for
@@ -140,7 +154,7 @@ func writeManifest(root string, put map[string]bool, drop []string) error {
 	if err != nil && isFile(path) {
 		return err
 	}
-	stamp := desktopStamp(raw)
+	stamp, updated := desktopStamp(raw), isoStamp(time.Now())
 	var list []json.RawMessage
 	changed := false
 	done := map[string]bool{}
@@ -156,7 +170,7 @@ func writeManifest(root string, put map[string]bool, drop []string) error {
 		// in the order Desktop writes them, any other key of the old
 		// entry after them
 		keys := []string{"skillId", "name", "description", "creatorType", "syncManaged", "updatedAt", "enabled"}
-		vals := []any{name, name, desc, "user", false, stamp, enabled}
+		vals := []any{name, name, desc, "user", false, updated, enabled}
 		var b strings.Builder
 		b.WriteByte('{')
 		for i, k := range keys {
@@ -183,6 +197,9 @@ func writeManifest(root string, put map[string]bool, drop []string) error {
 		case put[id] && !done[id]:
 			list = append(list, entry(id, e.Raw))
 			done[id], changed = true, true
+		case fixUpdatedAt(e) != "":
+			list = append(list, json.RawMessage(fixUpdatedAt(e)))
+			changed = true
 		default:
 			list = append(list, json.RawMessage(e.Raw))
 		}

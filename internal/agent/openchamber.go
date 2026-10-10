@@ -165,7 +165,7 @@ func openChamber(home, cfg string) *Agent {
 	oc := opencode(home, cfg)
 	ocPath := oc.Path
 	auth := filepath.Join(home, ".local", "share", "opencode", "auth.json")
-	provider := func() any { return magpieProviderJSONFor("opencode", "opencode") }
+	provider := theirsKept(ocPath, "provider."+magpieID, func() any { return magpieProviderJSONFor("opencode", "opencode") }, "models")
 	opts := func(key string) func(map[string]string) []Option {
 		return func(cur map[string]string) []Option {
 			return append(ownOptions(auth, cur[key]), viaMagpie("opencode", magpieID+"/")...)
@@ -182,7 +182,7 @@ func openChamber(home, cfg string) *Agent {
 		return edit.DelJSON(ocPath, "provider."+magpieID)
 	}
 	return &Agent{
-		ID: "openchamber", Name: "OpenChamber", Icon: "openchamber", Aliases: []string{"chamber"},
+		ID: "openchamber", Name: "OpenChamber", Icon: "openchamber", Aliases: []string{"chamber"}, Spelled: openCodeSpelled(ocPath, gatewayV1),
 		// its model requests are its OpenCode's, and counted as OpenCode's
 		Bin: "openchamber", Dir: s.dir, Path: s.prefs(),
 		Notice: func() string {

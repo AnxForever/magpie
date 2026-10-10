@@ -218,6 +218,9 @@ func TestClaudeUsageUnavailableAfterAccountSwitch(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".claude.json"), map[string]any{
 		"oauthAccount": map[string]any{"emailAddress": "b@example.com"},
 	})
+	writeFile(t, filepath.Join(home, ".claude", ".credentials.json"), map[string]any{"claudeAiOauth": map[string]any{
+		"accessToken": "tok-b", "refreshToken": "r-b", "expiresAt": time.Now().Add(time.Hour).UnixMilli(), "subscriptionType": "max"}})
+	forgetClaudeCredential()
 	forgetClaudeStatus()
 	rememberLogins(true)
 	out.Store(subscriptionNotice)
@@ -225,6 +228,42 @@ func TestClaudeUsageUnavailableAfterAccountSwitch(t *testing.T) {
 	q, ok := LoginUsage(context.Background(), "claude")["b@example.com"]
 	if !ok || q.Error == "" || q.AsOf != nil || len(q.Windows) != 0 {
 		t.Fatalf("switched account must not inherit the old account's allowance: %+v", q)
+	}
+}
+
+// A Claude account read as the user asked to see it again isn't kept for
+// the minute, LoginUsage's or the Usage page's: it may tell what was
+// before the ask, and the next look reads it again.
+func TestLoginUsageClaudeAskedMeanwhile(t *testing.T) {
+	claudeUsageCards(t, "Current session: 40% used", nil)
+	running, release := make(chan struct{}, 1), make(chan struct{})
+	UsageClaudeVia(func(context.Context) (string, error) {
+		select {
+		case running <- struct{}{}:
+		default:
+		}
+		<-release
+		return "Current session: 40% used", nil
+	})
+	AskClaudeUsage()
+	done := make(chan struct{})
+	go func() { defer close(done); LoginUsage(context.Background(), "claude") }()
+	select {
+	case <-running:
+	case <-time.After(5 * time.Second):
+		t.Fatal("/usage wasn't run")
+	}
+	AskClaudeUsage()
+	close(release)
+	<-done
+	loginUsageCache.Lock()
+	_, kept := loginUsageCache.m["claude/a@example.com"]
+	loginUsageCache.Unlock()
+	if kept {
+		t.Fatal("a reading from before the ask was kept")
+	}
+	if q := LoginUsage(context.Background(), "claude")["a@example.com"]; q.Error != "" || len(q.Windows) != 1 || q.Windows[0].Used != 40 {
+		t.Fatalf("read again: %+v", q)
 	}
 }
 

@@ -58,10 +58,10 @@ func TestCCSwitchSkillUpdates(t *testing.T) {
 	if origins["pdf"] != "https://github.com/owner/repo/tree/main" || origins["mine"] != "" {
 		t.Fatalf("origins %v", origins)
 	}
-	if _, err := UpdateSkill("mine"); err == nil {
+	if _, err := UpdateSkill("mine", false); err == nil {
 		t.Error("one CC Switch has no repository for was updated")
 	}
-	ok(t)(UpdateSkill("pdf"))
+	ok(t)(UpdateSkill("pdf", false))
 	if asked[len(asked)-1] != "/owner/repo/main" {
 		t.Errorf("asked %v", asked)
 	}
@@ -71,12 +71,12 @@ func TestCCSwitchSkillUpdates(t *testing.T) {
 	if s := read(t, filepath.Join(ccs, "skills/pdf/SKILL.md")); !strings.Contains(s, "old") {
 		t.Errorf("CC Switch's folder changed: %q", s)
 	}
-	if fi, err := os.Lstat(skillDir("pdf")); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+	if fi, err := os.Lstat(skillDir("pdf")); err != nil || linkEntry(fi) {
 		t.Errorf("the library's pdf is still a link: %v", err)
 	}
 	l, _ := load()
 	if s := l.skill("pdf"); s.Source == nil || s.Source.Kind != "github" || s.Source.Repo != "owner/repo" || s.Source.Path != "skills/pdf" {
 		t.Errorf("source %+v", s.Source)
 	}
-	ok(t)(UpdateSkill("pdf")) // from GitHub now, like any other
+	ok(t)(UpdateSkill("pdf", false)) // from GitHub now, like any other
 }

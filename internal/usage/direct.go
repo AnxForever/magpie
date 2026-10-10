@@ -13,14 +13,23 @@ import (
 // their own (Kumo31 on Discord: Codex used outside magpie was on the
 // window's Usage tab but not in magpie usage).
 func Direct(p Period) Summary {
-	return direct(p, time.Now(), LedgerOf(p, Filter{}).Rows)
+	now := Clock()
+	return direct(p, now, LedgerOfAt(p, Filter{}, now).Rows)
+}
+
+// Summaries is Summarize(p) and Direct(p) asked at one moment, for a page
+// that shows the two together: asked one after the other, midnight could
+// fall between them and set one day's calls through magpie beside the next
+// day's calls not through it.
+func Summaries(p Period) (Summary, Summary) {
+	now := Clock()
+	return indexedSummary(p, now), direct(p, now, LedgerOfAt(p, Filter{}, now).Rows)
 }
 
 func direct(p Period, now time.Time, rows []Row) Summary {
 	s := Summary{Period: p, Since: p.Since(now), Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
-	if p != Today && p != Week && p != Month {
-		s.Period = All
-	}
+	s.Period = p.shown()
+	until := p.Until(now)
 	agents, models, accounts, sessions := map[string]*Group{}, map[string]*Group{}, map[string]*Group{}, map[string]*Group{}
 	put := func(m map[string]*Group, k string, g Group, r Row) {
 		if m[k] == nil {
@@ -29,7 +38,7 @@ func direct(p Period, now time.Time, rows []Row) Summary {
 		m[k].addRow(r)
 	}
 	for _, r := range rows {
-		if r.Source != "log" || r.IsRejected() || r.Time.Before(s.Since) {
+		if r.Source != "log" || r.IsRejected() || r.Time.Before(s.Since) || after(until, r.Time) {
 			continue
 		}
 		s.Totals.addRow(r)

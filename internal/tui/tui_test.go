@@ -315,4 +315,39 @@ func TestLibraryPage(t *testing.T) {
 	if s := servers(); len(s) != 0 {
 		t.Fatalf("servers %+v", s)
 	}
+
+	// a skill of Claude Code's own: d twice takes it out of the agent
+	// without bringing it in (#1303)
+	old := filepath.Join(h, ".claude/skills/old")
+	write(t, filepath.Join(old, "SKILL.md"), "---\nname: old\ndescription: Not wanted\n---\n")
+	m = press(t, m, "s")
+	m.lrow = row("found-skill", "old")
+	m = press(t, m, "d")
+	if _, err := os.Stat(old); err != nil {
+		t.Fatal("one d removed it")
+	}
+	m = press(t, m, "d")
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Fatalf("still there, flash %q", m.flash)
+	}
+	if slices.ContainsFunc(m.lib, func(r libRow) bool { return r.name == "old" }) {
+		t.Fatal("still listed")
+	}
+}
+
+// A first run has no model catalog: Init syncs it, the status line says so
+// until it is done, and S doesn't start a second sync meanwhile.
+func TestFirstRunShowsCatalogSync(t *testing.T) {
+	home(t)
+	m := newModel()
+	m.w, m.h = 120, 40
+	if m.Init() == nil {
+		t.Fatal("no catalog, and Init didn't sync it")
+	}
+	if !m.syncing || !strings.Contains(m.View(), "syncing model catalog") {
+		t.Fatalf("syncing %v:\n%s", m.syncing, m.View())
+	}
+	if _, cmd := m.Update(keyMsg("S")); cmd != nil {
+		t.Fatal("S started a second sync while the first runs")
+	}
 }

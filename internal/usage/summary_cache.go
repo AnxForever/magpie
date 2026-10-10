@@ -26,25 +26,18 @@ var summaries struct {
 	entries map[Period]summaryEntry
 }
 
-func indexedSummary(p Period) Summary {
-	if p != Today && p != Week && p != Month {
-		p = All
-	}
-	now := time.Now()
+func indexedSummary(p Period, now time.Time) Summary {
+	p = p.shown()
 	snapshot := logSnapshotFor(true)
-	_, offset := now.Zone()
-	meta := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", statKey(settings.Path()), statKey(provider.Path()), statKey(catalog.CachePath()), statKey(catalog.LivePath("antigravity")), now.Format("2006-01-02"), now.Location(), offset)
-	// Sign-ins and plugin lists can change independently of providers.json.
-	// Their identity and price feeds affect both grouping and historical costs.
-	h := sha256.New()
-	prices, _ := json.Marshal(settings.Load().ModelPrices)
-	aliases, _ := json.Marshal(provider.Renamed())
-	fmt.Fprint(h, string(prices), string(aliases))
-	for _, current := range provider.All() {
-		fmt.Fprintf(h, "%q:%q:%v:%t:%t:%t;", current.ID, current.Where(), current.Catalogs(), current.IsPlugin(), current.Account == nil, current.Key != "")
-		fmt.Fprint(h, statKey(catalog.LivePath(current.ID)))
+	if p.IsRange() {
+		// a picked range is read afresh each time, so ranges never pile up
+		// in the cache (#1492)
+		if snapshot.uncached && len(snapshot.blocks) == 0 {
+			snapshot = readLogSnapshot()
+		}
+		return summarizeFrom(p, now, snapshot.first, snapshot.keyProviders, func(fn func(Record)) { snapshot.visit(p.Since(now), fn) })
 	}
-	meta += fmt.Sprintf("|%x", h.Sum(nil))
+	meta := usagePriceCacheKey(now)
 	summaries.Lock()
 	old, ok := summaries.entries[p]
 	summaries.Unlock()
@@ -85,4 +78,22 @@ func cloneSummary(s Summary) Summary {
 	s.CallerKeys = slices.Clone(s.CallerKeys)
 	s.Sessions = slices.Clone(s.Sessions)
 	return s
+}
+
+// usagePriceCacheKey invalidates priced views when local prices or provider feeds change.
+func usagePriceCacheKey(now time.Time) string {
+	_, offset := now.Zone()
+	meta := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", statKey(settings.Path()), statKey(provider.Path()), statKey(catalog.CachePath()), statKey(catalog.LivePath("antigravity")), now.Format("2006-01-02"), now.Location(), offset)
+	// Sign-ins and plugin lists can change independently of providers.json.
+	// Their identity and price feeds affect both grouping and historical costs.
+	h := sha256.New()
+	prices, _ := json.Marshal(settings.Load().ModelPrices)
+	aliases, _ := json.Marshal(provider.Renamed())
+	fmt.Fprint(h, string(prices), string(aliases))
+	for _, current := range provider.All() {
+		fmt.Fprintf(h, "%q:%q:%v:%t:%t:%t;", current.ID, current.Where(), current.Catalogs(), current.IsPlugin(), current.Account == nil, current.Key != "")
+		fmt.Fprint(h, statKey(catalog.LivePath(current.ID)))
+	}
+	meta += fmt.Sprintf("|%x", h.Sum(nil))
+	return meta
 }

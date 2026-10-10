@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -20,6 +21,9 @@ func TestSearcherChosen(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	setHome(t, t.TempDir()) // no signed-in agent searches
+	// no models.dev catalog either: the lists' models go by their ids
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
 	lists := func(ids ...string) string {
 		var b strings.Builder
 		for i, id := range ids {
@@ -73,6 +77,18 @@ func TestSearcherChosen(t *testing.T) {
 	}
 
 	// automatic: Anthropic's API comes before OpenAI's
+	want("ant", "claude-haiku-4-5", "")
+	choose("off")
+	if p, m, ok := searcher(); ok {
+		t.Errorf("disabled searcher = %s %s", p.ID, m)
+	}
+	if got := SearcherUnused(); got != "" {
+		t.Errorf("disabled search reported as unavailable: %q", got)
+	}
+	if canSearch() {
+		t.Error("disabled providers still offer search without an API")
+	}
+	choose("")
 	want("ant", "claude-haiku-4-5", "")
 	if got := AutoSearcher(); got != "Anthropic · claude-haiku-4-5" {
 		t.Errorf("auto = %q", got)

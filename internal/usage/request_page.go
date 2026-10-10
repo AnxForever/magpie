@@ -34,6 +34,11 @@ type RequestPage struct {
 	Agents, Providers []string
 	Purposes          []string // all purposes in the period, independent of the selected filter
 	CallerKeys        []Group
+	// Through and Direct are the rows the gateway served and the rows read
+	// from the agents' own session files, which the gateway never saw. Sum
+	// is the two together; the page shows the three beside each other so a
+	// reader can tell what magpie carried from what it only read about.
+	Through, Direct Totals
 	// Accounts are the subscription accounts that answered calls in the
 	// period, by provider and account, for the Account filter (#557)
 	Accounts []Group
@@ -47,14 +52,17 @@ type RequestPage struct {
 	// other computer's calls were brought here by sync (#542)
 	Computers []Share
 	Names     map[string]string
+	// Heat is the rows by day, as the chart's filter keeps them: only for
+	// the heatmap's own period (HeatmapOf)
+	Heat *Heatmap
 }
 
 type packedRow struct {
 	Time                           time.Time
-	Text                           [27]uint32
-	Tokens                         [5]int64
+	Text                           [30]uint32
+	Tokens                         [6]int64
 	Millis, TTFT, FirstText, Order int64
-	Sent                           int64
+	Sent, Flow                     int64
 	RouteID                        int64
 	Cost                           float64
 	Status                         int32
@@ -76,10 +84,10 @@ type rowChunk struct {
 }
 
 // rowMsg is the Text of a row's Claude message id, after rowText's
-const rowMsg = 26
+const rowMsg = 29
 
-func rowText(r *Row) [26]*string {
-	return [26]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID}
+func rowText(r *Row) [29]*string {
+	return [29]*string{&r.Agent, &r.Provider, &r.Host, &r.SessionProvider, &r.SessionAccount, &r.Model, &r.Requested, &r.Served, &r.Effort, &r.Error, &r.ErrType, &r.RequestID, &r.Endpoint, &r.Session, &r.NativeSession, &r.Kind, &r.Source, &r.Via, &r.ProviderKeyID, &r.ProviderKeyName, &r.CallerKeyID, &r.CallerKeyName, &r.Archive, &r.Operation, &r.ProviderAccount, &r.ResponseID, &r.Upstream, &r.Subagent, &r.ParentAgent}
 }
 func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 	if c.dict == nil {
@@ -96,7 +104,7 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 		c.Bytes += int64(len(s) + 48)
 		return id
 	}
-	p := packedRow{Time: r.Time, Tokens: [5]int64{int64(r.Input), int64(r.Output), int64(r.CacheRead), int64(r.CacheWrite), int64(r.Reasoning)}, Millis: r.Millis, TTFT: r.TTFT, FirstText: r.FirstText, Sent: r.Sent, Order: order, RouteID: r.RouteID, Cost: r.Cost, Status: int32(r.Status)}
+	p := packedRow{Time: r.Time, Tokens: [6]int64{int64(r.Input), int64(r.Output), int64(r.CacheRead), int64(r.CacheWrite), int64(r.Reasoning), int64(r.CacheWrite1h)}, Millis: r.Millis, TTFT: r.TTFT, FirstText: r.FirstText, Sent: r.Sent, Flow: r.Flow, Order: order, RouteID: r.RouteID, Cost: r.Cost, Status: int32(r.Status)}
 	for i, s := range rowText(&r) {
 		p.Text[i] = intern(*s)
 	}
@@ -128,9 +136,12 @@ func (c *rowChunk) add(r Row, msg string, order int64, failed bool) {
 }
 func (c *rowChunk) row(i int) Row {
 	p := &c.Rows[i]
-	r := Row{Record: Record{RouteID: p.RouteID, Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, Sent: p.Sent, Status: int(p.Status), Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0, Routed: p.Flags&32 != 0}
+	r := Row{Record: Record{RouteID: p.RouteID, Time: p.Time, Input: int(p.Tokens[0]), Output: int(p.Tokens[1]), CacheRead: int(p.Tokens[2]), CacheWrite: int(p.Tokens[3]), CacheWrite1h: int(p.Tokens[5]), Reasoning: int(p.Tokens[4]), Millis: p.Millis, TTFT: p.TTFT, FirstText: p.FirstText, Sent: p.Sent, Flow: p.Flow, Status: int(p.Status), Rejected: p.Flags&4 != 0, SessionOfficialLogin: p.Flags&8 != 0}, Cost: p.Cost, Priced: p.Flags&1 != 0, Swapped: p.Flags&2 != 0, Routed: p.Flags&32 != 0}
 	for i, s := range rowText(&r) {
 		*s = c.Strings[p.Text[i]]
+	}
+	if r.Swapped && (SameSpelled(r.Model, r.Served) || ServingName(r.Model, r.Served) || RelayRenamed(r.Model, r.Served)) {
+		r.Swapped = false // kept before a name spelled otherwise, a vendor's serving name or a relay's rename was the same
 	}
 	r.Computer = c.Computer
 	return r
@@ -211,9 +222,12 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	}
 	limit = min(limit, 500)
 	offset = max(0, offset)
+	// The time is read once, so that the rows, the chart and the day the page
+	// is kept for are of one day when midnight falls while it is worked out.
+	now := Clock()
 	// A replacement reader remains useful to callers supplying synthetic logs.
 	if LogCalls != nil {
-		return pageFromLedger(p, f, offset, limit, LedgerOf(p, Filter{}))
+		return pageFromLedgerAt(p, f, offset, limit, LedgerOfAt(p, Filter{}, now), now)
 	}
 	sources := sessions.CallSources()
 	slices.SortFunc(sources, func(a, b sessions.CallSource) int {
@@ -245,7 +259,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	h.Reset()
 	snapshot := logSnapshotFor(true)
 	version := snapshot.version
-	fmt.Fprint(h, meta, version, time.Now().Format("2006-01-02 MST"))
+	fmt.Fprint(h, meta, version, now.Format("2006-01-02 MST"))
 	for _, s := range sources {
 		fmt.Fprintf(h, "%s:%d:%d;", s.Path, s.Size, s.Modified.UnixNano())
 	}
@@ -293,12 +307,12 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 		row := Row{Record: r, Source: source, Swapped: r.Served != "" && Swapped(sent, r.Served), Routed: GroupRouted(sent, r.Served)}
 		if pr := price(r); pr != nil && r.Input+r.Output > 0 {
 			row.Priced = true
-			row.Cost = pr.Cost(r.Input, r.Output, r.CacheRead, r.CacheWrite)
+			row.Cost = r.CostAt(*pr)
 		}
 		row.Agent = AgentOf(r.Agent)
 		return row
 	}
-	since := p.Since(time.Now())
+	since := p.Since(now)
 	gatewaySince := since
 	if !since.IsZero() {
 		gatewaySince = since.Add(-24 * time.Hour)
@@ -343,7 +357,14 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	on := map[string]bool{}
 	var chunks []*rowChunk
 	var resolver *sessionResolver
-	for _, s := range sources {
+	read := prefetchSources(sources, func(s sessions.CallSource) bool {
+		if !since.IsZero() && s.Modified.Before(since) {
+			return false
+		}
+		c := idx.chunks[s.Path]
+		return c == nil || c.Source.Size != s.Size || !c.Source.Modified.Equal(s.Modified)
+	}, readSource)
+	for i, s := range sources {
 		on[s.Path] = true
 		if !since.IsZero() && s.Modified.Before(since) {
 			continue
@@ -355,7 +376,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 			if resolver == nil {
 				resolver = newSessionResolver([]sessions.Call{{}})
 			}
-			cs := readSource(s)
+			cs := read(i)
 			c = &rowChunk{Source: s, Rows: make([]packedRow, 0, len(cs))}
 			for _, call := range cs {
 				r := logRecord(call)
@@ -434,7 +455,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 	if someShared {
 		names = sharedNames()
 	}
-	page := buildRequestBlocks(p, f, offset, limit, gateways, chunks, others, names)
+	page := buildRequestBlocks(p, f, offset, limit, now, gateways, chunks, others, names)
 	shared.Lock()
 	defer shared.Unlock()
 	// A query for an older filesystem snapshot may finish after a newer one.
@@ -551,7 +572,7 @@ type matchKey struct {
 // Codex that names cache_write_input_tokens beside a gateway record that
 // didn't, an older Codex that doesn't beside one that does; the sum is the
 // same either way.
-func matchTokens(t [5]int64) [3]int64 { return [3]int64{t[0] + t[3], t[1], t[2]} }
+func matchTokens(t [6]int64) [3]int64 { return [3]int64{t[0] + t[3], t[1], t[2]} }
 
 type matchEnd struct {
 	at    time.Time
@@ -714,20 +735,22 @@ func sharesOf(m map[string]*Share) []Share {
 	return out
 }
 func buildRequestPage(p Period, f Filter, offset, limit int, gateway *rowChunk, chunks []*rowChunk) RequestPage {
-	return buildRequestBlocks(p, f, offset, limit, []*rowChunk{gateway}, chunks, nil, nil)
+	return buildRequestBlocks(p, f, offset, limit, Clock(), []*rowChunk{gateway}, chunks, nil, nil)
 }
 
 // Shared days are never matched to this computer's gateway or session calls.
-func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks, others []*rowChunk, names map[string]string) RequestPage {
+// now is the moment the page is asked at: its period and its chart's hours or
+// days are read from it.
+func buildRequestBlocks(p Period, f Filter, offset, limit int, now time.Time, gateways, chunks, others []*rowChunk, names map[string]string) RequestPage {
 	skip := visibleLocal(chunks)
-	since := p.Since(time.Now())
+	since, until := p.Since(now), p.Until(now)
 	matched := matchedBlocks(gateways, chunks, skip, since, true)
 	all := append(append(slices.Clone(gateways), chunks...), others...)
 	visit := func(fn func(rowRef, Row)) {
 		for _, c := range all {
 			for i, pr := range c.Rows {
 				ref := rowRef{c, i}
-				if pr.Time.Before(since) || skip[ref] || matched[ref] {
+				if pr.Time.Before(since) || after(until, pr.Time) || skip[ref] || matched[ref] {
 					continue
 				}
 				fn(ref, c.row(i))
@@ -743,6 +766,7 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 	groups := map[string]map[string]*Share{}
 	chartGroups := map[string]map[string]*Share{}
 	seriesGroups := map[string]map[string]*Share{}
+	keys := keyer{}
 	for _, d := range Dimensions {
 		groups[d] = map[string]*Share{}
 		chartGroups[d] = map[string]*Share{}
@@ -761,6 +785,9 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 	selected := newestHeap{}
 	chartFilter := f
 	chartFilter.Day = ""
+	// the two source cells' own numbers, counted without the source pick
+	viaFilter := f
+	viaFilter.Through = ""
 	var first time.Time
 	visit(func(ref rowRef, r Row) {
 		agents[r.Agent] = true
@@ -770,7 +797,7 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 		}
 		addCallerRow(callers, r)
 		addAccountRow(accounts, r)
-		keep := f.keeps(r.Record)
+		keep := f.keepsRow(r)
 		if keep {
 			out.Total++
 			if take > 0 && len(selected) < take {
@@ -783,12 +810,24 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 				out.Sum.addRow(r)
 			}
 		}
+		// The two sources are counted with the Via pick cleared, as the
+		// dimension groups above are: the cells are what the reader
+		// switches between, so each must go on saying its own number
+		// while another is picked, or one of them would read 0 and
+		// there would be no way back.
+		if !r.IsRejected() && viaFilter.keepsRow(r) {
+			if r.Source == "log" {
+				out.Direct.addRow(r)
+			} else {
+				out.Through.addRow(r)
+			}
+		}
 		if r.IsRejected() {
 			return
 		}
-		if keep || f.Day != "" && chartFilter.keeps(r.Record) {
+		if keep || f.Day != "" && chartFilter.keepsRow(r) {
 			for _, d := range Dimensions {
-				k := r.key(d)
+				k := keys.key(r, d)
 				s := seriesGroups[d][k]
 				if s == nil {
 					s = &Share{ID: k}
@@ -803,7 +842,7 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 		if g := f; names != nil {
 			g.Computer = ""
 			g.Day = ""
-			if g.keeps(r.Record) {
+			if g.keepsRow(r) {
 				k := r.key("computer")
 				if computers[k] == nil {
 					computers[k] = &Share{ID: k}
@@ -819,13 +858,16 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 			if d == "agent" {
 				g.Agent = ""
 			}
-			if d == "model" {
+			if d == "model" || d == "modelAt" {
 				g.Model = ""
+			}
+			if d == "modelAt" {
+				g.Provider = ""
 			}
 			if f.Day != "" {
 				g.Day = ""
-				if g.keeps(r.Record) {
-					k := r.key(d)
+				if g.keepsRow(r) {
+					k := keys.key(r, d)
 					if chartGroups[d][k] == nil {
 						chartGroups[d][k] = &Share{ID: k}
 					}
@@ -833,10 +875,10 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 				}
 				g.Day = f.Day
 			}
-			if !g.keeps(r.Record) {
+			if !g.keepsRow(r) {
 				continue
 			}
-			k := r.key(d)
+			k := keys.key(r, d)
 			s := groups[d][k]
 			if s == nil {
 				s = &Share{ID: k}
@@ -883,7 +925,7 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 	out.Computers, out.Names = computerShares(computers, names)
 	var base []Point
 	chartSince := since
-	chartSince, out.Bucket, base = timeline(p, time.Now(), first)
+	chartSince, out.Bucket, base = timeline(p, now, first)
 	out.Series = make([]SeriesPoint, len(base))
 	for i := range base {
 		out.Series[i] = SeriesPoint{Point: base[i], By: map[string]map[string]Part{}}
@@ -892,7 +934,7 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 		}
 	}
 	visit(func(_ rowRef, r Row) {
-		if !chartFilter.keeps(r.Record) || r.IsRejected() {
+		if !chartFilter.keepsRow(r) || r.IsRejected() {
 			return
 		}
 		t := r.Time.In(time.Local)
@@ -906,16 +948,21 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 		pt := &out.Series[i]
 		pt.addRow(r)
 		for _, d := range Dimensions {
-			k := r.key(d)
+			k := keys.key(r, d)
 			part := pt.By[d][k]
-			part.Calls++
-			part.Tokens += r.Input + r.Output + r.CacheRead + r.CacheWrite
-			if r.Priced {
-				part.Cost += r.Cost
-			}
+			part.add(r)
 			pt.By[d][k] = part
 		}
 	})
+	if p == heatmapPeriod {
+		out.Heat = heatmapOf(since, now, func(add func(Row)) {
+			visit(func(_ rowRef, r Row) {
+				if chartFilter.keepsRow(r) {
+					add(r)
+				}
+			})
+		})
+	}
 	// Match LedgerSeries's top-24 selection on the filtered data, not facets.
 	for _, d := range Dimensions {
 		kept := map[string]bool{}
@@ -935,8 +982,31 @@ func buildRequestBlocks(p Period, f Filter, offset, limit int, gateways, chunks,
 	return out
 }
 func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) RequestPage {
+	return pageFromLedgerAt(p, f, offset, limit, all, Clock())
+}
+
+// pageFromLedgerAt is the page of a ledger read at now, its chart over the
+// period read at the same moment.
+func pageFromLedgerAt(p Period, f Filter, offset, limit int, all Ledgered, now time.Time) RequestPage {
 	l := all.Filtered(f)
 	out := RequestPage{Sum: l.Sum, Total: len(l.Rows), Agents: l.Agents, Providers: l.Providers, Purposes: []string{}, By: map[string][]Share{}}
+	// the same split the streaming path makes, so both pages of the ledger
+	// agree: "log" is a call read from an agent's own session file, which
+	// the gateway never saw; the rest went through it. Counted with the source
+	// pick cleared, as the streaming path does, so the three cells stay
+	// switchable whichever one is picked.
+	viaFilter := f
+	viaFilter.Through = ""
+	for _, r := range all.Rows {
+		if r.IsRejected() || !viaFilter.keepsRow(r) {
+			continue
+		}
+		if r.Source == "log" {
+			out.Direct.addRow(r)
+		} else {
+			out.Through.addRow(r)
+		}
+	}
 	callers, accounts := map[string]*Group{}, map[string]*Group{}
 	purposes := map[string]bool{}
 	for i := len(all.Rows) - 1; i >= 0; i-- {
@@ -959,7 +1029,14 @@ func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) Request
 		chartRows = all.Filtered(chartFilter).Rows
 		out.ChartBy = map[string][]Share{}
 	}
-	out.Bucket, out.Series = LedgerSeries(p, chartRows)
+	out.Bucket, out.Series = ledgerSeriesAt(p, chartRows, now)
+	if p == heatmapPeriod {
+		out.Heat = heatmapOf(p.Since(now), now, func(add func(Row)) {
+			for _, r := range chartRows {
+				add(r)
+			}
+		})
+	}
 	for _, d := range Dimensions {
 		g := f
 		if d == "provider" {
@@ -968,8 +1045,11 @@ func pageFromLedger(p Period, f Filter, offset, limit int, all Ledgered) Request
 		if d == "agent" {
 			g.Agent = ""
 		}
-		if d == "model" {
+		if d == "model" || d == "modelAt" {
 			g.Model = ""
+		}
+		if d == "modelAt" {
+			g.Provider = ""
 		}
 		out.By[d] = Breakdown(all.Filtered(g).Rows, d)
 		if f.Day != "" {
@@ -1049,4 +1129,59 @@ func callerGroups(groups map[string]*Group) []Group {
 		return strings.Compare(a.ID, b.ID)
 	})
 	return out
+}
+
+// prefetchSources reads the session files a query has to parse a few at a
+// time, ahead of the loop that takes them in order. The first All after
+// magpie starts parses every one of them, and one by one that was a wait on
+// the disk for each: Requests stayed a skeleton for 40 s over 12k Codex
+// sessions. read(i) gives source i's calls; at most a window of them waits
+// to be taken, so the history is never all held at once. A source that
+// wasn't wanted is read when it is asked for.
+func prefetchSources(sources []sessions.CallSource, want func(sessions.CallSource) bool, readSource func(sessions.CallSource) []sessions.Call) func(int) []sessions.Call {
+	type slot struct {
+		done  chan struct{}
+		calls []sessions.Call
+	}
+	slots := map[int]*slot{}
+	var order []int
+	for i, s := range sources {
+		if want(s) {
+			slots[i] = &slot{done: make(chan struct{})}
+			order = append(order, i)
+		}
+	}
+	if len(order) < 2 {
+		return func(i int) []sessions.Call { return readSource(sources[i]) }
+	}
+	workers := min(8, len(order))
+	window := make(chan struct{}, 4*workers)
+	next := make(chan int)
+	go func() {
+		for _, i := range order {
+			window <- struct{}{}
+			next <- i
+		}
+		close(next)
+	}()
+	for range workers {
+		go func() {
+			for i := range next {
+				s := slots[i]
+				s.calls = readSource(sources[i])
+				close(s.done)
+			}
+		}()
+	}
+	return func(i int) []sessions.Call {
+		s := slots[i]
+		if s == nil {
+			return readSource(sources[i])
+		}
+		<-s.done
+		<-window
+		cs := s.calls
+		s.calls = nil
+		return cs
+	}
 }

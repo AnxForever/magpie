@@ -1,8 +1,9 @@
 // Package imagemcp is `magpie mcp image`: a stdio MCP server an agent is
 // given, when it is picked for it in the Library, to make images with the
-// model the Settings' Image generation names, and videos with a Grok
-// subscription. It asks the gateway, which knows the providers, and saves
-// what comes back in the project.
+// model the Settings' Image generation names, and videos with the first
+// video model the gateway has (gateway.AutoVideomaker). It asks the
+// gateway, which knows the providers, and saves what comes back in the
+// project.
 package imagemcp
 
 import (
@@ -64,8 +65,8 @@ var (
 
 var videoSchema = map[string]any{
 	"name": videoTool,
-	"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a Grok subscription signed in to Magpie " +
-		"(it has no other video model yet). It takes from ten seconds to a few minutes, then the video is saved as an mp4 file in the project (" + VideoFolder +
+	"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a video model set up in Magpie " +
+		"(a Grok subscription's Grok Imagine, Volcengine Ark Agent Plan's Seedance, another Magpie's, or a provider whose model list marks video models). It takes from ten seconds to a few minutes, then the video is saved as an mp4 file in the project (" + VideoFolder +
 		"/ unless path says where) and its path is returned; when it is not ready within about 20 seconds, the answer is an id to wait on with " + resultTool + " instead. Describe the subject, the motion and the camera: what moves, how, and what the shot is.",
 	"inputSchema": map[string]any{
 		"type": "object",
@@ -212,6 +213,13 @@ func ToolTimeout() time.Duration { return videoWait + time.Minute }
 func Run(args []string) error {
 	if len(args) > 0 && args[0] != "image" {
 		return fmt.Errorf("unknown MCP server %q (there is: image)", args[0])
+	}
+	if len(args) > 1 {
+		w, err := options(args[1:])
+		if err != nil {
+			return err
+		}
+		wsl = w
 	}
 	base := strings.TrimRight(os.Getenv("MAGPIE_GATEWAY"), "/")
 	if base == "" {
@@ -470,7 +478,7 @@ func (s *server) generate(raw json.RawMessage) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Generated with %s, saved to:\n", out.Model)
 	for _, p := range saved {
-		fmt.Fprintf(&b, "- %s\n", p)
+		fmt.Fprintf(&b, "- %s\n", shownPath(p))
 	}
 	if len(revised) > 0 {
 		fmt.Fprintf(&b, "The model drew from this prompt: %s\n", revised[0])
@@ -483,12 +491,18 @@ func (s *server) generate(raw json.RawMessage) (string, error) {
 
 // project is the folder images are saved in: the client's first root when
 // it can say, else the folder the agent started magpie in. The home folder
-// or / isn't a project: ~/Pictures/Magpie is used then.
+// or / isn't a project: ~/Pictures/Magpie is used then (the distro's, for
+// an agent in WSL).
 func (s *server) project() string {
 	if dir := s.root(); dir != "" {
 		return dir
 	}
 	dir, _ := os.Getwd()
+	if wsl != nil && wsl.home != "" {
+		if d := wsl.shown(dir); d == "" || d == "/" || strings.TrimSuffix(d, "/") == strings.TrimSuffix(wsl.home, "/") {
+			return wsl.local(strings.TrimSuffix(wsl.home, "/") + "/Pictures/Magpie")
+		}
+	}
 	home, _ := os.UserHomeDir()
 	if dir == "" || dir == "/" || dir == home || filepath.Dir(dir) == dir {
 		return filepath.Join(home, "Pictures", "Magpie")
@@ -520,6 +534,9 @@ func (s *server) root() string {
 		json.Unmarshal(m.Result, &r)
 		for _, root := range r.Roots {
 			if u, err := url.Parse(root.URI); err == nil && u.Scheme == "file" && u.Path != "" {
+				if wsl != nil {
+					return wsl.local(u.Path)
+				}
 				return filePath(u)
 			}
 		}
@@ -555,6 +572,12 @@ func reference(project, ref string) (string, error) {
 	path := strings.TrimPrefix(ref, "file://")
 	if u, err := url.Parse(ref); err == nil && u.Scheme == "file" {
 		path = filePath(u)
+		if wsl != nil {
+			path = u.Path
+		}
+	}
+	if wsl != nil {
+		path = wsl.local(path)
 	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(project, path)
@@ -599,6 +622,9 @@ func target(project, path, prompt, ext string, i, n int) (string, error) {
 	dir, name := filepath.Join(project, folderFor(ext)), ""
 	if path != "" {
 		p := path
+		if wsl != nil {
+			p = wsl.local(p)
+		}
 		if strings.HasPrefix(p, "~/") {
 			home, _ := os.UserHomeDir()
 			p = filepath.Join(home, p[2:])
@@ -848,5 +874,5 @@ func (s *server) film(raw json.RawMessage) (string, error) {
 	if v.Seconds != "" {
 		length = v.Seconds + "-second "
 	}
-	return fmt.Sprintf("Generated a %svideo with %s, saved to:\n- %s\n", length, v.Model, path), nil
+	return fmt.Sprintf("Generated a %svideo with %s, saved to:\n- %s\n", length, v.Model, shownPath(path)), nil
 }

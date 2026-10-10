@@ -8,12 +8,18 @@ package agent
 // "custom_provider:<key>", an entry of custom_provider. magpie adds itself
 // there as custom_provider.magpie — the gateway, spoken to as Anthropic
 // messages, with the catalog as its models — so the catalog joins MiniMax
-// Code's /model, and a model through magpie is
-// "custom_provider:magpie/<provider>/<model>". The default the user had is
-// stashed and put back when magpie steps out. MiniMax Code rewrites the file
-// itself (its /model, its provider commands), so magpie's entry is edited in
-// place: a key the user or MiniMax Code put on it, or on one of its models,
-// stays.
+// Code's /model. A model there is keyed by its id's flat spelling,
+// "bb-codex~gpt-6.1-sol" (provider.FlatID), which the gateway takes back to
+// "bb-codex/gpt-6.1-sol": a SubAgent's model must be "<provider>/<model>"
+// with one slash in the whole (#1387), so a model through magpie is
+// "custom_provider:magpie/bb-codex~gpt-6.1-sol". A key written before
+// that, with the slashes, has its keys moved to the flat one and stays
+// beside it switched off, for the sessions that started on it, and the
+// settings that named it name the flat one (mcodeRefs). The default the
+// user had is stashed and put back when magpie steps out. MiniMax Code
+// rewrites the file itself (its /model, its provider commands), so magpie's
+// entry is edited in place: a key the user or MiniMax Code put on it, or on
+// one of its models, stays.
 
 import (
 	"path/filepath"
@@ -22,7 +28,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/edit"
-	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +38,33 @@ const (
 	mcodeProvider = "custom_provider:" + magpieID
 	mcodeEntry    = "custom_provider." + magpieID
 )
+
+// mcodeRefs are the settings in config.yaml that name a model as
+// "<provider>/<model>": the default, the light one and memory's two.
+var mcodeRefs = []string{"defaultModel", "defaultLightModel", "memory.captureModel", "memory.consolidationModel"}
+
+// mcodeKey is the key magpie's model id is written under in its entry: its
+// flat spelling where the gateway takes that back to it (flat, from
+// provider.Flattened), else the id.
+func mcodeKey(flat map[string]string, id string) string {
+	if k, ok := flat[id]; ok {
+		return k
+	}
+	return id
+}
+
+// mcodeID is the catalog id of a key in magpie's entry: one with a slash
+// was written so before #1387; a flat one no model has now is read with
+// its first tilde as the slash after the provider's id, which has none.
+func mcodeID(key string) string {
+	if strings.Contains(key, "/") {
+		return key
+	}
+	if id, ok := provider.Unflat(key); ok {
+		return id
+	}
+	return strings.Replace(key, provider.FlatSep, "/", 1)
+}
 
 // mcodeUA is the User-Agent magpie's entry sends: MiniMax Code's own is the
 // Anthropic SDK's ("L/JS 0.91.1"), or node's for its token counts.
@@ -76,7 +109,7 @@ func miniMaxAt(at place, dir string) *Agent {
 		return edit.SetYAML(path, kvs...)
 	}
 	return atomic(&Agent{
-		ID: "minimax-code", Name: "MiniMax Code", Icon: "minimax-color", Aliases: []string{"mcode"},
+		ID: "minimax-code", Name: "MiniMax Code", Icon: "minimax-color", Aliases: []string{"mcode"}, Spelled: prefixed,
 		UA:  []string{mcodeUA},
 		Bin: "mcode", Dir: dir, Path: path,
 		Sync: func() error {
@@ -102,14 +135,14 @@ func miniMaxAt(at place, dir string) *Agent {
 				return "MiniMax Code's " + mcodeEntry + " (config.yaml) is turned off, so it no longer reaches magpie"
 			}
 			return wiringOff("MiniMax Code", path, func(k string) (string, bool) { return edit.GetYAML(path, mcodeEntry+".options."+k) },
-				"baseURL", at.gw(), "apiKey", gateway.Token)
+				"baseURL", at.gw(), "apiKey", at.gwKey())
 		},
 		Fields: []Field{{
 			Key: "model", Label: "model",
 			Get: func() string {
 				v := get("defaultModel")
 				if ref, ok := strings.CutPrefix(v, mcodeProvider+"/"); ok {
-					return magpieID + "/" + ref
+					return magpieID + "/" + mcodeID(ref)
 				}
 				return v
 			},
@@ -125,7 +158,7 @@ func miniMaxAt(at place, dir string) *Agent {
 						return err
 					}
 					// a variant is the last model's ("thinking"), none of magpie's
-					return setDefault(mcodeProvider+"/"+ref, "")
+					return setDefault(mcodeProvider+"/"+mcodeKey(provider.Flattened(), ref), "")
 				}
 				// the variant goes with the model it was picked for
 				variant := ""
@@ -159,14 +192,11 @@ func miniMaxAt(at place, dir string) *Agent {
 	}, path)
 }
 
-// writeMiniMaxEntry puts magpie's entry in MiniMax Code's config.yaml as the
-// catalog is now, over the one there: what magpie sets is set, a model gone
-// from the catalog goes, and every other key — the user's, MiniMax Code's —
-// stays with its comments. The file is written only when this changes it.
-func writeMiniMaxEntry(path string) error { return writeMiniMaxEntryAt(path, gateway.URL()) }
-
-// writeMiniMaxEntryAt is writeMiniMaxEntry for a MiniMax Code reaching the
-// gateway at gw.
+// writeMiniMaxEntryAt puts magpie's entry in MiniMax Code's config.yaml,
+// for a MiniMax Code reaching the gateway at gw, as the catalog is now, over
+// the one there: what magpie sets is set, a model gone from the catalog
+// goes, and every other key — the user's, MiniMax Code's — stays with its
+// comments. The file is written only when this changes it.
 func writeMiniMaxEntryAt(path, gw string) error {
 	cur, _ := edit.GetYAMLText(path, mcodeEntry)
 	entry := &yaml.Node{Kind: yaml.MappingNode}
@@ -183,15 +213,28 @@ func writeMiniMaxEntryAt(path, gw string) error {
 	// sends them; MiniMax Code's own API is that too
 	yamlSet(entry, "api", "anthropic-messages")
 	opts := yamlMap(entry, "options")
-	yamlSet(opts, "apiKey", gateway.Token)
+	yamlSet(opts, "apiKey", keyAt(gw))
 	yamlSet(opts, "baseURL", gw)
 	yamlSet(opts, "authMode", "api-key")
 	yamlSet(yamlMap(opts, "headers"), "User-Agent", mcodeUA)
 
+	defer provider.Hold()()
+	flat := provider.Flattened()
 	old := yamlGet(entry, "models")
 	models := &yaml.Node{Kind: yaml.MappingNode}
+	// keys is each model's key, its flat one where it has one
+	keys := map[string]string{}
 	for _, m := range magpieModels("minimax-code") {
-		mn := yamlGet(old, m.ID)
+		key := mcodeKey(flat, m.ID)
+		keys[m.ID] = key
+		mn := yamlGet(old, key)
+		// a key written with slashes before #1387
+		slashed := yamlGet(old, m.ID)
+		if key == m.ID {
+			slashed = nil
+		} else if mn == nil {
+			mn = slashed // what the user and MiniMax Code set on it, moved
+		}
 		if mn == nil || mn.Kind != yaml.MappingNode {
 			mn = &yaml.Node{Kind: yaml.MappingNode}
 		}
@@ -216,12 +259,21 @@ func writeMiniMaxEntryAt(path, gw string) error {
 			}
 		}
 		yamlSet(mn, "reasoning", len(levels) > 0)
+		// a default effort set by hand stays while the model has it
+		var was string
+		if d := yamlGet(yamlGet(mn, "thinking"), "defaultEffort"); d != nil && d.Kind == yaml.ScalarNode {
+			was = d.Value
+		}
 		yamlDel(mn, "thinking")
 		if len(levels) > 0 {
 			th := yamlMap(mn, "thinking")
 			yamlSet(th, "effortOptions", levels)
+			def := ""
 			if slices.Contains(levels, "high") {
-				yamlSet(th, "defaultEffort", "high")
+				def = "high"
+			}
+			if def = keptEffort(was, levels, def); def != "" {
+				yamlSet(th, "defaultEffort", def)
 			}
 		}
 		if caps := yamlGet(mn, "capabilities"); m.Images {
@@ -232,7 +284,15 @@ func writeMiniMaxEntryAt(path, gw string) error {
 				yamlDel(mn, "capabilities")
 			}
 		}
-		models.Content = append(models.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: m.ID}, mn)
+		models.Content = append(models.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, mn)
+		// the key with slashes stays, as the model now is, for a session
+		// that started on it — MiniMax Code finds a model it names whether
+		// on or off — and off, out of /model
+		if slashed != nil {
+			legacy := yamlCopy(mn)
+			yamlSet(legacy, "enabled", false)
+			models.Content = append(models.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: m.ID}, legacy)
+		}
 	}
 	if old != nil {
 		models.HeadComment, models.LineComment, models.FootComment = old.HeadComment, old.LineComment, old.FootComment
@@ -243,11 +303,34 @@ func writeMiniMaxEntryAt(path, gw string) error {
 	if err != nil {
 		return err
 	}
-	text := strings.TrimSuffix(string(b), "\n")
-	if text == cur {
+	if text := strings.TrimSuffix(string(b), "\n"); text != cur {
+		if err := edit.SetYAML(path, edit.KV{Path: mcodeEntry, Value: edit.YAMLText(text)}); err != nil {
+			return err
+		}
+	}
+	// the settings that named a model by its key with slashes name the
+	// flat one, a SubAgent's model can be
+	var refs []edit.KV
+	for _, k := range mcodeRefs {
+		v, _ := edit.GetYAML(path, k)
+		if ref, ok := strings.CutPrefix(v, mcodeProvider+"/"); ok && keys[ref] != "" && keys[ref] != ref {
+			refs = append(refs, edit.KV{Path: k, Value: mcodeProvider + "/" + keys[ref]})
+		}
+	}
+	if len(refs) == 0 {
 		return nil
 	}
-	return edit.SetYAML(path, edit.KV{Path: mcodeEntry, Value: edit.YAMLText(text)})
+	return edit.SetYAML(path, refs...)
+}
+
+// yamlCopy is a deep copy of n.
+func yamlCopy(n *yaml.Node) *yaml.Node {
+	c := *n
+	c.Content = make([]*yaml.Node, len(n.Content))
+	for i, k := range n.Content {
+		c.Content[i] = yamlCopy(k)
+	}
+	return &c
 }
 
 // yamlGet is the value of k in the mapping n, nil if there is none.

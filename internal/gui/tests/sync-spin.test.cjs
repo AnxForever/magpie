@@ -29,7 +29,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = {lang:"${lang}",theme:"light",web:true};` });
         if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
         if (url.pathname === "/api/state") return json(state);
-        if (url.pathname === "/api/sync") {
+        if (url.pathname === "/api/sync" || url.pathname === "/api/agents/rescan") {
           await new Promise((r) => setTimeout(r, 300));
           return json(state);
         }
@@ -61,7 +61,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           return remove.apply(this, names);
         };
         b.click();
-        spin = svg.getAnimations()[0];
+        spin = svg.getAnimations({ subtree: true })[0];
       }));
       assert.equal(end.state, "finished", `the spin was cut off mid-turn at ${Math.round(end.time)}ms`);
       assert(Number.isFinite(end.end) && Math.round(end.end) % 900 === 0, `the spin ends on a whole turn, not at ${end.end}ms`);

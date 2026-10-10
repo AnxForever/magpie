@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -15,6 +16,13 @@ import (
 // every turn with a model its provider does not list. internal/gateway,
 // internal/provider and internal/usage isolate themselves the same way.
 func TestMain(m *testing.M) {
+	if len(os.Args) == 3 && os.Args[1] == DryRunArg {
+		if err := DryRun(os.Args[2]); err != nil {
+			os.Stderr.WriteString(err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	// whether Codex's ChatGPT account is out of its allowance is asked of
 	// OpenAI; never from here
 	codexUsedUp = func() bool { return false }
@@ -29,5 +37,9 @@ func TestMain(m *testing.M) {
 	// keep the old one, so the test would read back a file nothing had
 	// applied. The Aside tests stand in for it themselves.
 	asideSet = func(string, string) error { return errors.New("aside: no Aside in a test") }
+	asideRead = func() (map[string]json.RawMessage, error) { return nil, errors.New("aside: no Aside in a test") }
+	// an address an agent is pointed at is tried over the network (Drift,
+	// #1013); never from a test, whose reach tests stand in for it
+	reachProbe = func(string) bool { return true }
 	os.Exit(testenv.Run(m))
 }

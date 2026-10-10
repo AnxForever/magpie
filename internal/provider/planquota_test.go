@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -176,6 +177,58 @@ func TestReadMiniMaxPlan(t *testing.T) {
 	}
 }
 
+// A Token Plan's video bucket is counted in videos, and MiniMax's CLI
+// shows it so, "4 / 5" left of the day and "34 / 35" of the week (#1366,
+// the reporter's mmx quota show): the window carries the count, used of
+// total, whichever way usage_count is told, and the general bucket,
+// counted in no items, carries none.
+func TestReadMiniMaxPlanVideoCounts(t *testing.T) {
+	h := int64(3600 * 1000)
+	_, ws, err := readMiniMaxPlan([]byte(`{"model_remains":[
+		{"model_name":"general","start_time":1791100800000,"end_time":` + jsonInt(1791100800000+5*h) + `,"remains_time":120000,
+		 "current_interval_total_count":0,"current_interval_usage_count":0,"current_interval_remaining_percent":94,"current_interval_status":1,
+		 "weekly_start_time":1791043200000,"weekly_end_time":` + jsonInt(1791043200000+168*h) + `,"weekly_remains_time":259200000,
+		 "current_weekly_total_count":0,"current_weekly_usage_count":0,"current_weekly_remaining_percent":93,"current_weekly_status":1},
+		{"model_name":"video","start_time":1791043200000,"end_time":` + jsonInt(1791043200000+24*h) + `,"remains_time":50520000,
+		 "current_interval_total_count":5,"current_interval_usage_count":1,"current_interval_remaining_percent":80,"current_interval_status":1,
+		 "weekly_start_time":1791043200000,"weekly_end_time":` + jsonInt(1791043200000+168*h) + `,"weekly_remains_time":259200000,
+		 "current_weekly_total_count":35,"current_weekly_usage_count":34,"current_weekly_remaining_percent":97.14,"current_weekly_status":1}],
+		"base_resp":{"status_code":0,"status_msg":"success"}}`))
+	if err != nil || len(ws) != 4 {
+		t.Fatalf("%v %+v", err, ws)
+	}
+	for _, w := range ws[:2] {
+		if w.Limit != 0 || w.Unit != "" {
+			t.Errorf("general, counted in no items, has a count: %+v", w)
+		}
+	}
+	// the day's usage_count (1) is what is used, the week's (34) what remains
+	if w := ws[2]; w.Name != "Video · 24 hours" || w.Amount != 1 || w.Limit != 5 || w.Unit != "videos" || w.Count(true) != "4 / 5 videos" || math.Abs(w.Used-20) > 1e-9 {
+		t.Errorf("video, the day: %+v", w)
+	}
+	if w := ws[3]; w.Name != "Video · 7 days" || w.Amount != 1 || w.Limit != 35 || w.Unit != "videos" || w.Count(true) != "34 / 35 videos" || w.Count(false) != "1 / 35 videos" {
+		t.Errorf("video, the week: %+v", w)
+	}
+
+	// a count the percentage doesn't agree with is no count; a used-up
+	// window is all of it used
+	_, ws, err = readMiniMaxPlan([]byte(`{"model_remains":[{"model_name":"video",
+		"start_time":1791043200000,"end_time":` + jsonInt(1791043200000+24*h) + `,
+		"current_interval_total_count":5,"current_interval_usage_count":2,"current_interval_remaining_percent":50,"current_interval_status":1,
+		"weekly_start_time":1791043200000,"weekly_end_time":` + jsonInt(1791043200000+168*h) + `,
+		"current_weekly_total_count":35,"current_weekly_usage_count":0,"current_weekly_remaining_percent":0,"current_weekly_status":2}],
+		"base_resp":{"status_code":0}}`))
+	if err != nil || len(ws) != 2 {
+		t.Fatalf("%v %+v", err, ws)
+	}
+	if w := ws[0]; w.Limit != 0 || w.Count(false) != "" || w.Used != 50 {
+		t.Errorf("a count against the percentage: %+v", w)
+	}
+	if w := ws[1]; w.Amount != 35 || w.Limit != 35 || w.Used != 100 {
+		t.Errorf("used up: %+v", w)
+	}
+}
+
 func jsonInt(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
 func TestPlanWindowsAuth(t *testing.T) {
@@ -226,13 +279,18 @@ func TestPlanQuotas(t *testing.T) {
 	for _, v := range agentenv.Vars {
 		t.Setenv(v, "")
 	}
+	var unavailable atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if unavailable.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		key := r.Header.Get("Authorization")
 		switch r.Header.Get("X-Host") + r.URL.Path + " " + key {
 		case "open.bigmodel.cn/api/monitor/usage/quota/limit glm-a":
-			w.Write([]byte(`{"success":true,"data":{"level":"pro","limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":20}]}}`))
+			w.Write([]byte(`{"success":true,"data":{"level":"pro","limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":20,"nextResetTime":4102444800000}]}}`))
 		case "open.bigmodel.cn/api/monitor/usage/quota/limit glm-b":
-			w.Write([]byte(`{"success":true,"data":{"level":"lite","limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":90}]}}`))
+			w.Write([]byte(`{"success":true,"data":{"level":"lite","limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":90,"nextResetTime":4102444800000}]}}`))
 		case "open.bigmodel.cn/api/monitor/usage/quota/limit glm-payg":
 			w.Write([]byte(`{"success":true,"data":{"limits":[]}}`))
 		case "bigmodel.cn/api/monitor/usage/quota/limit glm-payg":
@@ -245,6 +303,13 @@ func TestPlanQuotas(t *testing.T) {
 			w.Write([]byte(`{"code":200,"success":true,"data":[{"productName":"GLM Coding Pro","status":"VALID","autoRenew":1,"nextRenewTime":"2026-10-18 10:00:00"}]}`))
 		case "open.bigmodel.cn/api/biz/subscription/list glm-b":
 			w.WriteHeader(http.StatusInternalServerError)
+		case "open.bigmodel.cn/api/biz/customer-package-reset/list glm-a":
+			if r.URL.Query().Get("targetType") != "PERSONAL" {
+				t.Errorf("resets asked as %s", r.URL)
+			}
+			w.Write([]byte(zhipuResetList))
+		case "open.bigmodel.cn/api/biz/customer-package-reset/list glm-b":
+			w.Write([]byte(`{"code":1000,"msg":"身份验证失败。","success":false}`))
 		case "api.minimaxi.com/v1/token_plan/remains Bearer sk-cp-k":
 			w.Write([]byte(`{"model_remains":[{"model_name":"general","current_interval_remaining_percent":75,"current_interval_status":1,
 				"current_weekly_remaining_percent":96,"current_weekly_status":1}],"base_resp":{"status_code":0,"status_msg":"success"}}`))
@@ -293,8 +358,44 @@ func TestPlanQuotas(t *testing.T) {
 	if q := got["glm/home"]; q.Plan != "lite" || q.Windows[0].Used != 90 || q.Until != nil || q.Error != "" {
 		t.Errorf("second key: %+v", q)
 	}
+	// its resets (#1191): a list read is counted, one refused shows none
+	if r := got["glm/work"].Resets; r == nil || r.Count != 2 || r.FiveHour != 1 || r.Weekly != 1 {
+		t.Errorf("first key's resets: %+v", r)
+	}
+	if r := got["glm/home"].Resets; r != nil {
+		t.Errorf("second key's resets: %+v", r)
+	}
 	if q := got["go/"]; q.Name != "OpenCode Go" || len(q.Windows) != 1 || q.Windows[0].Name != "5 hours" {
 		t.Errorf("go: %+v", q)
+	}
+	// The custom GLM provider is recognized by its endpoint, not its id
+	// or key labels, and the provenance survives PlanQuotas' cache.
+	reset := time.UnixMilli(4102444800000)
+	sub := SubscriptionQuota{Provider: "zcode", User: "me@example.com",
+		Windows: []QuotaWindow{{Span: 5 * time.Hour, ResetsAt: &reset}}}
+	for _, q := range got {
+		if hidden := len(notShown([]SubscriptionQuota{q}, []SubscriptionQuota{sub})) == 0; hidden != (q.Provider == "glm") {
+			t.Errorf("%s/%s: hidden=%v", q.Provider, q.User, hidden)
+		}
+	}
+	if qs := notShown(PlanQuotas(context.Background()), []SubscriptionQuota{sub}); len(qs) != 2 {
+		t.Fatalf("cached plans after deduplication: %+v", qs)
+	}
+	// A restart loses the in-memory provenance; a failed read restores
+	// the old windows from disk and must still recognize the GLM source.
+	unavailable.Store(true)
+	planQuotaCache.Lock()
+	planQuotaCache.data = nil
+	planQuotaCache.Unlock()
+	lastQuotas.Lock()
+	lastQuotas.m, lastQuotas.loaded = nil, false
+	lastQuotas.Unlock()
+	qs := PlanQuotas(context.Background())
+	if len(qs) != 4 {
+		t.Fatalf("restored plans: %+v", qs)
+	}
+	if kept := notShown(qs, []SubscriptionQuota{sub}); len(kept) != 2 {
+		t.Fatalf("restored plans after deduplication: %+v", kept)
 	}
 }
 

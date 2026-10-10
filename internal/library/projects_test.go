@@ -14,7 +14,7 @@ import (
 func isLink(t *testing.T, p string) bool {
 	t.Helper()
 	fi, err := os.Lstat(p)
-	return err == nil && fi.Mode()&os.ModeSymlink != 0
+	return err == nil && linkEntry(fi)
 }
 
 func gone(t *testing.T, p string) {
@@ -195,7 +195,7 @@ func TestUpdateSkillRefreshesProjects(t *testing.T) {
 		ok(t)(ProjectSkill(p, "docx", []string{"codex"}))
 	}
 	version = "two"
-	ok(t)(UpdateSkill("pdf"))
+	ok(t)(UpdateSkill("pdf", false))
 	ok(t)(UpdateSomeSkills([]string{"docx"}))
 	for _, p := range []string{linked, copied} {
 		for _, e := range []string{".claude/skills/pdf", ".agents/skills/docx"} {

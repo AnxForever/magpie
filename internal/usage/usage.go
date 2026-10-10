@@ -51,13 +51,22 @@ type Record struct {
 	// routing group, provider/model…), and Served the model the vendor's
 	// reply says answered, when it named one: a ledger to set beside the
 	// vendor's own bill. Neither is in a record written before they were.
-	Requested  string `json:"req,omitempty"`
-	Served     string `json:"served,omitempty"`
+	Requested string `json:"req,omitempty"`
+	Served    string `json:"served,omitempty"`
+	// Upstream: the provider an aggregator (OpenRouter …) said answered
+	// behind it — DeepInfra, Novita — when its reply named one
+	Upstream   string `json:"upstream,omitempty"`
 	Input      int    `json:"in"`
 	Output     int    `json:"out"`
 	CacheRead  int    `json:"cache_read,omitempty"`
 	CacheWrite int    `json:"cache_write,omitempty"`
-	Reasoning  int    `json:"reasoning,omitempty"`
+	// CacheWrite1h is how many of CacheWrite were written to be kept for
+	// an hour (Anthropic's 1-hour TTL, billed at 2× input where 5 minutes'
+	// is 1.25×); the rest were for 5 minutes. A record from before it was
+	// kept has none: all its writes are counted as 5-minute ones, as they
+	// were.
+	CacheWrite1h int `json:"cache_write_1h,omitempty"`
+	Reasoning    int `json:"reasoning,omitempty"`
 	// Effort is the reasoning the model was asked for — a routing group's
 	// pick for the turn, or the agent's own — as it takes it; "" for none
 	Effort string `json:"effort,omitempty"`
@@ -73,7 +82,14 @@ type Record struct {
 	// the tries that failed first are before it, and TTFT-Sent is how
 	// long the vendor took to its first content. 0 where it isn't known
 	// (a reply not streamed, or a vendor magpie doesn't reach over HTTP).
-	Sent   int64 `json:"sent_ms,omitempty"`
+	Sent int64 `json:"sent_ms,omitempty"`
+	// Flow: the ms the reply's content took to come, from where its speed
+	// is counted (DecodeOf): from a tenth of its content to nine tenths,
+	// spread over the whole. A reply a vendor held and let go in one burst
+	// has a flow of next to none, however long its end came after its
+	// first content, and so tells no speed (John on Discord: a Kimi Code
+	// reply read 1,367 tok/s). 0 where it isn't known.
+	Flow   int64 `json:"flow_ms,omitempty"`
 	Status int   `json:"status"`
 	// Error is why a call failed, in the vendor's words and cut short;
 	// ErrType what its body called the error (rate_limit_error,
@@ -86,12 +102,25 @@ type Record struct {
 	// ResponseID is the response object ID actually sent to the client.
 	ResponseID string `json:"response_id,omitempty"`
 	Endpoint   string `json:"ep,omitempty"`
+	// Stop is why the upstream said its reply ended, in its own words
+	// (stop_reason, finish_reason …): "" when it said none, a stream that
+	// just stopped. Told apart by it, a reply that ended too soon is the
+	// upstream's own end_turn or a cut (蓝猫 on Discord).
+	Stop string `json:"stop,omitempty"`
 	// Session is the conversation the call was part of, as its agent names
 	// it (X-Magpie-Session, or the session header Claude Code, Codex or
 	// OpenCode sends): several sessions on one model told apart
 	Session string `json:"session,omitempty"`
 	// NativeSession retains the client header when X-Magpie-Session overrides it.
 	NativeSession string `json:"native_session,omitempty"`
+	// Subagent is the subagent that made the call, as its agent names it
+	// (Claude Code's x-claude-code-agent-id, the agentId of its
+	// subagents/agent-<id>.jsonl): Session stays the conversation it was
+	// spawned in, so its calls are counted there too. ParentAgent is the
+	// subagent that spawned it in turn (x-claude-code-parent-agent-id), ""
+	// when the conversation itself did or the agent doesn't say.
+	Subagent    string `json:"subagent,omitempty"`
+	ParentAgent string `json:"parent_agent,omitempty"`
 	// Rejected is a request refused locally before an upstream was contacted.
 	Rejected bool `json:"rejected,omitempty"`
 	// Kind is what the agent made the call for when it isn't a turn of
@@ -132,7 +161,7 @@ var mu sync.Mutex
 // break a call.
 func Append(r Record) {
 	if r.Time.IsZero() {
-		r.Time = time.Now()
+		r.Time = Clock()
 	}
 	offerOTel(r)
 	b, err := json.Marshal(r)
@@ -195,12 +224,29 @@ type Known struct {
 // agent's own description, so they are listed in one place only.
 var Agents func() []Known
 
-var knownAgents = sync.OnceValue(func() []Known {
+// PluginAgents lists the agents plugins add, which come and go as
+// plugins do; package agent sets it.
+var PluginAgents func() []Known
+
+var builtinAgents = sync.OnceValue(func() []Known {
 	if Agents == nil {
 		return nil
 	}
 	return Agents()
 })
+
+// knownAgents are magpie's own agents, then those plugins add.
+func knownAgents() []Known {
+	own := builtinAgents()
+	if PluginAgents == nil {
+		return own
+	}
+	more := PluginAgents()
+	if len(more) == 0 {
+		return own
+	}
+	return append(slices.Clip(own), more...)
+}
 
 // AgentOf names the agent behind a client User-Agent. Known agents map to
 // their magpie id; anything else keeps its product name.
@@ -242,21 +288,30 @@ const (
 // Periods lists the windows in order.
 var Periods = []Period{Today, Week, Month, All}
 
+// CostAt is what the call costs at a price: at the tier its input reaches,
+// its 1-hour cache writes at theirs.
+func (r Record) CostAt(p catalog.Price) float64 {
+	return p.CostSplit(r.Input, r.Output, r.CacheRead, r.CacheWrite, r.CacheWrite1h)
+}
+
 // Totals is a sum of calls.
 type Totals struct {
-	Calls      int     `json:"calls"`
-	Errors     int     `json:"errors"`
-	Input      int     `json:"input"`
-	Output     int     `json:"output"`
-	CacheRead  int     `json:"cache_read"`
-	CacheWrite int     `json:"cache_write"`
-	Reasoning  int     `json:"reasoning"`
-	Cost       float64 `json:"cost"`     // USD at the effective price, for the priced calls
-	Unpriced   int     `json:"unpriced"` // calls with tokens but no known price
+	Calls      int `json:"calls"`
+	Errors     int `json:"errors"`
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheRead  int `json:"cache_read"`
+	CacheWrite int `json:"cache_write"`
+	// CacheWrite1h is how many of CacheWrite were 1-hour writes
+	CacheWrite1h int     `json:"cache_write_1h,omitempty"`
+	Reasoning    int     `json:"reasoning"`
+	Cost         float64 `json:"cost"`     // USD at the effective price, for the priced calls
+	Unpriced     int     `json:"unpriced"` // calls with tokens but no known price
 	// Timed: the answered calls whose first token was timed (streamed),
 	// TTFT the sum of their ttft_ms; DecodeMs the time from it to the end
-	// of those that wrote any, over which DecodeOut tokens came: their
-	// mean wait, and how fast they wrote (#196)
+	// of those that wrote any, over which DecodeOut tokens came (a
+	// reasoning reply's answer, Record.Decode): their mean wait, and how
+	// fast they wrote (#196)
 	Timed     int   `json:"timed,omitempty"`
 	TTFT      int64 `json:"ttft_ms,omitempty"`
 	DecodeMs  int64 `json:"decode_ms,omitempty"`
@@ -284,7 +339,7 @@ func (t Totals) Speed() float64 {
 }
 
 // A reply's speed is its output tokens over its decode window, the ms
-// from its first content to its end (#196); a window counts only when it
+// from its first content to its end (#196; one that reasoned, DecodeOf); a window counts only when it
 // timed the writing (#731). One that is shorter than MinDecodeMs, or over
 // which the tokens would have come faster than MaxDecodeSpeed a second,
 // didn't: the reply came in one burst at its end, written before the
@@ -310,6 +365,73 @@ func DecodeWindow(out int, ms, ttft int64) int64 {
 		return 0
 	}
 	return w
+}
+
+// DecodeOf is what a reply's speed is told by: the tokens it was seen to
+// write and the ms it took (tony on Discord: gpt-6.1-sol read 163 tok/s,
+// with a 14 s first token). A reply that reasoned counts only its answer —
+// its output less the reasoning, from its first text — as most vendors
+// keep the reasoning out of the stream (OpenAI's is encrypted, its summary
+// sent when it's done; Claude's may come with no text): its tokens were
+// written before the first content, over time the window from it doesn't
+// hold, and counting them read a 2,000-token think and a 200-token answer
+// in 1.5 s as 1,467 tok/s. Its time goes to the wait before the answer.
+// One with reasoning and no text (all tool calls) tells no speed. The
+// window is DecodeWindow's: 0 for a reply that tells none.
+//
+// A reply its vendor held back and let go in a burst at its end tells
+// none either (John on Discord: Kimi Code answering OpenCode read 1,367,
+// then 2,237 and 2,012 tok/s). The burst is told two ways, as the reply's
+// text came before it or with it:
+//
+//   - flow, when known (Record.Flow), is how long its content took to come
+//     from where its window starts. A window HeldShare times longer had
+//     its content come in a small part of it: the rest was a wait while
+//     the vendor wrote and held it. The time it took to come is not the
+//     time it took to write (a burst let go over 236 ms read 528 tokens at
+//     2,237 tok/s), and that time is not seen, so it tells no speed. A
+//     stream that came as it was written has a flow about its window.
+//   - a reply that reasoned is timed from its first text, its reasoning
+//     written before. When the answer would have been written over
+//     ThinkPace times faster than its reasoning came before it, from the
+//     first content to the first text, its first text came with the burst
+//     and the wait before it was the answer being written and held (22
+//     reasoning tokens over 10.5 s, then 528 answer tokens in 236 ms). A
+//     reasoning hidden from the stream (OpenAI's, Claude's omitted) comes
+//     before the first content and leaves this time short; one that
+//     streams comes at the pace its answer does.
+func DecodeOf(out, reasoning int, ms, ttft, firstText, flow int64) (tokens int, w int64) {
+	start := ttft
+	if reasoning > 0 {
+		out, start = out-reasoning, firstText
+	}
+	if ttft <= 0 {
+		return 0, 0
+	}
+	if w = DecodeWindow(out, ms, start); w == 0 {
+		return 0, 0
+	}
+	if flow > 0 && flow*HeldShare < w {
+		return 0, 0
+	}
+	if reasoning > 0 && int64(out)*(firstText-ttft) > ThinkPace*int64(reasoning)*w {
+		return 0, 0
+	}
+	return out, w
+}
+
+// HeldShare and ThinkPace tell a reply held back and let go in a burst
+// (DecodeOf): its content came in under a quarter of its window, or its
+// answer at over 20 times the pace its reasoning came. routing.js's
+// decodeOf and app.js's ledDecode have the same.
+const (
+	HeldShare = 4
+	ThinkPace = 20
+)
+
+// Decode is the record's DecodeOf.
+func (r Record) Decode() (tokens int, w int64) {
+	return DecodeOf(r.Output, r.Reasoning, r.Millis, r.TTFT, r.FirstText, r.Flow)
 }
 
 // FormatCost renders an effective-price cost, kept in USD everywhere it's
@@ -343,13 +465,14 @@ func (t *Totals) add(r Record, price *catalog.Price) {
 	t.Output += r.Output
 	t.CacheRead += r.CacheRead
 	t.CacheWrite += r.CacheWrite
+	t.CacheWrite1h += r.CacheWrite1h
 	t.Reasoning += r.Reasoning
 	if r.TTFT > 0 && !r.Failed() {
 		t.Timed++
 		t.TTFT += r.TTFT
-		if w := DecodeWindow(r.Output, r.Millis, r.TTFT); w > 0 {
+		if n, w := r.Decode(); w > 0 {
 			t.DecodeMs += w
-			t.DecodeOut += r.Output
+			t.DecodeOut += n
 		}
 	}
 	if r.Input+r.Output == 0 {
@@ -359,7 +482,7 @@ func (t *Totals) add(r Record, price *catalog.Price) {
 		t.Unpriced++
 		return
 	}
-	t.Cost += price.Cost(r.Input, r.Output, r.CacheRead, r.CacheWrite)
+	t.Cost += r.CostAt(*price)
 }
 
 // Group is the share of one agent or model.
@@ -438,7 +561,7 @@ type Summary struct {
 // Summarize caches the four periods over an indexed log snapshot. Callers
 // receive their own result slices, without retaining historical Records.
 func Summarize(p Period) Summary {
-	return indexedSummary(p)
+	return indexedSummary(p, Clock())
 }
 
 func summarize(p Period, now time.Time, recs []Record) Summary {
@@ -469,8 +592,14 @@ func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[
 		normalizedKeys[id] = true
 	}
 	historicalKeys = normalizedKeys
+	// a picked range's own days alone: its chart can start on the Monday
+	// before its first, and it ends before now (#1492)
+	from, until := p.Since(now), p.Until(now)
 	visit := func(fn func(Record)) {
 		read(func(r Record) {
+			if r.Time.Before(from) || after(until, r.Time) {
+				return
+			}
 			if next, ok := renamed[r.Provider]; ok {
 				r.Provider = next
 			}
@@ -479,9 +608,7 @@ func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[
 	}
 	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
 	s.Since, s.Bucket, s.Series = timeline(p, now, first)
-	if p != Today && p != Week && p != Month {
-		s.Period = All
-	}
+	s.Period = p.shown()
 
 	priceOf := pricer()
 	// the places each provider id went in the period, and goes now
@@ -648,8 +775,12 @@ type Via struct {
 // Vias is what the gateway sent each session's calls to since a time, by
 // agent id and the session's id ("codex|<id>"), the most calls first.
 func Vias(since time.Time) map[string][]Via {
+	return cachedVias(since)
+}
+
+func buildVias(snapshot *logSnapshot, since time.Time) map[string][]Via {
 	out := map[string][]Via{}
-	readLogSnapshot().visit(since, func(r Record) {
+	snapshot.visit(since, func(r Record) {
 		if r.IsRejected() || r.Session == "" || r.Model == "" {
 			return
 		}
