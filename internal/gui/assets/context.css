@@ -136,6 +136,8 @@ i.dot.free { background: var(--k-free); box-shadow: inset 0 0 0 1px color-mix(in
 /* the padding is the open card's, so the title stays where it is when it
    opens and the page doesn't follow it (it moved 4px with a 10px one) */
 .ctx-card.shut > :not(.ctx-head) { display: none; }
+/* its head alone, the space under it is the space over it */
+.ctx-card.shut { padding-bottom: 14px; }
 :where(.ctx-card.shut.max420) .ctx-model { display: none; }
 /* folded, the head is one line of a fixed height whatever a live request
    puts in it, so nothing under it moves; a thin bar of what fills the
