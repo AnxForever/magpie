@@ -673,6 +673,32 @@ with the same JSON: `param-override` (`param_override`), `model-map`
 middleware's entry in the community `registry.json` has
 `"kind": "middleware"` and no `providers`.
 
+#### Agent plugins
+
+A plugin can add an agent magpie has no setup of its own for. Its
+`package.json` names the module (`"magpie": { "agent": "./agent.js" }`), or
+it is a single `*.agent.js` file:
+
+```js
+export const agent = {
+  id: "aider", name: "Aider", bin: "aider",
+  config: "~/.aider.conf.yml",   // json, yaml or env
+  model: "model",                // the key of the model
+  prefix: "openai/",             // written before magpie's model id
+  ua: ["aider", "litellm"],
+}
+export function connect({ gateway, model, models }) {
+  return { "openai-api-base": gateway.v1, "openai-api-key": gateway.key }
+}
+```
+
+It is then on the Agents page like magpie's own: picking one of magpie's
+models writes the model and what `connect` returns, and its own model or
+Disconnect puts every key back as it was. It runs in moejs like middleware.
+An id magpie's own agents use is refused. In the market an agent's entry has
+`"kind": "agent"` (`@magpie-community/agent-<name>`). The full reference is
+on the site's Plugins page, under Agent plugins.
+
 ### What a model costs
 
 A call is counted at its **effective price**: what you set for that provider
