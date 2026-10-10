@@ -320,13 +320,17 @@ func claudeVersionOf(model string) (major, minor int, ok bool) {
 // effort it is nearest in output_config.effort unless one is there (Keenc
 // on Discord: claude-opus-5-5 answered 400). Read off the model the body
 // is sent with, the vendor's own name; any other request, older Claudes'
-// included, goes as it came, and "disabled" stays.
+// included, goes as it came, and "disabled" stays. The thinking enabled
+// shows (display "summarized" by default) is still shown: Opus 4.7 and
+// later leave it out of adaptive thinking unless asked (#1485), so it is
+// asked for unless the request names its own display. A provider that
+// refuses display has it taken out after (withoutRefusedShapes).
 func adaptiveThinking(body []byte) []byte {
 	th := gjson.GetBytes(body, "thinking")
 	if th.Get("type").String() != "enabled" || !adaptiveOnly(gjson.GetBytes(body, "model").String()) {
 		return body
 	}
-	thinking := map[string]any{"type": "adaptive"}
+	thinking := map[string]any{"type": "adaptive", "display": "summarized"}
 	if d := th.Get("display"); d.Exists() {
 		thinking["display"] = d.Value()
 	}

@@ -2953,10 +2953,11 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	var betas []string
 	if to == provider.Anthropic {
 		body = s.bodyBetas(p, body)
-		body = s.withoutRefusedShapes(p, body)
 		// what every path to an Anthropic endpoint sends, relayed or
-		// built, with the model named as the vendor names it
+		// built, with the model named as the vendor names it; before the
+		// shapes a provider refused are taken out, as it asks a display
 		body = adaptiveThinking(body)
+		body = s.withoutRefusedShapes(p, body)
 		body = thinkingOffAsTaken(body, path)
 		body = samplingAsTaken(body, path)
 		asked := askedBetas(in)

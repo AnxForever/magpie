@@ -151,3 +151,86 @@ func TestTranslatedDisplayLeftOutWhereRefused(t *testing.T) {
 		t.Errorf("thinking sent = %v, want %v", thinking, want)
 	}
 }
+
+// A budget turned into adaptive thinking for Opus 4.7 and later (an
+// Anthropic client's own, or one magpie built for a model it knows by
+// another name) still shows the thinking, as enabled thinking does by
+// default; a provider that refuses display is asked again without it and
+// from then on sent none (#1485).
+func TestBudgetTurnedAdaptiveIsShown(t *testing.T) {
+	fresh(t)
+	up := &displayVendor{}
+	srv := httptest.NewServer(up)
+	t.Cleanup(srv.Close)
+	if err := provider.Save(provider.Provider{ID: "anth", Name: "Anth", Key: "k", Anthropic: srv.URL,
+		Models: []string{"claude-opus-5-5", "opus"}}); err != nil {
+		t.Fatal(err)
+	}
+	// magpie's "opus" is the vendor's claude-opus-4-7
+	if err := provider.SetUpstreamName("anth/opus", "claude-opus-4-7"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, path, body string }{
+		{"budget relayed", "/v1/messages",
+			`{"model":"anth/claude-opus-5-5","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hi"}]}`},
+		{"budget relayed, streamed", "/v1/messages",
+			`{"model":"anth/claude-opus-5-5","max_tokens":32000,"stream":true,"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hi"}]}`},
+		{"chat's effort, name mapped after", "/v1/chat/completions",
+			`{"model":"anth/opus","reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, out := post(t, c.path, c.body)
+			if code != 200 {
+				t.Fatalf("status %d: %s", code, out)
+			}
+			if th, _ := up.last()["thinking"].(map[string]any); th["type"] != "adaptive" || th["display"] != "summarized" {
+				t.Errorf("thinking = %v, want adaptive, display summarized", up.last()["thinking"])
+			}
+			if !strings.Contains(out, "Weighing the question.") {
+				t.Errorf("the client got no thinking: %s", out)
+			}
+		})
+	}
+
+	var mu sync.Mutex
+	var thinking []string
+	strict := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		th, _ := json.Marshal(gjsonThinking(b))
+		mu.Lock()
+		thinking = append(thinking, string(th))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(string(th), "display") {
+			w.WriteHeader(400)
+			io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"thinking.adaptive.display: Extra inputs are not permitted"}}`)
+			return
+		}
+		io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	t.Cleanup(strict.Close)
+	if err := provider.Save(provider.Provider{ID: "strict", Name: "Strict", Key: "k", Anthropic: strict.URL,
+		Models: []string{"claude-opus-5-5"}}); err != nil {
+		t.Fatal(err)
+	}
+	h := New().Handler() // one gateway, which learns
+	for i := range 2 {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(
+			`{"model":"strict/claude-opus-5-5","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hi"}]}`)))
+		if out := rec.Body.String(); rec.Code != 200 || !strings.Contains(out, `"ok"`) {
+			t.Fatalf("request %d: status %d: %s", i, rec.Code, out)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{`{"display":"summarized","type":"adaptive"}`, `{"type":"adaptive"}`, `{"type":"adaptive"}`}; !slices.Equal(thinking, want) {
+		t.Errorf("thinking sent = %v, want %v", thinking, want)
+	}
+}
+
+func gjsonThinking(body []byte) any {
+	var m map[string]any
+	json.Unmarshal(body, &m)
+	return m["thinking"]
+}
