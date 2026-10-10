@@ -328,6 +328,7 @@ func fetchOne(ctx context.Context, url, key string, anthropic bool, headers map[
 		if input != nil {
 			m.Images = *input
 		}
+		m.Tiers = tiersOf(r.Tiers)
 		var pr *Price
 		if len(r.Price) > 0 && json.Unmarshal(r.Price, &pr) == nil && pr != nil && pr.sane() {
 			m.Price = pr
@@ -393,6 +394,11 @@ type liveModel struct {
 	// how another magpie searches the web for the model: "native" or
 	// "magpie" (Model.WebSearch)
 	WebSearch string `json:"web_search"`
+	// the service tiers another magpie offers its Codex on the model
+	// (Fast's "priority"), as Codex's catalog writes them ({"id":…}) or
+	// as plain ids: kept as Model.Tiers (#1234). any, as an odd value
+	// mustn't lose the whole list
+	Tiers any `json:"service_tiers"`
 	// what another magpie counts a call to the model at, asked for with
 	// its X-Magpie-Prices header: the price its user set, else its list
 	// price. Raw, as an odd value mustn't lose the whole list
@@ -400,6 +406,23 @@ type liveModel struct {
 	// the protocol family PipeLLM routes the model by: openai, anthropic
 	// or gemini
 	TypeTarget string `json:"type_target"`
+}
+
+// tiersOf are the ids of a list's service_tiers, as Codex's catalog
+// writes them ([{"id":"priority","name":"Fast"}]) or as plain ids.
+func tiersOf(v any) []string {
+	xs, _ := v.([]any)
+	var out []string
+	for _, x := range xs {
+		id, _ := x.(string)
+		if o, ok := x.(map[string]any); ok {
+			id, _ = o["id"].(string)
+		}
+		if id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // levelsOf are the efforts of a list's supported_reasoning_levels, as

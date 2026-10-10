@@ -63,7 +63,9 @@ type Model struct {
 	// Fast mode): one a ChatGPT account serves.
 	Fast bool `json:",omitempty"`
 	// Tiers, in one ChatGPT account's own model list, are the service
-	// tiers its plan offers on the model ("priority", "ultrafast").
+	// tiers its plan offers on the model ("priority", "ultrafast"); in
+	// another magpie's, the tiers it offers its Codex on the model
+	// (#1234).
 	Tiers []string `json:",omitempty"`
 	// OwnTier is set on a model of a provider the user added by its
 	// address, which the gateway sends the tier Codex asks for as it is

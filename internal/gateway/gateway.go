@@ -812,11 +812,20 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		if prices {
 			st, find = settings.Load(), provider.GroupFinder()
 		}
+		// for another magpie: the tiers its Codex is offered on each
+		// model, as Codex here is (#1234)
+		var tiers map[string][]any
+		if magpie {
+			tiers = codexTiers(shown)
+		}
 		for i, e := range shown {
 			m := modelObject(e)
 			if magpie {
 				if how := webSearchOf(e, searches); how != "" {
 					m["web_search"] = how
+				}
+				if ts := tiers[e.ID]; len(ts) > 0 {
+					m["service_tiers"] = ts
 				}
 			}
 			if prices {
@@ -3788,8 +3797,10 @@ func (s *Server) forwardTranslated(ctx context.Context, p provider.Provider, to 
 			}
 		}
 		// the tier the client asked for goes to a provider the user added
-		// by its address as it was asked (Request.Tier)
-		if own := p.Preset == "" && p.Account == nil && s.fits(p.ID, tierField, to); own != req.OwnTier {
+		// by its address as it was asked (Request.Tier), and to another
+		// magpie, which offered it and serves it as its own Codex would be
+		// (#1234)
+		if own := (p.Preset == "" && p.Account == nil || p.IsRemoteMagpie()) && s.fits(p.ID, tierField, to); own != req.OwnTier {
 			r := *req
 			r.OwnTier, req = own, &r
 		}

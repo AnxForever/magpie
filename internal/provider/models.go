@@ -1223,6 +1223,9 @@ type Entry struct {
 	// multi-agent V2 for it, so Ultra hands work to its agents, whose
 	// tasks a magpie-served lead writes as text.
 	AgentsV2 bool `json:"-"`
+	// Tiers are the service tiers its list offers Codex on the model:
+	// another magpie's, those it offers its own Codex (#1234)
+	Tiers []string `json:"-"`
 }
 
 // Catalog lists the routing groups, then every exposed model of every ready
@@ -1298,7 +1301,7 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	// an agent's list showed the whole magpie/<provider>/<model> (#955)
 	name := cmp.Or(m.Name, m.ID)
 	e := Entry{ID: p.ID + "/" + m.ID, Model: m.ID, Family: p.Family, Name: name, Efforts: effortsOf(m), Provider: p,
-		Images: images, ImageInput: imageInput, Context: ctx, Output: output, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas}
+		Images: images, ImageInput: imageInput, Context: ctx, Output: output, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers}
 	if n, ok := modelNameIn(s.ModelNames, p.ID, m.ID); ok {
 		e.Name, e.Default = n, name
 	} else {
