@@ -9640,6 +9640,7 @@ function renderModels(p) {
     else if (f && !chips.children.length) chips.append(el("span", "hint", t("No model here matches “{q}”. Image, embedding and speech models aren't listed, as agents can't chat with them: pick an image model in Settings → Images.", { q: q.value.trim() })));
     drawNames();
     drawFold();
+    drawWorkOn();
     why.textContent = decideOnly(p) ? t("Agents never see them: a routing group picks one as its classifier.")
       : draft.unlisted ? t("Agents don't see them: only the routing groups they are in use them.")
       : t(draft.chosen.length ? "Agents see the models picked." : "None picked: agents see the vendor's list, up to {n} (dashed). Click a model to pick just it. To show them none, tick Only through routing groups, or switch the provider off.", { n: 24 });
@@ -10003,6 +10004,33 @@ function renderModels(p) {
     };
     bulk.append(freeOn);
   }
+  // the picks that answered Test models (H20 on Discord: 测试完很多不可用，
+  // 只能一个个取消): those whose last test failed are unpicked, the rest
+  // stay, an untested one too, as nothing says it doesn't work. Offered
+  // once a test has answered; with none picked, the served list it tested
+  // stands in for the picks
+  const workOn = el("button", "text action works-only", t("Working only"));
+  const failedPicks = () => {
+    const got = modelTests[p.id] || {};
+    const ids = draft.chosen.length ? draft.chosen : p.models.filter((m) => m.on).map((m) => m.id);
+    return [ids, ids.filter((id) => got[id] && !got[id].ok)];
+  };
+  workOn.onclick = () => {
+    const [ids, bad] = failedPicks();
+    if (!bad.length) return;
+    draft.chosen = ids.filter((id) => !bad.includes(id));
+    draw();
+    status(t(bad.length === 1 ? "Unpicked 1 model that didn't answer" : "Unpicked {n} models that didn't answer", { n: bad.length }), "ok");
+  };
+  const drawWorkOn = () => {
+    // in the row only once a test has answered, not there hidden till then
+    if (!Object.values(modelTests[p.id] || {}).some((x) => x)) { workOn.remove(); return; }
+    if (!workOn.isConnected) bulk.append(workOn);
+    const bad = failedPicks()[1].length;
+    workOn.disabled = !bad;
+    workOn.title = bad ? t("Unpick the models whose last test failed; those that answered, and those not tested, stay picked")
+      : t("Every picked model that was tested answered");
+  };
   if (q || p.models.length > 1) {
     if (q) { q.oninput = draw; bulk.prepend(q); }
     box.append(bulk);
