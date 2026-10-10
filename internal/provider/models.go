@@ -1099,11 +1099,18 @@ func EffectivePriceIn(s settings.Settings, providerID, model string) (catalog.Pr
 	// key under a display name counts only for a caller naming that name
 	// too. Nothing writes such a key — SetModelPrice re-keys the way
 	// SetModelName does — which is what keeps the two from drifting.
-	id := providerID
 	p, known := byIDOrWas(providerID)
-	if known {
-		id = p.ID
+	if !known {
+		p = Provider{ID: providerID}
 	}
+	return priceOf(s, p, known, model)
+}
+
+// priceOf is EffectivePriceIn for a provider already looked up, for a
+// caller pricing many models at once: byIDOrWas reads every provider's
+// accounts each time.
+func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog.Price, bool) {
+	id := p.ID
 	// then what they said the model costs from any provider (*/model):
 	// still the user's word, so before any list price
 	for _, key := range [...]string{id + "/" + model, id + "/*", AnyPriceKey(model)} {
@@ -1292,6 +1299,10 @@ type Entry struct {
 	// Tiers are the service tiers its list offers Codex on the model:
 	// another magpie's, those it offers its own Codex (#1234)
 	Tiers []string `json:"-"`
+	// Released is the model's release day (YYYY-MM-DD) as its list or
+	// models.dev says it, "" when neither does: what a group's template
+	// weighs a newer model by (grouptemplate.go)
+	Released string `json:"-"`
 }
 
 // Catalog lists the routing groups, then every exposed model of every ready
@@ -1367,7 +1378,7 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	// an agent's list showed the whole magpie/<provider>/<model> (#955)
 	name := cmp.Or(m.Name, m.ID)
 	e := Entry{ID: p.ID + "/" + m.ID, Model: m.ID, Family: p.Family, Name: name, Efforts: effortsOf(m), Provider: p,
-		Images: images, ImageInput: imageInput, Context: ctx, Output: output, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers}
+		Images: images, ImageInput: imageInput, Context: ctx, Output: output, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released}
 	if n, ok := modelNameIn(s.ModelNames, p.ID, m.ID); ok {
 		e.Name, e.Default = n, name
 	} else {
