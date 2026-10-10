@@ -275,6 +275,16 @@ type Settings struct {
 	// QuotaLeft shows a subscription's windows by how much of each is left,
 	// not used: the Usage page, the tray panel and the menu bar alike.
 	QuotaLeft bool `json:"quotaLeft,omitempty"`
+	// QuotaReads is when magpie reads subscriptions' allowances and keys'
+	// balances from their vendors (#1518, RooobinYe): "" whenever it needs
+	// them (the Usage page and tray, routing, alerts, the switch to an
+	// account with room), "asked" only when the user asks — the Usage page
+	// opened or refreshed, a card's refresh, `magpie quota`/`accounts`.
+	// Otherwise the readings kept from the last time stand, marked as of
+	// then; an account the vendor turned away for its quota is still read.
+	// This computer's own (KeepOwn): magpie at login comes up before the
+	// proxy app, and its reads went out direct.
+	QuotaReads string `json:"quotaReads,omitempty"`
 	// UsageAlert is how much of a subscription's or plan's window, in
 	// percent, is used when magpie says so with a notification (#368):
 	// once for each time the window runs, for every window routing counts
@@ -752,7 +762,7 @@ func (s Settings) Compact() int {
 
 // KeepOwn puts back cur's settings that are this computer's own, which a
 // sync or a restored backup never brings from another: the window's size
-// and whether it was maximised, the proxy, the gateway's port, the Dock, gateway mode, whether WSL is looked in, and what the menu bar or tray shows beside magpie's
+// and whether it was maximised, the proxy, the gateway's port, the Dock, gateway mode, whether WSL is looked in, when allowances are read, and what the menu bar or tray shows beside magpie's
 // icon (yoooo on Discord: usage turned off on a Mac came back from a
 // Windows box that shows it).
 func (s *Settings) KeepOwn(cur Settings) {
@@ -763,6 +773,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird
 	s.GatewayMode = cur.GatewayMode
 	s.NoWSLAgents = cur.NoWSLAgents
+	s.QuotaReads = cur.QuotaReads
 }
 
 // RenamePerModel moves what the user said of a provider's models to the id
@@ -980,6 +991,9 @@ func save(s Settings, recording bool) error {
 	}
 	if math.IsNaN(s.BalanceAlert) || math.IsInf(s.BalanceAlert, 0) || s.BalanceAlert < 0 {
 		return fmt.Errorf("a balance alert is at an amount of 0 or more (0 for off), not %v", s.BalanceAlert)
+	}
+	if s.QuotaReads != "" && s.QuotaReads != "asked" {
+		return fmt.Errorf(`allowances are read "" (whenever magpie needs them) or "asked" (only when asked), not %q`, s.QuotaReads)
 	}
 	if err := CheckPort(s.Port); err != nil {
 		return err

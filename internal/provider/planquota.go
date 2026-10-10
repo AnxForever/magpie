@@ -570,7 +570,9 @@ func PlanQuotas(ctx context.Context) []SubscriptionQuota {
 	c := &planQuotaCache
 	_, again := refreshing(ctx) // one card read again (RefreshUsage)
 	c.Lock()
-	if !again && c.data != nil && time.Since(c.at) < time.Minute {
+	// with allowances read only when asked, the cards stand as they were
+	// last read till the user asks (#1518)
+	if !again && c.data != nil && (time.Since(c.at) < time.Minute || heldRead(ctx)) {
 		defer c.Unlock()
 		return c.data
 	}

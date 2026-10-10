@@ -595,6 +595,9 @@ func forgetAllowance(agent, user string) {
 // has run out.
 func StaleAllowance(agent, user string) {
 	key := agent + "/" + strings.ToLower(user)
+	if readsAsked() {
+		markStaleRead(agent, user) // read though allowances are read only when asked (#1518)
+	}
 	loginUsageCache.Lock()
 	delete(loginUsageCache.m, key)
 	delete(loginUsageCache.pending, key) // nor a reading asked for before

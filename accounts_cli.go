@@ -261,7 +261,8 @@ type quotaSpan = provider.QuotaSpan
 // accountRows asks each agent's accounts for their allowance at once; what
 // was asked less than a minute ago comes from magpie's cache.
 func accountRows(ls []provider.Login, now time.Time) []accountRow {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// the user asking, read even when allowances are read only when asked
+	ctx, cancel := context.WithTimeout(provider.Asked(context.Background()), 15*time.Second)
 	defer cancel()
 	usage := map[string]map[string]provider.SubscriptionQuota{}
 	seen := map[string]bool{}

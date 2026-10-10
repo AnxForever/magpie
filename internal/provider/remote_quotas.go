@@ -114,7 +114,7 @@ func ReadAllCards(ctx context.Context) {
 	AskUsage()
 	ForgetBalances()
 	forgetPlanQuotas()
-	Quotas(ctx)
+	Quotas(Asked(ctx))
 }
 
 var remoteCardCache struct {

@@ -37,6 +37,9 @@ func Install() {
 // context names (With), or else the global one, which a host on the
 // user's own network goes around (onLAN).
 func Func(req *http.Request) (*url.URL, error) {
+	if err := Held(req.Context()); err != nil {
+		return nil, err
+	}
 	if loopback(req.URL.Hostname()) {
 		return nil, nil
 	}
@@ -51,6 +54,26 @@ func Func(req *http.Request) (*url.URL, error) {
 }
 
 type choiceKey struct{}
+
+type holdKey struct{}
+
+// Hold is ctx for work magpie was not asked to do and must not send: no
+// request made with it through Func, or a transport Dispatch made, leaves
+// the machine; each fails with err before it dials (#1518, allowance
+// reads while the user has them read only when asked).
+func Hold(ctx context.Context, err error) context.Context {
+	return context.WithValue(ctx, holdKey{}, err)
+}
+
+// Held is the error ctx holds its requests with (Hold), nil when it holds
+// none.
+func Held(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	err, _ := ctx.Value(holdKey{}).(error)
+	return err
+}
 
 // With is ctx for requests made on behalf of one provider, whose own proxy
 // is choice (issue #237: Codex through a proxy, a vendor at home without):
@@ -125,6 +148,9 @@ func (d *dispatch) transport(c string) *http.Transport {
 	}
 	t := d.base.Clone()
 	t.Proxy = func(req *http.Request) (*url.URL, error) {
+		if err := Held(req.Context()); err != nil {
+			return nil, err
+		}
 		if loopback(req.URL.Hostname()) {
 			return nil, nil
 		}
@@ -333,12 +359,27 @@ var sysCache struct {
 	p  Proxy
 }
 
-// System reads the system proxy, at most every 15 seconds.
+// How long a system proxy read stands: a proxy that is set, 15 seconds;
+// none, 2. magpie started at login comes up before the proxy app does
+// (#1518), and its requests went direct for up to 15 seconds after the
+// proxy app had set the system's proxy.
+var (
+	systemKeep = 15 * time.Second
+	noneKeep   = 2 * time.Second
+	readSystem = system
+)
+
+// System reads the system proxy, at most every 15 seconds while one is
+// set and every 2 while none is.
 func System() Proxy {
 	sysCache.Lock()
 	defer sysCache.Unlock()
-	if time.Since(sysCache.at) > 15*time.Second {
-		sysCache.p, sysCache.at = system(), time.Now()
+	keep := systemKeep
+	if sysCache.p.URL == "" {
+		keep = noneKeep
+	}
+	if sysCache.at.IsZero() || time.Since(sysCache.at) > keep {
+		sysCache.p, sysCache.at = readSystem(), time.Now()
 	}
 	return sysCache.p
 }

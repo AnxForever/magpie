@@ -778,6 +778,10 @@ func (l kiroLimits) windows() []QuotaWindow {
 // magpie signed in in home, or Kiro's own sign-in's.
 func kiroQuotaAt(ctx context.Context, key, home string) SubscriptionQuota {
 	q := SubscriptionQuota{Provider: "kiro", Name: "Kiro", Icon: "kiro-color", Windows: []QuotaWindow{}}
+	if holding(ctx) {
+		q.Error = errNotAsked.Error()
+		return q
+	}
 	a, err := KiroAuthOf(ctx, key, home, false)
 	if err != nil {
 		q.Error = err.Error()

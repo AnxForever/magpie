@@ -698,7 +698,7 @@ type quotaMsg []provider.SubscriptionQuota
 
 func quotasCmd() tea.Msg {
 	provider.AskClaudeUsage() // the page opened, or r pressed
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(provider.Asked(context.Background()), 12*time.Second)
 	defer cancel()
 	// a WorkBuddy (China) account's line says how its daily check-in went,
 	// as its card in the app does

@@ -158,6 +158,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		FullContext:          true,
 		DesktopLongest:       true,
 		GatewayMode:          "off",
+		QuotaReads:           "asked",
 	}
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
