@@ -15,6 +15,8 @@
 //	%LOCALAPPDATA%\Packages\Claude_<publisher>\LocalCache\Roaming\Claude
 //	%LOCALAPPDATA%\Packages\Claude_<publisher>\LocalCache\Local\Claude(-3p)
 //
+// (AnthropicPBC.Claude_<publisher> for the Store's package.)
+//
 // The packaged app reads its own copy before the real folder's, so a file
 // another program writes into %APPDATA%\Claude is not seen once the app has
 // one there. Such an install's folders are the package's: those are found,
@@ -156,11 +158,17 @@ func lastRun(dirs ...string) time.Time {
 }
 
 // packageDir is the LocalCache folder of Desktop's MSIX package under
-// local (%LOCALAPPDATA%): Packages\Claude_<publisher id>, the one Desktop
-// has run in first, else the first there is. The publisher id is not
-// assumed: it is the one of whoever signed the package.
+// local (%LOCALAPPDATA%): Packages\Claude_<publisher id>, or the Store's
+// Packages\AnthropicPBC.Claude_<publisher id> (Desktop 2.31226 knows both
+// families, Claude_pzs8sxrjxfjjc and AnthropicPBC.Claude_fnn82j28hfe8t),
+// the one Desktop has run in first, else the first there is. The publisher
+// id is not assumed: it is the one of whoever signed the package.
 func packageDir(local string) string {
-	found, _ := filepath.Glob(filepath.Join(local, "Packages", "Claude_*"))
+	var found []string
+	for _, family := range []string{"Claude_*", "AnthropicPBC.Claude_*"} {
+		m, _ := filepath.Glob(filepath.Join(local, "Packages", family))
+		found = append(found, m...)
+	}
 	var dirs []string
 	for _, p := range found {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
