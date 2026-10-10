@@ -101,10 +101,7 @@ func TestPluginLoginReadsUsageAfresh(t *testing.T) {
 // plugin (FakeCo) added, as TestAccountsOfAPlugin sets one up.
 func fakeCoHome(t *testing.T) context.Context {
 	t.Helper()
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := pathBun(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -123,6 +120,21 @@ func fakeCoHome(t *testing.T) context.Context {
 		t.Fatal(err)
 	}
 	return ctx
+}
+
+// pathBun is the bun on PATH, run once before the caller opens its
+// one-minute context. A bun just installed or upgraded hasn't run on this
+// machine yet, and macOS checks a program before its first exec, which can
+// take tens of seconds on a busy machine: that check must not eat the
+// minute the plugin calls have (ggbdpq, #1306; 7ddea2c2 for the copied bun).
+func pathBun(t *testing.T) string {
+	t.Helper()
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Skip("no bun on PATH")
+	}
+	exec.Command(bun, "--version").Run()
+	return bun
 }
 
 // noBrowser has the sign-in pages magpie opens go nowhere. It swaps the

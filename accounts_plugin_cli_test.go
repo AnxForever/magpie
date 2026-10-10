@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,10 +15,7 @@ import (
 // magpie accounts lists, switches and forgets a plugin's accounts by its
 // provider's id, as a built-in subscription's.
 func TestAccountsOfAPlugin(t *testing.T) {
-	bun, err := exec.LookPath("bun")
-	if err != nil {
-		t.Skip("no bun on PATH")
-	}
+	bun := pathBun(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
