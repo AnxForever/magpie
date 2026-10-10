@@ -228,3 +228,17 @@ func TestClaudeFiveFiveThinkingOffOnTheWire(t *testing.T) {
 		})
 	}
 }
+
+// An agent turning thinking off as Sonnet 5.5 takes it, between_tools, has
+// it off as disabled does on a model magpie translates the request for.
+func TestBetweenToolsReadAsThinkingOff(t *testing.T) {
+	for _, typ := range []string{"disabled", "between_tools"} {
+		r, err := parseAnthropic([]byte(`{"model":"m","max_tokens":64,"thinking":{"type":"` + typ + `"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.ThinkOff || r.Thinking || r.Effort != "" {
+			t.Errorf("%s: ThinkOff = %v, Thinking = %v, Effort = %q; want thinking off", typ, r.ThinkOff, r.Thinking, r.Effort)
+		}
+	}
+}
