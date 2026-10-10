@@ -77,12 +77,16 @@ func Held(ctx context.Context) error {
 
 // With is ctx for requests made on behalf of one provider, whose own proxy
 // is choice (issue #237: Codex through a proxy, a vendor at home without):
-// "" follows the global one (ctx is returned as it is), "direct" goes
-// through none, anything else is the proxy's address (http://, https://,
-// socks5://; host:port means http). Requests made with it through Func,
-// or through a transport Dispatch made, take that proxy.
+// "" follows the global one, "direct" goes through none, anything else is
+// the proxy's address (http://, https://, socks5://; host:port means
+// http). Requests made with it through Func, or through a transport
+// Dispatch made, take that proxy. A choice ctx already names is replaced,
+// "" too: a request magpie makes for one provider while serving another's
+// (a web search asked of Codex in a turn served by a provider set to
+// "direct", #1522) goes through its own provider's proxy, never the one
+// it was made under.
 func With(ctx context.Context, choice string) context.Context {
-	if choice = strings.TrimSpace(choice); choice == "" {
+	if choice = strings.TrimSpace(choice); choice == "" && choiceOf(ctx) == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, choiceKey{}, choice)
