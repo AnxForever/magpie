@@ -8931,7 +8931,9 @@ async function openImportApps(discovered) {
     for (const s of sources) for (const it of s.items) {
       if (it.skip || it.status === "same") continue;
       const offered = !(discovered instanceof Set) || discovered.has(it.fingerprint);
-      picks[s.id + "\n" + it.ref] = { on: offered && !it.off && (it.status !== "taken" || !!it.keyOf), mode: it.keyOf ? "key" : "add" };
+      // one named as a subscription (claude, workbuddy) comes in beside
+      // it, so it is picked like a new one (#1487)
+      picks[s.id + "\n" + it.ref] = { on: offered && !it.off && (it.status !== "taken" || !!it.keyOf || !!it.reserved), mode: it.keyOf ? "key" : "add" };
     }
     if (!importingApps) return;
     const tab = sources.find((s) => s.items.some((it) => picks[s.id + "\n" + it.ref]?.on))?.id;
@@ -9050,7 +9052,7 @@ function renderImportApps(ia) {
     for (const [k, v] of Object.entries(ia.picks)) {
       if (!v.on) continue;
       const [source, ref] = k.split("\n");
-      picks.push({ source, ref, mode: v.mode });
+      picks.push({ source, ref, mode: v.mode, ...(v.name?.trim() ? { name: v.name.trim() } : {}) });
     }
     go.classList.add("busy");
     try {
@@ -9105,13 +9107,38 @@ function importAppRow(ia, s, it, recount, boxes) {
   who.append(el("div", "sub", bits.join(" · ")));
   if (pick && it.off) who.append(el("div", "sub", t(it.off)));
   if (pick && (it.keyOf || it.status === "taken")) {
-    const opts = [];
-    if (it.keyOf) opts.push(["key", t("Add as another key")]);
-    opts.push(["add", t(it.status === "taken" ? "Keep both" : "Add as a new provider")]);
-    if (it.status === "taken") opts.push(["replace", t("Replace it")]);
-    who.append(el("div", "sub", t("magpie has {name} already", { name: it.existing })));
-    const sg = segs(opts, pick.mode, (m) => { pick.mode = m; if (!pick.on) { pick.on = box.checked = true; recount(); } });
-    sg.onclick = (e) => e.preventDefault(); // a click on a choice is not a click on the checkbox
+    const renamed = () => !!pick.name?.trim() && pick.name.trim() !== p.name;
+    const choices = () => {
+      const opts = [];
+      if (it.keyOf) opts.push(["key", t("Add as another key")]);
+      opts.push(["add", t(it.status === "taken" && !it.reserved && !renamed() ? "Keep both" : "Add as a new provider")]);
+      // a subscription is never replaced by a provider of keys, nor is
+      // anything by one the user gave a name of its own (#1487)
+      if (it.status === "taken" && !it.reserved && !renamed()) opts.push(["replace", t("Replace it")]);
+      // one way in alone needs no choice
+      if (opts.length === 1) { pick.mode = opts[0][0]; const none = el("span"); none.hidden = true; return none; }
+      const sg = segs(opts, pick.mode, (m) => { pick.mode = m; if (!pick.on) { pick.on = box.checked = true; recount(); } });
+      sg.onclick = (e) => e.preventDefault(); // a click on a choice is not a click on the checkbox
+      return sg;
+    };
+    who.append(el("div", "sub", t(it.reserved ? "{name} is a subscription in magpie; this one comes in beside it as a provider of its own" : "magpie has {name} already", { name: it.existing })));
+    let sg = choices();
+    if (it.status === "taken") {
+      // a name that collides can be changed right here (#1487)
+      const nm = input(pick.name ?? p.name, t("e.g. My Relay"));
+      nm.className = "appname";
+      nm.setAttribute("aria-label", t("Name"));
+      nm.onclick = (e) => e.preventDefault(); // typing in it never ticks the row
+      nm.oninput = () => {
+        pick.name = nm.value;
+        if (renamed() && pick.mode === "replace") pick.mode = "add";
+        const next = choices();
+        sg.replaceWith(next);
+        sg = next;
+        if (renamed() && !pick.on) { pick.on = box.checked = true; recount(); }
+      };
+      who.append(nm);
+    }
     who.append(sg);
   }
   let tag = null;
