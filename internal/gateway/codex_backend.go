@@ -1021,10 +1021,20 @@ func (s *Server) codexModels(w http.ResponseWriter, r *http.Request) {
 	// The backend lists every model the ChatGPT account can reach. When the
 	// user picked among them on the codex provider, keep the list to those:
 	// their pick governs Codex's own models, not just magpie's added ones.
+	// A hidden one stays: it is never in a picker, magpie's included
+	// (parseCodexModels), and Codex uses it for jobs of its own. One of them
+	// is codex-auto-review. Without it in the list, Codex's auto-review runs
+	// on the conversation's own model at low effort
+	// (codex-rs/ext/guardian-reviewer select_review_model), and so it is
+	// charged where that model is (#1460).
 	if keep, narrowed := provider.CodexNativePicked(); narrowed {
 		kept := own[:0]
 		for _, m := range own {
 			o, _ := m.(map[string]any)
+			if v, _ := o["visibility"].(string); v == "hide" {
+				kept = append(kept, m)
+				continue
+			}
 			if slug, _ := o["slug"].(string); slug != "" && !keep[slug] {
 				continue
 			}
