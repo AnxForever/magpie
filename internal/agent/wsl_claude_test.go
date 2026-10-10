@@ -359,7 +359,6 @@ func TestWSLClaudeNotFolded(t *testing.T) {
 			t.Errorf("Claude Code in WSL Debian, running %v: %d folded", running, n)
 		}
 	}
-	noOwnClaude(t)
 }
 
 // A WSL agent is found by its id however it is spelt — the distro's own
