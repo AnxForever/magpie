@@ -1129,6 +1129,20 @@ Assist Standard and Enterprise, which need a Google Cloud project named
 Antigravity account it sees used outside Antigravity, so magpie asks before
 adding one; use an account you can afford to lose.
 
+Accounts signed in elsewhere can be imported from their files instead of
+signed in again: *Import accounts from a file…* under a subscription's
+accounts, or `magpie accounts import <codex|claude|antigravity|factory>
+<file>... [--yes]`. For ChatGPT that takes Codex's `auth.json` and the
+exports of Cockpit Tools, CLIProxyAPI and Sub2API, as many files as you
+like. Each ChatGPT sign-in is refreshed before it is added, which checks
+it and makes magpie its only holder: the tool the file came from (Codex on
+another computer, Cockpit Tools, CLIProxyAPI) is signed out of that
+account and has to sign in again. The files are only read. An account
+magpie has already is left as it is, two Team seats of one email stay two
+accounts, and an entry with only an access token (a ChatGPT web session)
+is refused, since it would stop working within days with nothing to renew
+it.
+
 ### Connecting anything else
 
 The gateway listens on `127.0.0.1:3425` (`MAGPIE_ADDR` changes it) and starts
