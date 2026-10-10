@@ -3192,6 +3192,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		// Relays enforce OpenAI's item ID prefixes too, including during
 		// compaction. call_id stays unchanged so tool outputs remain paired.
 		body = callItemIDs(body)
+		// and an item id with a character OpenAI's don't have, another
+		// vendor's (Muse Spark's "rs_…:rs_…"), to an upstream that checks
+		// them (echo_ts)
+		if validatesItemIDs(p) || !s.fits(p.ID, itemIDsRefused(model), proto) {
+			body = plainItemIDs(body)
+		}
 		// xAI's API turns away a tool_choice with no tools beside it ("A
 		// tool_choice was set on the request but no tools were specified"),
 		// and Copilot's /responses, in front of it for Grok, with a bare
@@ -3369,6 +3375,20 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// (#1104).
 			if nb := withoutBareReasoning(body); !replay && !bytes.Equal(nb, body) {
 				refused = append(refused, bareReasoningRefused(model))
+				body = nb
+				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
+					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+				}
+				continue
+			}
+		}
+		if len(fs) == 0 && len(ms) == 0 && proto == provider.Responses && itemIDRefusal.Match(b) {
+			// and an input item's id with a character OpenAI's don't
+			// have, which a relay in front of OpenAI turns away as it
+			// does (echo_ts): asked once more with ids it takes, and so
+			// from then on
+			if nb := plainItemIDs(body); !bytes.Equal(nb, body) {
+				refused = append(refused, itemIDsRefused(model))
 				body = nb
 				if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(body), r.Header); err != nil {
 					return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
