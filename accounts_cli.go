@@ -166,6 +166,9 @@ func accountsCmd(args []string) error {
 				fmt.Println(" ", "Codex's background service is still signed in as", was+"; restart it to use", args[3]+":", provider.CodexDaemonRestart)
 				fmt.Println(" ", muted.Render("running Codex sessions will be interrupted"))
 			}
+			if was := provider.CodexAppStale(); was != "" {
+				fmt.Println(" ", "The Codex app is still signed in as", was+", and shows its limits; quit it and open it again to use", args[3])
+			}
 		}
 		return nil
 	}

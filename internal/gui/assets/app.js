@@ -11219,6 +11219,7 @@ function renderAccounts(a, p) {
     list.append(box);
   }
   if (a.agent === "codex" && providers?.codexDaemon) list.append(renderCodexDaemon(providers.codexDaemon));
+  if (a.agent === "codex" && providers?.codexApp) list.append(renderCodexApp(providers.codexApp));
   if (signing?.agent === a.agent) list.append(renderSigning(sub));
   else {
     const add = el("button", "acc add");
@@ -11258,6 +11259,23 @@ function renderCodexDaemon(user) {
   go.title = "codex app-server daemon restart";
   go.onclick = () => { go.classList.add("busy"); accountAction("codex/daemon/restart", {}, t("Codex's background service restarted")); };
   box.append(later, go);
+  return box;
+}
+
+// renderCodexApp: the Codex desktop app reads the sign-in only when it
+// opens, so after a switch it stays on the account before (user): it shows
+// that account's limits and, once they are spent, sends in no thread. Only
+// quitting and opening it again moves it; magpie doesn't quit it unasked.
+function renderCodexApp(user) {
+  const box = el("div", "signing daemon");
+  box.append(el("span", "mark", "!"));
+  const tt = el("span", "tt");
+  tt.append(el("span", "n", t("The Codex app is still signed in as {user}", { user })),
+    el("span", "s", t("It shows that account's usage limits until it is quit and opened again. Quit it and open it again to use the new account.")));
+  box.append(tt);
+  const ok = el("button", "text", t("Got it"));
+  ok.onclick = () => accountAction("codex/daemon/dismiss-app", {});
+  box.append(ok);
   return box;
 }
 

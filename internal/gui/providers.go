@@ -372,6 +372,10 @@ type providersJSON struct {
 	// signed in to after Codex was switched to another; "" when none is
 	// left behind (provider.CodexDaemonStale).
 	CodexDaemon string `json:"codexDaemon,omitempty"`
+	// CodexApp is the account the Codex desktop app is still signed in to
+	// after Codex was switched to another, until it is quit and opened
+	// again (provider.CodexAppStale)
+	CodexApp string `json:"codexApp,omitempty"`
 	// Plugins are the providers the plugins sign in to, for the add sheet
 	Plugins []pluginSubJSON `json:"plugins"`
 	// OnPlugins are the built-in subscriptions moved onto their plugins,
@@ -724,6 +728,7 @@ func providersState() providersJSON {
 	}
 	s.Gateway.Archive = archiveState()
 	s.CodexDaemon = provider.CodexDaemonStale()
+	s.CodexApp = provider.CodexAppStale()
 	s.Plugins = pluginSubs()
 	s.Fetching = provider.FetchingNew()
 	return s
@@ -1627,6 +1632,8 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			agent.CodexDaemonRestarted()
 		case "dismiss":
 			provider.DismissCodexDaemon()
+		case "dismiss-app":
+			provider.DismissCodexApp()
 		default:
 			http.NotFound(rw, r)
 			return
