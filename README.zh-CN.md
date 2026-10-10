@@ -22,17 +22,6 @@
   <img src="site/public/img/agents-zh-light.png" width="900" alt="magpie 的 Agents 页：Claude Code 用 Kimi K3，Codex 用 DeepSeek V4 Pro，Gemini CLI 用 GLM-5.3，都在一个列表里选">
 </picture>
 
-<br>
-
-<table>
-<tr>
-<td align="center" width="25%"><h3>45+</h3>个 Agent，一张表</td>
-<td align="center" width="25%"><h3>4</h3>种接口协议，一个网关</td>
-<td align="center" width="25%"><h3>5</h3>种路由模式</td>
-<td align="center" width="25%"><h3>0</h3>个需要手改的配置文件</td>
-</tr>
-</table>
-
 </div>
 
 <br>

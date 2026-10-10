@@ -22,17 +22,6 @@ and when a quota runs out, it quietly moves on to the next account.
   <img src="site/public/img/agents-light.png" width="900" alt="magpie's Agents page: Claude Code on Kimi K3, Codex on DeepSeek V4 Pro, Gemini CLI on GLM-5.3, each picked from one list">
 </picture>
 
-<br>
-
-<table>
-<tr>
-<td align="center" width="25%"><h3>45+</h3>agents, one list</td>
-<td align="center" width="25%"><h3>4</h3>wire APIs, one gateway</td>
-<td align="center" width="25%"><h3>5</h3>routing modes</td>
-<td align="center" width="25%"><h3>0</h3>config files edited by hand</td>
-</tr>
-</table>
-
 </div>
 
 <br>
