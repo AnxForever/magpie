@@ -2881,6 +2881,7 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 		// built, with the model named as the vendor names it
 		body = adaptiveThinking(body)
 		body = thinkingOffAsTaken(body, path)
+		body = samplingAsTaken(body, path)
 		asked := askedBetas(in)
 		if gjson.GetBytes(body, "speed").String() == "fast" && provider.HostOf(p.Base(to)) == "api.anthropic.com" {
 			asked = append(slices.Clone(asked), claudeFastBeta) // a group's member sent fast
@@ -3316,6 +3317,12 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 			}
 		} else if nb, ok := withoutThinkingOff(body); ok && (alwaysThinks.Match(b) || mandatoryReasoning.Match(b) || thinkingOffRefused.Match(b)) {
+			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(nb), r.Header); err != nil {
+				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
+			}
+		} else if nb, ok := withoutSampling(body); ok && samplingDeprecated.Match(b) {
+			// a Claude by a name samplingAsTaken doesn't know refusing
+			// temperature, top_p or top_k (#1454)
 			if res, err = s.forward(r.Context(), p, proto, path, p.Prepare(nb), r.Header); err != nil {
 				return writeError(w, proto, 502, p.Name+": "+err.Error()), err.Error(), true
 			}

@@ -489,6 +489,73 @@ func withBetweenTools(body []byte) ([]byte, bool) {
 	return withFields(body, fields), true
 }
 
+// samplingRefused is a Claude that answers temperature, top_p or top_k
+// with a 400, by Anthropic's rules: Opus 4.7, 4.8, 5 and 5.5, Fable 5 and
+// Mythos 5 refuse them at any value; Sonnet 5 and 5.5 refuse a value but
+// their default; Haiku 5.5 takes only temperature 1 and top_p 0.99, never
+// both, and no top_k ("`temperature` is deprecated for this model", #1454).
+// Left out, each model samples at its default. Older Claudes, Haiku 4.5
+// and Opus 4.6 among them, take all three; a later line than these is
+// left as sent.
+func samplingRefused(model string) bool {
+	m := claudeLine.FindStringSubmatch(strings.ToLower(model))
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[2])
+	minor, _ := strconv.Atoi(m[3])
+	switch m[1] {
+	case "fable", "mythos":
+		return major == 5
+	case "opus":
+		return major == 4 && minor >= 7 || major == 5 && (minor == 0 || minor == 5)
+	case "sonnet":
+		return major == 5 && (minor == 0 || minor == 5)
+	case "haiku":
+		return major == 5 && minor == 5
+	}
+	return false
+}
+
+// samplingAsTaken is an Anthropic request without temperature, top_p and
+// top_k when the model it is sent to refuses them (samplingRefused):
+// Claude Code's auto mode classifier, and magpie's own classifiers, ask at
+// temperature 0. model is the vendor's name, from the body or, for
+// Bedrock and Vertex, the path. Any other request goes byte for byte as it
+// came.
+func samplingAsTaken(body []byte, path string) []byte {
+	if !hasSampling(body) {
+		return body
+	}
+	model := gjson.GetBytes(body, "model").String()
+	if model == "" {
+		model = path
+	}
+	if !samplingRefused(model) {
+		return body
+	}
+	return withoutFields(body, "temperature", "top_p", "top_k")
+}
+
+func hasSampling(body []byte) bool {
+	r := gjson.GetManyBytes(body, "temperature", "top_p", "top_k")
+	return r[0].Exists() || r[1].Exists() || r[2].Exists()
+}
+
+// samplingDeprecated is a Claude refusing a sampling parameter, as Haiku
+// 5.5 does: "`temperature` is deprecated for this model." (and `top_p`,
+// `top_k`).
+var samplingDeprecated = regexp.MustCompile("(?i)\\b(?:temperature|top_p|top_k)`?\\W+is (?:deprecated|not supported) for this model")
+
+// withoutSampling is body without temperature, top_p and top_k; false
+// when it has none of them.
+func withoutSampling(body []byte) ([]byte, bool) {
+	if !hasSampling(body) {
+		return nil, false
+	}
+	return withoutFields(body, "temperature", "top_p", "top_k"), true
+}
+
 // AdaptiveThinking is adaptiveOnly for agents told how to ask a model: a
 // Claude that takes thinking.type=adaptive and an effort, never a budget.
 func AdaptiveThinking(model string) bool { return adaptiveOnly(model) }
