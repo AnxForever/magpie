@@ -286,6 +286,10 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     </div>
     <p>A model can also say <code>provider: { npm, api }</code> to use another API or address than the provider’s, <code>headers</code>, <code>options</code>, and <code>disabled: true</code> to hide it.</p>
 
+        <h3 id="decide">A decision API (System One)</h3>
+    <p>A plugin can serve TypeSafe’s System One API for its provider, so its models can be a <a href="/docs/intent">routing group’s classifier</a>. Set <code>decide: true</code> on the provider in the <code>config</code> hook, and <code>decides: true</code> on each model that answers questions rather than a conversation, in the <code>config</code> hook or on the <code>models</code> hook’s list. magpie then posts each question as <code>POST {baseURL}/systemone</code> through your loader’s <code>fetch</code>, with the account’s sign-in, as it sends any other request. The body is <code>{"model", "questions", "state"}</code>; answer <code>{"model", "answers": {"&lt;question&gt;": {"choice", "score", "confidence"}}}</code>.</p>
+    <p>A marked model, and one named <code>jev-*</code>, is offered as a classifier and kept from agents: a chat request to it is refused. Without <code>decide: true</code> on the provider, <code>decides</code> is ignored and every model stays one to chat with.</p>
+
     <h3 id="apis">The API a model speaks</h3>
     <p>The AI SDK package named by <code>npm</code>, on the model or on the provider, decides the API. That decides the shape of the request your <code>fetch</code> receives. Whatever the agent sent, magpie’s gateway has already translated it:</p>
     <div class="table-wrap"><table>

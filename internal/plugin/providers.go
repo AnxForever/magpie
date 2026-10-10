@@ -75,6 +75,11 @@ type Model struct {
 	// mode when the request says service_tier "priority" (m.fast: Cursor's
 	// plugin from 0.2.2, for a model Cursor has a fast variant of)
 	Fast bool `json:"fast"`
+	// Decides is set by the plugin on a model that answers System One's
+	// questions rather than a conversation (m.decides: a decision model
+	// not named jev-…, Clef or a vendor's own). It counts only where the
+	// provider says it serves a decision API (Provider.Decide).
+	Decides bool `json:"decides,omitempty"`
 }
 
 // Provider is a provider a plugin signs in to.
@@ -92,7 +97,12 @@ type Provider struct {
 	Usage bool `json:"usage"`
 	// Checkin says the plugin presses its vendor's daily check-in for each
 	// account (auth.checkin)
-	Checkin   bool    `json:"checkin,omitempty"`
+	Checkin bool `json:"checkin,omitempty"`
+	// Decide says the plugin serves a decision API (TypeSafe's System
+	// One) for this provider: its config hook set decide on it. magpie
+	// posts the questions to the provider's own base, at /systemone,
+	// through the plugin's fetch (#1514).
+	Decide    bool    `json:"decide,omitempty"`
 	SignedIn  bool    `json:"signedIn"`
 	AuthType  string  `json:"authType"`
 	AccountID string  `json:"accountId"`

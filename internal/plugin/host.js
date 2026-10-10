@@ -1155,6 +1155,9 @@ async function info(id, key, strict) {
     options: { ...(cfg?.options ?? {}) },
     npm: cfg?.npm ?? md?.npm,
     api: cfg?.api ?? md?.api,
+    // magpie's own field: the plugin serves a decision API (System One)
+    // for this provider, asked at its base /systemone through its fetch
+    decide: cfg?.decide === true,
     models: {},
   }
   if (md) for (const m of Object.values(md.models ?? {})) out.models[m.id] = fromModelsDev(md, m)
@@ -1179,6 +1182,8 @@ async function info(id, key, strict) {
         ...(m.modalities?.input ? { input: Object.fromEntries(["text", "image", "audio", "video", "pdf"].map((k) => [k, m.modalities.input.includes(k)])) } : {}),
       },
       variants: m.variants ?? was?.variants ?? {},
+      // magpie's own mark: a decision model, answering System One
+      ...(typeof m.decides === "boolean" ? { decides: m.decides } : was?.decides !== undefined ? { decides: was.decides } : {}),
     }
   }
   const server = auths().get(id)?.spec
@@ -1307,6 +1312,7 @@ async function providers({ proxies } = {}) {
       icon: iconOf(a),
       usage: typeof a.auth.usage === "function",
       checkin: typeof a.auth.checkin === "function",
+      decide: p.decide === true,
       maxConcurrency: concurrencyOf(a),
       signedIn: keys.length > 0,
       authType: first?.type ?? "",
@@ -1346,6 +1352,9 @@ async function providers({ proxies } = {}) {
           rateWas: rateOf(m.rateWas),
           // run fast when the request's service_tier is priority (Cursor's)
           fast: m.fast === true,
+          // a decision model (System One's), hidden from agents and
+          // offered as a routing group's classifier
+          decides: m.decides === true,
         })),
     })
   }
