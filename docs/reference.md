@@ -1570,6 +1570,7 @@ magpie tray                     # menu bar icon only (use this in your login ite
 magpie tui                      # the same thing, in the terminal; serves the gateway while open when no other magpie does
 magpie web                      # the app's window in a browser (WSL, a server over SSH); --lan, --addr, --no-open, --gateway
                                 # (a new key each run; MAGPIE_WEB_KEY keeps one, for a page run as a service)
+                                # (behind a reverse proxy, MAGPIE_WEB_URL=https://<the page there> prints the link through it)
 magpie ls                       # list every agent and its current settings
 magpie claude opus              # set a model (agent names accept prefixes: cc, oc, gem …)
 magpie codex gpt-5.6-sol
