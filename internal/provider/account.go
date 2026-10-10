@@ -193,8 +193,9 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	}
 	// The user's own headers ride on plain key+URL providers, after auth so
 	// they can override a default when a gateway insists on a private scheme.
-	// Written to the map directly, not via Set, so the name keeps the exact
-	// case the user typed — some gateways match header names case-sensitively.
+	// Written with the name as the user typed it — some gateways match
+	// header names case-sensitively — in place of the same header in any
+	// other case (PutUserHeader), so it is sent once, theirs.
 	// A list the request has its own of (anthropic-beta) is added to, not
 	// replaced: the user's betas go after those the agent asked.
 	for k, v := range p.Headers {
@@ -202,7 +203,7 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 			MergeList(req.Header, k, v)
 			continue
 		}
-		req.Header[k] = []string{v}
+		catalog.PutUserHeader(req.Header, k, v)
 	}
 	return nil
 }

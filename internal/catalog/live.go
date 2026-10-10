@@ -253,7 +253,7 @@ func fetchOne(ctx context.Context, url, key string, anthropic bool, headers map[
 	// The user's own headers, after the defaults so a private auth scheme
 	// wins. Written directly so the name keeps the exact case the user typed.
 	for k, v := range headers {
-		req.Header[k] = []string{v}
+		PutUserHeader(req.Header, k, v)
 	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
