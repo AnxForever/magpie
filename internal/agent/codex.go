@@ -130,6 +130,27 @@ func codexIn(at place) *Agent {
 		}
 		return at.spell == nil && !filepath.IsAbs(c) && filepath.Clean(filepath.Join(dir, c)) == filepath.Clean(catalogPath)
 	}
+	// ownList is magpie's model list for Codex as written to catalogPath:
+	// what the user added by hand to the list there (a key magpie doesn't
+	// write, supports_reasoning_summaries on a model magpie gave none) is
+	// kept, not written over by the next model switch or sync (#1450)
+	ownList := func() []byte {
+		cur, _ := edit.Read(catalogPath)
+		return codexcat.Keep(cur, codexcat.Catalog(magpieModels("codex")))
+	}
+	// dropList takes the list away as magpie steps out as Codex's
+	// provider; one holding what the user added stays, which the config
+	// no longer names, for ownList to keep when magpie is back
+	dropList := func() {
+		cur, err := edit.Read(catalogPath)
+		if err != nil {
+			return
+		}
+		b := codexcat.Catalog(magpieModels("codex"))
+		if string(codexcat.Keep(cur, b)) == string(b) {
+			os.Remove(catalogPath)
+		}
+	}
 	asProvider := func() bool { return get("model_provider") == magpieID }
 	viaBase := func() bool { return isCodexGatewayOn(get("openai_base_url"), at.host()) }
 	routed := func() bool { return asProvider() || viaBase() }
@@ -241,7 +262,7 @@ func codexIn(at place) *Agent {
 		if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
 			return err
 		}
-		os.Remove(catalogPath)
+		dropList()
 		return nil
 	}
 	// isCCSwitchMirror reports whether a model_providers table is CC Switch's
@@ -634,7 +655,7 @@ func codexIn(at place) *Agent {
 			if err := edit.DelTOMLTop(path, "model", "model_provider", "model_catalog_json"); err != nil {
 				return err
 			}
-			os.Remove(catalogPath)
+			dropList()
 			forget(at.key("codex.model"), at.key("codex.effort"), at.key("codex.provider"), at.key("codex.catalog"), at.key("codex.out"), at.key("codex.joined"), at.key("codex.beside"))
 			return nil
 		}
@@ -700,7 +721,7 @@ func codexIn(at place) *Agent {
 			if err := putProvider(); err != nil {
 				return err
 			}
-			if err := edit.WriteAtomic(catalogPath, codexcat.Catalog(magpieModels("codex"))); err != nil {
+			if err := edit.WriteAtomic(catalogPath, ownList()); err != nil {
 				return err
 			}
 			// a thread started on Codex's built-in provider stays on it when
@@ -771,7 +792,7 @@ func codexIn(at place) *Agent {
 			if err != nil {
 				return err
 			}
-			os.Remove(catalogPath)
+			dropList()
 			forget(at.key("codex.model"), at.key("codex.effort"), at.key("codex.provider"), at.key("codex.catalog"))
 			return settle()
 		},
@@ -882,7 +903,7 @@ func codexIn(at place) *Agent {
 						return err
 					}
 				}
-				b := codexcat.Catalog(magpieModels("codex"))
+				b := ownList()
 				if cur, _ := edit.Read(catalogPath); string(cur) != string(b) {
 					if err := edit.WriteAtomic(catalogPath, b); err != nil {
 						return err
