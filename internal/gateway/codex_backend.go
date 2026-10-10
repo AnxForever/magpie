@@ -905,7 +905,7 @@ func codexHeader(k string) bool {
 		return false
 	}
 	switch k {
-	case "session_id", "conversation_id", "x-client-request-id", "version":
+	case "session-id", "thread-id", "session_id", "conversation_id", "x-client-request-id", "version":
 		return true
 	}
 	return strings.HasPrefix(k, "x-openai-") || strings.HasPrefix(k, "x-codex-")
