@@ -724,6 +724,10 @@
   // ---------- tuned for you: the settings that would have spent the fewest tokens ----------
 
   let tuneData = null, tuneJSON = "", tuneRead = 0, tuneBusy = "";
+  // whether the last draw showed the history and the advice: what was on
+  // the pane already doesn't play its entrance again when the pane is
+  // redrawn (the other answering, the state, a filter, a click)
+  let ctxDrawn = false, tuneDrawn = false;
 
   const KNOBS = {
     compact: "Auto-compact",
@@ -948,6 +952,9 @@
     }));
     tools.append(el("span", "grow"));
     pane.replaceChildren(tools);
+    pane.classList.toggle("still", ctxDrawn && !!ctxData);
+    pane.classList.toggle("tune-still", tuneDrawn && !!tuneData);
+    ctxDrawn = !!ctxData, tuneDrawn = !!tuneData;
     renderTune(pane);
     if (!ctxData) {
       pane.append(el("p", "usage-note", t("Reading the routing history…")));
@@ -984,6 +991,7 @@
 
   async function loadContext() {
     const read = ++ctxRead, days = ctxDays;
+    if (tuneData && tuneData.days !== +days) tuneData = null;
     if (!ctxData || ctxData.days !== +days) { ctxData = null; renderContext(); }
     loadTune().catch((e) => status(e.message, "err"));
     const data = await api("context?days=" + days);
@@ -995,8 +1003,6 @@
     // history, drawn by the agents' ids until then
     const json = JSON.stringify([data, (state.clients || state.agents || []).map((a) => [a.id, a.name, a.icon])]);
     if (ctxData && json === ctxJSON) return;
-    const pane = $("#contextPane");
-    if (pane) pane.classList.toggle("still", !!ctxData);
     ctxData = data, ctxJSON = json;
     renderContext();
   }

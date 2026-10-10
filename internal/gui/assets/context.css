@@ -290,7 +290,7 @@ i.dot.free { background: var(--k-free); box-shadow: inset 0 0 0 1px color-mix(in
 .ctx-tc-x span.end { transform: translateX(-100%); margin-left: 6px; }
 .ctx-tc-x span.best { color: var(--green); font-weight: 600; }
 .ctx-tc-x span.now { color: var(--red); font-weight: 600; }
-.ctx-pane.still .ctx-tune-chart :is(svg, .ctx-tc-dot) { animation: none; }
+.ctx-pane.tune-still .ctx-tune-chart :is(svg, .ctx-tc-dot) { animation: none; }
 @media (prefers-reduced-motion: reduce) { .ctx-tune-chart :is(svg, .ctx-tc-dot) { animation: none; } }
 .ctx-tune-note { padding: 0 4px 12px; }
 .ctx-tune-why { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-2); }
