@@ -113,6 +113,7 @@ func builtins(home, cfg string) []*Agent {
 		muse(cfg),
 		empryo(home),
 		ante(home),
+		astrbot(home),
 		miniMax(home),
 		droid(home),
 		cline(home),
