@@ -3750,7 +3750,13 @@
     img.referrerPolicy = "no-referrer";
     img.src = "/api/library/icon?u=" + encodeURIComponent(url);
     if (/\.svg(\?|$)/i.test(url)) box.classList.add("svg");
-    img.onerror = fallback;
+    // a first fetch from GitHub can fail once (magpie-community's avatar
+    // showed an M on the user's first look), so it's asked once more
+    img.onerror = () => {
+      if (img.dataset.again) return fallback();
+      img.dataset.again = "1";
+      setTimeout(() => { if (img.isConnected) img.src = "/api/library/icon?again=1&u=" + encodeURIComponent(url); }, 2000);
+    };
     box.append(img);
     return box;
   }
