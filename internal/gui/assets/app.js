@@ -11589,6 +11589,10 @@ function quotaError(err) {
   if (/^remote magpie isn't shared/.test(err)) return t("That computer's magpie isn't shared — turn on Settings → Share on local network there");
   if (/^remote magpie didn't take this key/.test(err)) return t("That computer's magpie didn't take this key — use one of its gateway keys in this provider");
   if (/^couldn't reach the remote magpie/.test(err)) return t("Couldn't reach that computer's magpie — check that it is running and its address");
+  // a ClinePass card with its balance but not its limits (#79): the
+  // built-in key card (clineLimitsUnread, cline_usage.go) and the Cline
+  // plugin both begin their error with these words
+  if (/^ClinePass limits couldn't be read/.test(err)) return t("ClinePass limits couldn't be read — hover for why");
   return balanceError(err) || t("Allowance unavailable");
 }
 
@@ -15415,14 +15419,23 @@ function holdsLine(h) {
 
 // quotaWindows: one account's allowance as meters, or why there are none.
 function quotaWindows(sub) {
-  if (sub.balance && !sub.windows?.length) return balanceRow(sub, "What is left on the account: the vendor tells only this, so Used / Left leaves it as it is", "refresh");
-  if (sub.error) {
+  const failed = () => {
     const e = el("div", "subscription-error", quotaError(sub.error));
     e.title = sub.error;
     // read again from here too: a failed reading is the one most wanted
     e.prepend(quotaRefresh(sub));
     return e;
+  };
+  if (sub.balance && !sub.windows?.length) {
+    const b = balanceRow(sub, "What is left on the account: the vendor tells only this, so Used / Left leaves it as it is", "refresh");
+    if (!sub.error) return b;
+    // the balance read, and why the rest wasn't: a ClinePass card whose
+    // limits failed to read (#79) says so under its balance
+    const box = el("div", "quota-balance-error");
+    box.append(b, failed());
+    return box;
   }
+  if (sub.error) return failed();
   const windows = el("div", "quota-windows");
   for (const w of sub.windows) {
     const quota = el("div", "quota");
