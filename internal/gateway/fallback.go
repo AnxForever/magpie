@@ -1340,6 +1340,20 @@ const holdBuffered = 4 * time.Minute
 // reasoning with it, as soon as it does.
 const holdThinking = 4 * time.Minute
 
+// holdLead is how long a stream with nothing but the frames that come
+// before a reply is held, when its agent is kept alive meanwhile
+// (keptQuiet): as long as one that only reasons, under the 300s Codex
+// waits for its next event. With nothing to keep the agent alive (a
+// Gemini stream), it is let through at holdLongest as before.
+const holdLead = holdThinking
+
+// keptQuiet says whether the agent of a held stream is kept alive with
+// SSE comments while it is held (keepQuiet, keepAlive): it asked for a
+// stream, in a protocol that takes a comment.
+func (h *holdWriter) keptQuiet() bool {
+	return h.streams && h.alive != nil && h.alive.proto != provider.Gemini
+}
+
 // refusesAfterThinking tells whether a model's vendor may end a reply that
 // has only reasoned with its safety filter's refusal: Claude's stop_reason
 // refusal, OpenAI's content_filter or bio_policy, Gemini's SAFETY (#248).
@@ -1400,6 +1414,14 @@ func (h *holdWriter) scan() {
 	if h.thinking {
 		longest = max(longest, holdThinking)
 	}
+	if h.keptQuiet() {
+		// a stream of nothing but its frames — response.created, pings,
+		// an empty message begun — while its agent is kept alive with
+		// comments: let through at 15s, the 200 the agent then had made
+		// the vendor's server_is_overloaded 21s later the agent's error,
+		// with the group's next member never asked (#1418)
+		longest = max(longest, holdLead)
+	}
 	// a group that asks the next member when one is slow to start holds
 	// the stream until then, for nothing of it to have reached the agent
 	waiting := h.firstWait > 0 && h.first.first == 0
@@ -1410,14 +1432,15 @@ func (h *holdWriter) scan() {
 		h.flow()
 		return
 	}
-	if (h.thinking || h.buffered || waiting) && time.Since(h.since) >= keepHeldAfter {
+	if (h.thinking || h.buffered || waiting || h.keptQuiet()) && time.Since(h.since) >= keepHeldAfter {
 		h.keepAlive()
 	}
 }
 
 // keepHeldAfter is how long a stream held for its reasoning waits before
 // its agent is first kept alive, as long as a stream with nothing in it
-// is held (holdLongest); a refusal after it still goes to another account,
+// is held where its agent can't be (holdLongest); a refusal after it still
+// goes to another account,
 // whose stream follows the comments in the same response.
 var keepHeldAfter = holdLongest
 
