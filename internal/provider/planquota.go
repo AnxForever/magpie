@@ -15,6 +15,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -171,9 +172,41 @@ func readOpenCodeGo(b []byte) (string, []QuotaWindow, error) {
 		out = append(out, q)
 	}
 	if len(out) == 0 {
-		return "", nil, fmt.Errorf("no usage in the reply")
+		return "", nil, fmt.Errorf("OpenCode Go's reply has no rolling, weekly or monthly window: %s", shapeOf(b))
 	}
 	return "", out, nil
+}
+
+// shapeOf names the fields of a JSON reply magpie couldn't read, two
+// levels down, without their values: enough to see what the vendor sends
+// now, with nothing of the account in it.
+func shapeOf(b []byte) string {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil {
+		if len(b) == 0 {
+			return "an empty reply"
+		}
+		return "a reply that isn't a JSON object"
+	}
+	var names []string
+	for k, v := range top {
+		var in map[string]json.RawMessage
+		if json.Unmarshal(v, &in) == nil && len(in) > 0 {
+			for k2 := range in {
+				names = append(names, k+"."+k2)
+			}
+			continue
+		}
+		names = append(names, k)
+	}
+	if len(names) == 0 {
+		return "an empty object"
+	}
+	slices.Sort(names)
+	if len(names) > 12 {
+		names = append(names[:12], "…")
+	}
+	return "fields " + strings.Join(names, ", ")
 }
 
 // readMiniMaxPlan reads MiniMax's /v1/token_plan/remains (#387):
@@ -462,13 +495,49 @@ func planWindows(ctx context.Context, src planQuotaSource, key string) (plan str
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	openCode := strings.Contains(src.url, "opencode.ai")
 	switch {
-	case res.StatusCode == http.StatusForbidden && strings.Contains(src.url, "opencode.ai"):
-		return "", nil, fmt.Errorf("this key has no OpenCode Go subscription")
+	case res.StatusCode == http.StatusForbidden && openCode:
+		// OpenCode keeps Go on the member who subscribed, in the workspace
+		// they subscribed in, and asks for it by the key's own member and
+		// workspace (zen/go/v1/usage.ts in sst/opencode): a key another
+		// member made, or one from another workspace, has none
+		return "", nil, fmt.Errorf("this key has no OpenCode Go subscription: Go belongs to the member who subscribed, in that workspace, so use a key that member made there (opencode.ai, the workspace's API Keys)")
+	case res.StatusCode == http.StatusUnauthorized && openCode:
+		return "", nil, fmt.Errorf("OpenCode didn't take this key (%s): it was deleted, or is mistyped", vendorSaid(b, res.Status))
 	case res.StatusCode >= 300:
-		return "", nil, fmt.Errorf("%s", res.Status)
+		return "", nil, fmt.Errorf("%s", vendorSaid(b, res.Status))
 	}
 	return src.read(b)
+}
+
+// vendorSaid is the status, and the reason in a vendor's error body
+// ({"error":{"message":…}} or {"message":…}) when it gives one, so a card
+// that can't be read says why, not only a number.
+func vendorSaid(b []byte, status string) string {
+	var e struct {
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
+	}
+	if json.Unmarshal(b, &e) != nil {
+		return status
+	}
+	msg := e.Message
+	var inner struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(e.Error, &inner) == nil && inner.Message != "" {
+		msg = inner.Message
+	} else if s := ""; json.Unmarshal(e.Error, &s) == nil && s != "" {
+		msg = s
+	}
+	if msg = strings.TrimSpace(msg); msg == "" {
+		return status
+	}
+	if len(msg) > 200 {
+		msg = msg[:200] + "…"
+	}
+	return status + ": " + msg
 }
 
 // planKeyWindows asks the vendor for the plan key is on and its windows:
