@@ -351,7 +351,11 @@ func (a *Agent) Reapply() error {
 	}
 	vals := a.Values()
 	for _, f := range a.Fields {
-		if v := vals[f.Key]; v != "" && (d != nil && f.Key == d.Field || magpieValue(a, f, v, vals)) {
+		// magpie as the agent's provider too (Claude Desktop's provider
+		// field, beside its tiers on magpie's models), as Wired takes it:
+		// left out, Reconnect set the tiers again and never the gateway
+		// Check found off (dumplings on Discord)
+		if v := vals[f.Key]; v != "" && (d != nil && f.Key == d.Field || v == magpieID || magpieValue(a, f, v, vals)) {
 			if err := a.Apply(f.Key, v); err != nil {
 				return err
 			}
