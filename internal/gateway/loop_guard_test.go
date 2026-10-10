@@ -264,8 +264,11 @@ func TestLoopGuardLeavesOrdinaryRepliesAlone(t *testing.T) {
 type loopingVendor struct {
 	reasoning string // what it reasons, else the reporter's loop
 	lines     int    // 0: loop until let go
+	loops     int    // how many of its requests loop, 0 for every one
+	said      string // a text it says before its reasoning loops
+	asked     atomic.Int64
 	sent      atomic.Int64
-	letGo     chan bool
+	letGo     chan bool // each request's, sized for every one it gets
 }
 
 // loopMost is how many lines of its loop loopingVendor sends before it
@@ -274,6 +277,7 @@ const loopMost = 2000
 
 func (v *loopingVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	io.ReadAll(r.Body)
+	asked := v.asked.Add(1)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(200)
 	f := w.(http.Flusher)
@@ -286,7 +290,12 @@ func (v *loopingVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return r.Context().Err() == nil
 	}
 	send(chatEvent("reasoning_content", reasoningBefore))
-	if v.reasoning != "" {
+	if v.said != "" {
+		send(chatEvent("content", v.said))
+	}
+	if v.loops > 0 && asked > int64(v.loops) {
+		send(chatEvent("reasoning_content", "So: a case for .toml in parse(), and its test."))
+	} else if v.reasoning != "" {
 		for _, c := range pieces(v.reasoning, 11) {
 			if !send(chatEvent("reasoning_content", c)) {
 				v.letGo <- true
@@ -321,19 +330,23 @@ func (v *loopingVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // loopAsks are a streamed request on each of the agents' protocols, and
-// how each one's stream says it ended well, and with magpie's error.
+// how each one's stream says it ended well, and with magpie's error; asks
+// is how many times the vendor is asked when every reply loops: a reply
+// translated to the agent's protocol is asked again once (loopReasks), a
+// Chat stream passed through as it comes is not.
 var loopAsks = []struct {
 	name, path, body string
 	done, failed     string
+	asks             int
 }{
 	{"chat", "/v1/chat/completions", `{"model":"ds/deepseek-v4-max","stream":true,"messages":[{"role":"user","content":"add TOML"}]}`,
-		"data: [DONE]", `data: {"error":{"message":"magpie ended this reply`},
+		"data: [DONE]", `data: {"error":{"message":"magpie ended this reply`, 1},
 	{"anthropic", "/v1/messages", `{"model":"ds/deepseek-v4-max","max_tokens":32000,"stream":true,"messages":[{"role":"user","content":"add TOML"}]}`,
-		`"type":"message_stop"`, "event: error\ndata: {\"error\":{"},
+		`"type":"message_stop"`, "event: error\ndata: {\"error\":{", 2},
 	{"responses", "/v1/responses", `{"model":"ds/deepseek-v4-max","stream":true,"input":"add TOML"}`,
-		`"type":"response.completed"`, `"type":"response.failed"`},
+		`"type":"response.completed"`, `"type":"response.failed"`, 2},
 	{"gemini", "/v1beta/models/ds/deepseek-v4-max:streamGenerateContent?alt=sse", `{"contents":[{"role":"user","parts":[{"text":"add TOML"}]}]}`,
-		`"finishReason":"STOP"`, `"status":"UNAVAILABLE"`},
+		`"finishReason":"STOP"`, `"status":"UNAVAILABLE"`, 2},
 }
 
 func deepseekOn(t *testing.T, v *loopingVendor) string {
@@ -382,17 +395,18 @@ func askStream(t *testing.T, url, body string) string {
 func TestLoopEndsTheReplyOnEveryProtocol(t *testing.T) {
 	for _, x := range loopAsks {
 		t.Run(x.name, func(t *testing.T) {
-			v := &loopingVendor{letGo: make(chan bool, 1)}
+			v := &loopingVendor{letGo: make(chan bool, 4)}
 			gw := deepseekOn(t, v)
-			loopCut(t, v, askStream(t, gw+x.path, x.body), x.done, x.failed, "ds")
+			loopCut(t, v, askStream(t, gw+x.path, x.body), x.done, x.failed, "ds", x.asks)
 		})
 	}
 }
 
 // loopCut checks what the agent got of a looping reply, got, and what came
-// of it: the stream's error, not its end (done); the vendor let go; nobody
-// resting; the usage record's reply_loop, for provider.
-func loopCut(t *testing.T, v *loopingVendor, got, done, failed, provider string) {
+// of it: the stream's error, not its end (done); the vendor asked asks
+// times and let go each time; nobody resting; the usage record's
+// reply_loop, for provider.
+func loopCut(t *testing.T, v *loopingVendor, got, done, failed, provider string, asks int) {
 	t.Helper()
 	if !strings.Contains(got, failed) || !strings.Contains(got, "stuck in a loop") || strings.Contains(got, done) {
 		t.Fatalf("the stream doesn't end with magpie's error:\n%s", got[max(len(got)-1500, 0):])
@@ -400,19 +414,24 @@ func loopCut(t *testing.T, v *loopingVendor, got, done, failed, provider string)
 	if !strings.Contains(got, "Producing") {
 		t.Fatal("the reasoning before the loop was found didn't reach the agent")
 	}
-	select {
-	case letGo := <-v.letGo:
-		if !letGo {
-			t.Fatalf("the vendor's request was not let go (%d lines)", v.sent.Load())
+	for range asks {
+		select {
+		case letGo := <-v.letGo:
+			if !letGo {
+				t.Fatalf("the vendor's request was not let go (%d lines)", v.sent.Load())
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("the vendor's request was not let go")
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the vendor's request was not let go")
+	}
+	if n := v.asked.Load(); n != int64(asks) {
+		t.Fatalf("the vendor was asked %d times, want %d", n, asks)
 	}
 	// the guard cut within its window of the loop's start: what reached
 	// the agent of the loop is that window and at most one 32K read of the
 	// vendor's stream more, which the cut's write sends whole. It doesn't
 	// depend on how far the vendor got ahead of the gateway (#1443).
-	if n := loopLines(got); n > loopWindow+(32<<10)/100 {
+	if n := loopLines(got); n > asks*(loopWindow+(32<<10)/100) {
 		t.Fatalf("the loop was cut only after %d of its lines reached the agent", n)
 	}
 	restingUntil.Lock()
@@ -472,7 +491,7 @@ func TestLoopEndsWorkBuddysReply(t *testing.T) {
 	for _, rt := range routes {
 		for _, x := range loopAsks {
 			t.Run(rt.name+"/"+x.name, func(t *testing.T) {
-				v := &loopingVendor{letGo: make(chan bool, 1)}
+				v := &loopingVendor{letGo: make(chan bool, 4)}
 				id := rt.on(t, v)
 				m := model
 				if rt.name == "plugin" {
@@ -482,9 +501,54 @@ func TestLoopEndsWorkBuddysReply(t *testing.T) {
 				t.Cleanup(gw.Close)
 				path := strings.Replace(x.path, "ds/deepseek-v4-max", id+"/"+m, 1)
 				body := strings.Replace(x.body, `"model":"ds/deepseek-v4-max"`, `"model":"`+id+"/"+m+`","reasoning_effort":"max"`, 1)
-				loopCut(t, v, askStream(t, gw.URL+path, body), x.done, x.failed, id)
+				loopCut(t, v, askStream(t, gw.URL+path, body), x.done, x.failed, id, x.asks)
 			})
 		}
+	}
+}
+
+// A reply whose reasoning loops before it says anything is asked again
+// once, in place, when magpie translates it to the agent's protocol: the
+// agent keeps the reasoning it has, the next try's follows it, and the
+// reply ends whole, the loop no error (cdredfox on X: WorkBuddy's DeepSeek
+// v4 flash now and then looping in a long turn, the agent's turn ended).
+// A Chat stream passed through as it comes is ended with the loop's error,
+// as before: its events aren't magpie's to splice.
+func TestReasoningLoopIsAskedAgain(t *testing.T) {
+	for _, x := range loopAsks {
+		t.Run(x.name, func(t *testing.T) {
+			v := &loopingVendor{loops: 1, letGo: make(chan bool, 4)}
+			gw := deepseekOn(t, v)
+			got := askStream(t, gw+x.path, x.body)
+			if x.asks == 1 {
+				loopCut(t, v, got, x.done, x.failed, "ds", 1)
+				return
+			}
+			if !strings.Contains(got, x.done) || strings.Contains(got, "magpie ended this reply") || !strings.Contains(got, "parse() now takes .toml") {
+				t.Fatalf("the reply asked again didn't end whole:\n%s", got[max(len(got)-1500, 0):])
+			}
+			if !strings.Contains(got, "Producing") || !strings.Contains(got, "a case for .toml in parse()") {
+				t.Fatal("the agent didn't get both tries' reasoning")
+			}
+			if n := v.asked.Load(); n != 2 {
+				t.Fatalf("the vendor was asked %d times, want 2", n)
+			}
+			if first, second := <-v.letGo, <-v.letGo; !first || second {
+				t.Fatalf("let go: the looping try %v, the next %v", first, second)
+			}
+		})
+	}
+}
+
+// A reply that has said something before its reasoning loops is ended, not
+// asked again: the agent has its text, which a second try would say again.
+func TestLoopAfterTextIsNotAskedAgain(t *testing.T) {
+	for _, x := range loopAsks {
+		t.Run(x.name, func(t *testing.T) {
+			v := &loopingVendor{said: "Looking at parse() first.", letGo: make(chan bool, 4)}
+			gw := deepseekOn(t, v)
+			loopCut(t, v, askStream(t, gw+x.path, x.body), x.done, x.failed, "ds", 1)
+		})
 	}
 }
 
@@ -502,7 +566,7 @@ func TestLongReplyThatDoesNotLoopGoesThrough(t *testing.T) {
 	src = src[:bytes.LastIndexByte(src[:40<<10], '\n')+1]
 	for _, x := range loopAsks {
 		t.Run(x.name, func(t *testing.T) {
-			v := &loopingVendor{reasoning: string(src), letGo: make(chan bool, 1)}
+			v := &loopingVendor{reasoning: string(src), letGo: make(chan bool, 4)}
 			gw := deepseekOn(t, v)
 			got := askStream(t, gw+x.path, x.body)
 			if !strings.Contains(got, x.done) || strings.Contains(got, "magpie ended this reply") || !strings.Contains(got, "parse() now takes .toml") {
@@ -518,7 +582,7 @@ func TestLongReplyThatDoesNotLoopGoesThrough(t *testing.T) {
 // With Stop looping replies off (Settings' NoLoopGuard), a loop runs on
 // as the vendor sends it, to its end.
 func TestLoopGuardOff(t *testing.T) {
-	v := &loopingVendor{lines: 3000, letGo: make(chan bool, 1)}
+	v := &loopingVendor{lines: 3000, letGo: make(chan bool, 4)}
 	gw := deepseekOn(t, v)
 	if err := settings.Save(settings.Settings{NoLoopGuard: true}); err != nil {
 		t.Fatal(err)

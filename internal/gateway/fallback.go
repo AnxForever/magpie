@@ -1099,6 +1099,19 @@ type holdWriter struct {
 	// ended there
 	loop   *loopGuard
 	looped string
+	// reask, when the try's reply can be asked again in place
+	// (streamTranslated), is told of a loop first, and says whether the
+	// reply is asked again instead of ended: the guard then reads the
+	// next try's afresh
+	reask func(loopTrip) bool
+}
+
+// onLoop sets what is told of a loop before it ends the reply (reask),
+// nil for nobody.
+func (h *holdWriter) onLoop(f func(loopTrip) bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reask = f
 }
 
 // errSlowStart is what a try's writes get once it was let go for taking
@@ -1190,7 +1203,10 @@ func (h *holdWriter) Write(b []byte) (int, error) {
 	}
 	if h.loop != nil && !h.whole && h.status < 400 {
 		if t, ok := h.loop.feed(b); ok {
-			return h.cutLoop(b, t)
+			if h.reask == nil || !h.reask(t) {
+				return h.cutLoop(b, t)
+			}
+			h.loop = &loopGuard{}
 		}
 	}
 	h.see(b)
