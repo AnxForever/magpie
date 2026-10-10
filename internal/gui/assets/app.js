@@ -13537,6 +13537,7 @@ function renderQuotas() {
       card.append(el("span", "skeleton sk-title"), el("span", "skeleton sk-line"), el("span", "skeleton sk-line short"));
       subscriptions.append(card);
     }
+    packUsageNow(subscriptions);
     return;
   }
   if (usageArranging) { usageRenderPending = true; return; }
@@ -13645,6 +13646,7 @@ function renderQuotas() {
     subscriptions.append(card);
   }
   markUpstream();
+  packUsageNow(subscriptions);
   restoreFlash();
   requestAnimationFrame(focusQuotaCard);
 }
@@ -13795,6 +13797,90 @@ function byUsageOrder(list) {
   const order = state.settings?.usageOrder || [];
   const rank = (q) => { const i = order.indexOf(q.provider); return i < 0 ? order.length : i; };
   return list.map((q, i) => [q, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([q]) => q);
+}
+
+// packUsage lays the Usage page's cards out in columns, each card as tall
+// as itself, the next in the order going to the column that ends highest
+// (huoranxuanyuan, #860: a tall Codex card beside Antigravity and a
+// DeepSeek balance left the short two mostly empty; 把 antigravity 和
+// deepseek 两个上下堆叠和 Codex 对齐). The order still reads left to right,
+// row by row as near as the heights allow, and the cards stay in it on the
+// page, for dragging, Alt+arrows and a screen reader alike. As many columns
+// as 260px each fit, unless one fewer leaves much less empty beside the
+// short cards for a page not much taller. Decided again when the cards
+// change or the width fits another number of columns; a card growing (a
+// fold opened) only packs them again, so what was clicked stays where it
+// was, even as the view's scrollbar comes in and takes some of the width
+// (in WebKit a card turned to every model went to one column under its
+// neighbour, the page following it).
+const USAGE_MIN = 260, USAGE_GAP = 7;
+let usagePacked = null, usagePackFrame = 0;
+function packUsage() {
+  const list = $("#subscriptionUsage");
+  if (usagePackFrame) { cancelAnimationFrame(usagePackFrame); usagePackFrame = 0; }
+  if (!list || list.classList.contains("sorting")) return;
+  const cards = [...list.children], width = list.clientWidth;
+  if (!width || !cards.length) {
+    // out of sight: the grid as it is without packing, packed once it shows
+    list.classList.remove("packed");
+    list.style.gridTemplateColumns = "";
+    for (const c of cards) c.style.gridArea = "";
+    usagePacked = null;
+    return;
+  }
+  const keys = cards.map((c) => c.dataset.key || "").join();
+  const most = Math.max(1, Math.min(cards.length, Math.floor((width + USAGE_GAP) / (USAGE_MIN + USAGE_GAP))));
+  const place = (n, hs) => {
+    const ends = Array(n).fill(0), at = [];
+    for (const h of hs.map(Math.ceil)) {
+      // the leftmost of those ending within a pixel of the highest
+      const low = Math.min(...ends), c = ends.findIndex((e) => e <= low + 1);
+      at.push([c, ends[c], h]);
+      ends[c] += h + USAGE_GAP;
+    }
+    const tall = Math.max(...ends) - USAGE_GAP;
+    // what stands empty under the columns' ends, by the columns' width
+    const empty = ends.reduce((s, e) => s + tall - (e - USAGE_GAP), 0) * (width - (n - 1) * USAGE_GAP) / n;
+    return { n, at, tall, empty };
+  };
+  const heights = () => {
+    for (const g of list.querySelectorAll(".quota-windows")) fitQuota(g);
+    return cards.map((c) => c.getBoundingClientRect().height);
+  };
+  const columns = (n) => { list.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`; };
+  let best;
+  if (usagePacked && usagePacked.most === most && usagePacked.keys === keys && list.classList.contains("packed")) {
+    // the same cards, as many columns fitting: the columns as they are
+    best = place(usagePacked.n, heights());
+  } else {
+    list.classList.remove("packed");
+    for (const c of cards) c.style.gridArea = "";
+    for (let n = most; n >= Math.max(1, most - 1); n--) {
+      columns(n);
+      const p = place(n, heights());
+      if (!best) best = p;
+      else if (p.tall <= best.tall * 1.3 && p.empty < best.empty * 0.6) best = p;
+    }
+    // measured again: a count beside its name or under it is the width's
+    columns(best.n);
+    best = place(best.n, heights());
+  }
+  usagePacked = { most, keys, n: best.n };
+  list.classList.add("packed");
+  best.at.forEach(([c, top, h], i) => {
+    const area = `${top + 1} / ${c + 1} / span ${Math.max(1, h)} / span 1`;
+    if (cards[i].style.gridArea !== area) cards[i].style.gridArea = area;
+  });
+}
+// a card's height or the page's width moved: packed again on the next frame
+// (in the observer's own call the change is owed to it in the same frame,
+// which WebKit reports as a ResizeObserver loop)
+const usagePack = new ResizeObserver(() => { if (!usagePackFrame) usagePackFrame = requestAnimationFrame(packUsage); });
+function packUsageNow(list) {
+  packUsage();
+  usagePack.disconnect();
+  usagePack.observe(list);
+  for (const card of list.children) usagePack.observe(card);
 }
 
 // usageHandle is a card's logo, which is also its handle: drag it to move
@@ -15342,17 +15428,18 @@ const quotaFit = new ResizeObserver((es) => {
   for (const { target } of es) quotaFitting.add(target);
 });
 function fitQuotas() {
+  for (const g of quotaFitting) fitQuota(g);
+  quotaFitting.clear();
+}
+function fitQuota(g) {
   // a count's own width, its parts laid end to end: once stacked it spans
   // the row and may be two lines, so its box no longer says
   const wide = (e) => [...e.children].reduce((w, c) => w + c.getBoundingClientRect().width, 0) + 4 * (e.children.length - 1);
-  for (const g of quotaFitting) {
-    const wraps = [...g.querySelectorAll(".quota-labels")].some((l) => {
-      const [name, n] = l.children;
-      return name.getBoundingClientRect().width + 6 + wide(n) > l.clientWidth;
-    });
-    g.classList.toggle("stacked", wraps);
-  }
-  quotaFitting.clear();
+  const wraps = [...g.querySelectorAll(".quota-labels")].some((l) => {
+    const [name, n] = l.children;
+    return name.getBoundingClientRect().width + 6 + wide(n) > l.clientWidth;
+  });
+  g.classList.toggle("stacked", wraps);
 }
 
 // balanceRow: what is left on an account, as a figure; a balance field

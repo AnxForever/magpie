@@ -579,7 +579,10 @@ body.window .field.solo { grid-column: auto; }
 /* the tabs sit on the head's middle line with the refresh beside them, not
    at its top as .segs elsewhere do */
 .usage-head > .segs { align-self: center; }
-.subscription-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 7px; margin-bottom: 8px; flex: none; }
+.subscription-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-items: start; gap: 7px; margin-bottom: 8px; flex: none; }
+/* packed into columns (packUsage): each card as tall as itself, placed on
+   rows a pixel high, the gap between cards in its place on them (#860) */
+.subscription-usage.packed { grid-auto-rows: 1px; row-gap: 0; }
 .subscription-card { padding: 10px 12px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-width: 0; }
 .subscription-head { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; }
 .subscription-head .ic { width: 17px; height: 17px; }
