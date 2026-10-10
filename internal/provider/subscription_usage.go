@@ -136,6 +136,10 @@ type SubscriptionQuota struct {
 	// From is the remote magpie a card is that one's (remote_quotas.go),
 	// by its name here; "" for this computer's own.
 	From string `json:"from,omitempty"`
+	// LastServedAt is when the account, plan or key last answered a
+	// request through this computer's gateway, nil when it hasn't in the
+	// last 30 days (served.go); set by Quotas, never cached.
+	LastServedAt *time.Time `json:"lastServedAt,omitempty"`
 	// In-process read order, separate from the vendor's ReadAt and never
 	// persisted: restarting starts a new sequence.
 	readSeq uint64
