@@ -1369,6 +1369,28 @@ subscription account, plan and key that answered a request through the
 gateway in the last 30 days, and `last: true` on the latest. It is kept
 in `served.json` beside `providers.json`, so a restart keeps it.
 
+An app of your own can read the Usage page's numbers too.
+`GET /v1/magpie/usage?period=<today|week|month|all>` is the page's summary,
+the same JSON as the window's `/api/usage` (`path` is left out for another
+machine). `GET /v1/magpie/usage/requests` is its requests a page at a time
+(`offset`, `limit` up to 500), with the same filters as the Requests log:
+`period`, `day`, `agent`, `provider`, `model`, `account`, `callerKey`,
+`purpose`, `failed`, `q`, `via`, `computer`. What was said in a call is not
+in either. Like `/v1/magpie/quotas`, they answer this machine, and another
+only with a gateway key. A key held to a budget, to some models or to some
+accounts is told its own calls alone: `/v1/magpie/usage` refuses it with a
+403, and `/v1/magpie/usage/requests` keeps only its rows and filter lists.
+
+A row's `session` is the conversation it belongs to. A Claude Code
+subagent's call keeps its parent conversation there and adds `subagent`,
+its agent id (the `agentId` of its lines and its
+`<session>/subagents/agent-<id>.jsonl` file), and `parent_agent`: the
+subagent that started it (Claude Code's `x-claude-code-parent-agent-id`, or
+the `parentAgentId` of the subagent's `.meta.json`); none when the main
+conversation did.
+Records written before these fields came have neither. Codex's sub-agents are told
+apart by `kind` only.
+
 `magpie quota wait <provider|account>` blocks until that subscription (any
 of its accounts magpie has on) or that one account has allowance again — no
 window that stops it used up — then exits 0, so a long task stopped by its
