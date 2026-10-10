@@ -75,7 +75,7 @@
     <a href="#signin">サブスクリプションにサインイン</a>
     <a href="#volume">保存されるもの</a>
     <a href="#env">環境変数</a>
-    <a href="#share">ほかのマシンと共有する</a>
+    <a href="#share">ゲートウェイキーとほかのマシン</a>
     <a href="#compose">NAS で Docker Compose</a>
     <a href="#ops">ヘルスチェック・ターミナル・更新</a>
   </aside>
@@ -116,7 +116,7 @@ docker logs magpie</pre>
 ! anyone with the link can change magpie and see its keys, and the network carries it unencrypted
   the link carries MAGPIE_WEB_KEY · gateway http://127.0.0.1:3425 · Ctrl-C to stop</pre>
     </div>
-    <div class="callout"><b>今はポートを 127.0.0.1 のままにしてください。</b><a href="#share">共有</a>をオンにするまで、Docker 内のゲートウェイは届いた相手すべてに、どんなキー（<code>Bearer magpie</code> も含む）でも応答します。<code>-p 3425:3425</code> はホストのすべてのインターフェイスに公開し、ホストのファイアウォールも通り抜けます。外に公開するのは、共有をオンにしてゲートウェイキーを用意してからにしてください。</div>
+    <div class="callout"><b>コンテナの外のエージェントにはゲートウェイキーが必要です。</b>コンテナ内ではどんなキーでも通ります。ホストやほかのマシンからのリクエストは、有効なゲートウェイキーがあるときだけ応答され、ないものは 401 になります。<a href="#share">ゲートウェイキー</a>の手順で作ってください。<code>-p</code> の <code>127.0.0.1:</code> はポートをホストだけに置きます。ほかのマシンから届くようにするには、それを外すか、ホストの LAN や VPN のアドレスにします。</div>
     <p><code>web --addr 0.0.0.0:3430 --no-open</code> を付けなければコンテナはゲートウェイだけを動かし、設定はコンテナ内のターミナルから行います（<code>docker exec -it magpie magpie provider add …</code>）。名前付きボリュームの代わりにフォルダを <code>/config</code> にバインドマウントすることもできます。uid 65532 が書き込める必要があります：<code>sudo chown -R 65532:65532 /volume1/docker/magpie/config</code>。</p>
 
     <h2 id="web"><a class="anchor" href="#web">ブラウザ UI</a></h2>
@@ -155,14 +155,15 @@ docker logs magpie</pre>
       <tr><td><code>HOME</code>、<code>XDG_CONFIG_HOME</code>、<code>XDG_CACHE_HOME</code>、<code>XDG_DATA_HOME</code>、<code>XDG_STATE_HOME</code></td><td>イメージが上の <code>/config</code> 配下のフォルダに設定しています。変えないでください</td></tr>
     </table></div>
 
-    <h2 id="share"><a class="anchor" href="#share">ほかのマシンと共有する</a></h2>
+    <h2 id="share"><a class="anchor" href="#share">ゲートウェイキーとほかのマシン</a></h2>
     <ol class="steps">
-      <li><b>共有をオンにする</b>ブラウザ UI で <span class="ui">設定</span> → <span class="ui">ローカルネットワークで共有</span> → <span class="ui">オン</span>。<span class="ui">Magpie</span> という名前のゲートウェイキーも作られます。以後、コンテナの外からのリクエストには有効なゲートウェイキーが必要で、ないものは 401 になります。UI を使わない場合は <code>/config/magpie/settings.json</code> に <code>"lan": true</code> を書きます。</li>
-      <li><b>クライアントごとにキーを渡す</b><span class="ui">ゲートウェイ</span> → <span class="ui">ゲートウェイキー</span>、またはターミナルで <code>docker exec magpie magpie gateway-key add "Laptop"</code>。新しい <code>sk-magpie-key-…</code> が表示されます。キーごとに日・週・月の上限と使えるモデルを決められます（<code>magpie gateway-key limit</code>、<code>magpie gateway-key models</code>）。</li>
+      <li><b>クライアントごとにキーを作る</b><span class="ui">ゲートウェイ</span> → <span class="ui">ゲートウェイキー</span>、またはターミナルで <code>docker exec magpie magpie gateway-key add "Laptop"</code>。新しい <code>sk-magpie-key-…</code> が表示されます。コンテナの外からのリクエストは、ホスト自身のものも含め、有効なゲートウェイキーが必要で、ないものは 401 になります。キーごとに日・週・月の上限と使えるモデルを決められます（<code>magpie gateway-key limit</code>、<code>magpie gateway-key models</code>）。</li>
       <li><b>ポートを公開する</b><code>-p 3425:3425</code>（または NAS の LAN や VPN のアドレスに限定して <code>-p 192.168.1.20:3425:3425</code>）と <code>-e MAGPIE_PUBLIC_URL=http://192.168.1.20:3425</code> を付けてコンテナを作り直します。</li>
     </ol>
     <p>ほかのコンピューターでは、エージェントをゲートウェイに向け、そのキーのどれかを API キーにします：OpenAI クライアントなら <code>http://192.168.1.20:3425/v1</code>、Anthropic や Gemini なら <code>http://192.168.1.20:3425</code>。モデル ID は <code>provider/model</code> かルーティンググループの名前で、<code>GET /v1/models</code> が一覧を返します。そのコンピューターでも magpie を動かしているなら、コンテナを<a href="/docs/ja/remote">リモート magpie</a> として追加すれば、magpie がエージェントを設定します。</p>
-    <div class="callout"><b>インターネット越しなら VPN を</b>（Tailscale や WireGuard など）。3425 を開けるより安全です。コンテナの前に置くリバースプロキシやトンネルもネットワークです。先に共有をオンにして、そのクライアントにゲートウェイキーが必要になるようにしてください。</div>
+    <p>コンテナでは <span class="ui">設定</span> → <span class="ui">ローカルネットワークで共有</span> は不要です。オンにすると <span class="ui">Magpie</span> という名前のゲートウェイキーも作られますが、ゲートウェイはどちらでもコンテナの外からのリクエストにキーを求めます。</p>
+    <p><b>以前のイメージからの更新。</b>コンテナの外から <code>magpie</code> や、有効なゲートウェイキーではないキーを送るエージェントは、401（“the API key sent is not an enabled magpie gateway key”）を受け取るようになります。上の手順でキーを作り、エージェントの設定に入れてください。すでにゲートウェイキーを送っているエージェントや、ゲートウェイキーで追加したリモート magpie はそのまま動きます。</p>
+    <div class="callout"><b>インターネット越しなら VPN を</b>（Tailscale や WireGuard など）。3425 を開けるより安全です。コンテナの前に置くリバースプロキシやトンネルもネットワークです。そのクライアントにも、ほかのマシンと同じくゲートウェイキーが必要です。</div>
 
     <h2 id="compose"><a class="anchor" href="#compose">NAS で Docker Compose</a></h2>
     <div class="code">
@@ -173,7 +174,7 @@ docker logs magpie</pre>
     image: ghcr.io/yetone/magpie:latest
     restart: unless-stopped
     ports:
-      <span class="c"># 共有をオンにしてゲートウェイキーができるまではループバックのみ</span>
+      <span class="c"># 127.0.0.1: ホストのみ。コンテナの外の呼び出しにはゲートウェイキーが必要</span>
       - "127.0.0.1:3425:3425"
       - "127.0.0.1:3430:3430"
     environment:
@@ -183,7 +184,7 @@ docker logs magpie</pre>
       - ./config:/config
     command: [web, --addr, 0.0.0.0:3430, --no-open]</pre>
     </div>
-    <p>続いて <code>sudo chown -R 65532:65532 ./config</code>、<code>docker compose up -d</code> を実行し、SSH トンネル経由で <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code> を開いて、プロバイダを追加し、<span class="ui">ローカルネットワークで共有</span>をオンにして、マシンごとにゲートウェイキーを作ります。そのあとゲートウェイの行を <code>"3425:3425"</code>（または NAS の LAN や VPN のアドレス）に変えて、もう一度 <code>docker compose up -d</code> を実行します。</p>
+    <p>続いて <code>sudo chown -R 65532:65532 ./config</code>、<code>docker compose up -d</code> を実行し、SSH トンネル経由で <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code> を開いて、プロバイダを追加し、マシンごとにゲートウェイキーを作ります。ほかのマシンからゲートウェイに届くようにするには、その行を <code>"3425:3425"</code>（または NAS の LAN や VPN のアドレス）に変えて、もう一度 <code>docker compose up -d</code> を実行します。</p>
 
     <h2 id="ops"><a class="anchor" href="#ops">ヘルスチェック・ターミナル・更新</a></h2>
     <ul>

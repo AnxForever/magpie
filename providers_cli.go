@@ -960,15 +960,16 @@ func refreshLive(ctx context.Context) {
 	}
 }
 
-// keyNote says who the gateway takes any key from: this machine alone,
-// unless MAGPIE_ADDR puts it on the network (a server, a Docker image)
-// without sharing it from Settings, when it is anyone who reaches it.
+// keyNote says who the gateway takes any key from: this machine (in a
+// container, the container) alone. Shared from Settings, or put on the
+// network by MAGPIE_ADDR (a server, a Docker image), it takes others with
+// an enabled gateway key.
 func keyNote() string {
-	if s := settings.Load(); s.LAN {
+	if settings.Load().LAN || gateway.OnNetwork() {
+		if gateway.InContainer() {
+			return "(anything works inside the container; from its host and other machines, an enabled gateway key — magpie gateway-key add <name>)"
+		}
 		return "(anything works from this machine; from others, an enabled gateway key — magpie gateway-key add <name>)"
-	}
-	if gateway.OpenToAnyone() {
-		return "(anything works, from anyone who reaches it — share it from Settings to require a key)"
 	}
 	return "(anything works; the gateway only listens on localhost)"
 }

@@ -75,7 +75,7 @@
     <a href="#signin">登录订阅</a>
     <a href="#volume">保存了什么</a>
     <a href="#env">环境变量</a>
-    <a href="#share">给其他机器共享</a>
+    <a href="#share">网关密钥与其他机器</a>
     <a href="#compose">在 NAS 上用 Docker Compose</a>
     <a href="#ops">健康检查、终端与更新</a>
   </aside>
@@ -116,7 +116,7 @@ docker logs magpie</pre>
 ! anyone with the link can change magpie and see its keys, and the network carries it unencrypted
   the link carries MAGPIE_WEB_KEY · gateway http://127.0.0.1:3425 · Ctrl-C to stop</pre>
     </div>
-    <div class="callout"><b>端口先留在 127.0.0.1 上。</b>在<a href="#share">打开共享</a>之前，Docker 里的网关对任何能访问到它的人、任何 key（包括 <code>Bearer magpie</code>）都会应答。<code>-p 3425:3425</code> 会把它发布到宿主机的所有网卡上，绕过宿主机防火墙。等共享打开、有了网关密钥之后再往外发布。</div>
+    <div class="callout"><b>容器外的 Agent 需要网关密钥。</b>在容器里任何 key 都行。来自宿主机或其他机器的请求只有带上启用的网关密钥才会应答，不带的返回 401：按<a href="#share">网关密钥</a>里的步骤生成一个。<code>-p</code> 里的 <code>127.0.0.1:</code> 让端口只在宿主机上；去掉它，或写成宿主机的局域网或 VPN 地址，其他机器才能访问。</div>
     <p>不加 <code>web --addr 0.0.0.0:3430 --no-open</code> 时容器只跑网关，需要在容器终端里配置（<code>docker exec -it magpie magpie provider add …</code>）。也可以把一个目录绑定挂载到 <code>/config</code> 来代替命名卷，前提是 uid 65532 能写它：<code>sudo chown -R 65532:65532 /volume1/docker/magpie/config</code>。</p>
 
     <h2 id="web"><a class="anchor" href="#web">Web 界面</a></h2>
@@ -155,14 +155,15 @@ docker logs magpie</pre>
       <tr><td><code>HOME</code>、<code>XDG_CONFIG_HOME</code>、<code>XDG_CACHE_HOME</code>、<code>XDG_DATA_HOME</code>、<code>XDG_STATE_HOME</code></td><td>镜像已设为上面 <code>/config</code> 下的目录，不要改</td></tr>
     </table></div>
 
-    <h2 id="share"><a class="anchor" href="#share">给其他机器共享</a></h2>
+    <h2 id="share"><a class="anchor" href="#share">网关密钥与其他机器</a></h2>
     <ol class="steps">
-      <li><b>打开共享</b>在 Web 界面里：<span class="ui">设置</span> → <span class="ui">局域网共享</span> → <span class="ui">开启</span>。同时会生成一个名为 <span class="ui">Magpie</span> 的网关密钥。此后容器外的每个请求都必须带一个启用的网关密钥，不带的返回 401。不用界面的话，在 <code>/config/magpie/settings.json</code> 里写 <code>"lan": true</code>。</li>
-      <li><b>给每个客户端一个密钥</b><span class="ui">网关</span> → <span class="ui">网关密钥</span>，或在终端里 <code>docker exec magpie magpie gateway-key add "Laptop"</code>，它会打印新的 <code>sk-magpie-key-…</code>。每个密钥可以有自己的每日、每周或每月上限和可用模型（<code>magpie gateway-key limit</code>、<code>magpie gateway-key models</code>）。</li>
+      <li><b>给每个客户端生成一个密钥</b><span class="ui">网关</span> → <span class="ui">网关密钥</span>，或在终端里 <code>docker exec magpie magpie gateway-key add "Laptop"</code>，它会打印新的 <code>sk-magpie-key-…</code>。容器外的每个请求（包括宿主机自己的）都必须带一个启用的网关密钥，不带的返回 401。每个密钥可以有自己的每日、每周或每月上限和可用模型（<code>magpie gateway-key limit</code>、<code>magpie gateway-key models</code>）。</li>
       <li><b>发布端口</b>用 <code>-p 3425:3425</code>（或绑定到 NAS 的局域网或 VPN 地址，<code>-p 192.168.1.20:3425:3425</code>）并加上 <code>-e MAGPIE_PUBLIC_URL=http://192.168.1.20:3425</code> 重新创建容器。</li>
     </ol>
     <p>在其他电脑上，把 Agent 指向这个网关，用其中一个密钥作为 API key：OpenAI 客户端用 <code>http://192.168.1.20:3425/v1</code>，Anthropic 或 Gemini 客户端用 <code>http://192.168.1.20:3425</code>。模型 id 是 <code>provider/model</code> 或路由组的名字，<code>GET /v1/models</code> 会列出它们。如果那台电脑自己也运行 magpie，就把容器添加为<a href="/docs/zh/remote">远程 magpie</a>，由 magpie 替你配置 Agent。</p>
-    <div class="callout"><b>跨互联网访问时，优先用 VPN</b>（如 Tailscale 或 WireGuard），不要直接开放 3425。容器前面的反向代理或隧道也算网络：先打开共享，这样它的客户端才必须带网关密钥。</div>
+    <p>容器里不需要打开 <span class="ui">设置</span> → <span class="ui">局域网共享</span>：打开它会另外生成一个名为 <span class="ui">Magpie</span> 的网关密钥，而不论开关如何，网关都会向容器外的请求要密钥。</p>
+    <p><b>从旧镜像升级。</b>容器外发送 <code>magpie</code> 或其他非启用网关密钥的 Agent，现在会收到 401（“the API key sent is not an enabled magpie gateway key”）。按上面的步骤给它生成一个密钥，填进 Agent 的设置。已经发送网关密钥的 Agent，以及用网关密钥添加的远程 magpie，照常工作。</p>
+    <div class="callout"><b>跨互联网访问时，优先用 VPN</b>（如 Tailscale 或 WireGuard），不要直接开放 3425。容器前面的反向代理或隧道也算网络：它的客户端和其他机器一样需要网关密钥。</div>
 
     <h2 id="compose"><a class="anchor" href="#compose">在 NAS 上用 Docker Compose</a></h2>
     <div class="code">
@@ -173,7 +174,7 @@ docker logs magpie</pre>
     image: ghcr.io/yetone/magpie:latest
     restart: unless-stopped
     ports:
-      <span class="c"># 打开共享并有了网关密钥之前，只发布在回环地址上</span>
+      <span class="c"># 127.0.0.1：只在宿主机上；容器外的每个调用方都需要网关密钥</span>
       - "127.0.0.1:3425:3425"
       - "127.0.0.1:3430:3430"
     environment:
@@ -183,7 +184,7 @@ docker logs magpie</pre>
       - ./config:/config
     command: [web, --addr, 0.0.0.0:3430, --no-open]</pre>
     </div>
-    <p>然后：<code>sudo chown -R 65532:65532 ./config</code>，<code>docker compose up -d</code>，通过 SSH 隧道打开 <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code>，添加供应商，打开 <span class="ui">局域网共享</span>，给每台机器生成一个网关密钥。再把网关那一行改成 <code>"3425:3425"</code>（或 NAS 的局域网、VPN 地址），重新 <code>docker compose up -d</code>。</p>
+    <p>然后：<code>sudo chown -R 65532:65532 ./config</code>，<code>docker compose up -d</code>，通过 SSH 隧道打开 <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code>，添加供应商，给每台机器生成一个网关密钥。要让其他机器访问网关，把它那一行改成 <code>"3425:3425"</code>（或 NAS 的局域网、VPN 地址），重新 <code>docker compose up -d</code>。</p>
 
     <h2 id="ops"><a class="anchor" href="#ops">健康检查、终端与更新</a></h2>
     <ul>

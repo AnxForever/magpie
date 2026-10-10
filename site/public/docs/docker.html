@@ -75,7 +75,7 @@
     <a href="#signin">Sign in to subscriptions</a>
     <a href="#volume">What is kept</a>
     <a href="#env">Environment</a>
-    <a href="#share">Share it with other machines</a>
+    <a href="#share">Gateway keys and other machines</a>
     <a href="#compose">Docker Compose on a NAS</a>
     <a href="#ops">Health, terminal, updates</a>
   </aside>
@@ -116,7 +116,7 @@ docker logs magpie</pre>
 ! anyone with the link can change magpie and see its keys, and the network carries it unencrypted
   the link carries MAGPIE_WEB_KEY · gateway http://127.0.0.1:3425 · Ctrl-C to stop</pre>
     </div>
-    <div class="callout"><b>Keep the ports on 127.0.0.1 for now.</b> Until it is <a href="#share">shared</a>, a gateway in Docker answers anyone who reaches it, with any key (<code>Bearer magpie</code> included). <code>-p 3425:3425</code> would publish it on every interface of the host, past its firewall. Publish it further only after sharing is on and you have a gateway key.</div>
+    <div class="callout"><b>Agents outside the container need a gateway key.</b> In the container any key works. A request from the host or another machine is answered only with an enabled gateway key, and gets 401 without one: make one as in <a href="#share">Gateway keys</a>. <code>127.0.0.1:</code> in <code>-p</code> keeps a port on the host; leave it out, or name the host’s LAN or VPN address, for other machines to reach it.</div>
     <p>Without <code>web --addr 0.0.0.0:3430 --no-open</code> the container runs the gateway alone, which you then set up from a terminal in it (<code>docker exec -it magpie magpie provider add …</code>). A folder bind-mounted at <code>/config</code> works in place of the named volume, if uid 65532 can write it: <code>sudo chown -R 65532:65532 /volume1/docker/magpie/config</code>.</p>
 
     <h2 id="web"><a class="anchor" href="#web">The browser UI</a></h2>
@@ -155,14 +155,15 @@ docker logs magpie</pre>
       <tr><td><code>HOME</code>, <code>XDG_CONFIG_HOME</code>, <code>XDG_CACHE_HOME</code>, <code>XDG_DATA_HOME</code>, <code>XDG_STATE_HOME</code></td><td>set by the image to the folders under <code>/config</code> above; leave them</td></tr>
     </table></div>
 
-    <h2 id="share"><a class="anchor" href="#share">Share it with other machines</a></h2>
+    <h2 id="share"><a class="anchor" href="#share">Gateway keys and other machines</a></h2>
     <ol class="steps">
-      <li><b>Turn on sharing</b>In the browser UI, <span class="ui">Settings</span> → <span class="ui">Share on local network</span> → <span class="ui">On</span>. That also makes a gateway key named <span class="ui">Magpie</span>. From then on every request from outside the container must carry an enabled gateway key, and one without gets 401. Without the UI, put <code>"lan": true</code> in <code>/config/magpie/settings.json</code>.</li>
-      <li><b>Give each client a key</b><span class="ui">Gateway</span> → <span class="ui">Gateway keys</span>, or in a terminal <code>docker exec magpie magpie gateway-key add "Laptop"</code>, which prints the new <code>sk-magpie-key-…</code>. A key can have its own daily, weekly or monthly limit and its own list of models (<code>magpie gateway-key limit</code>, <code>magpie gateway-key models</code>).</li>
+      <li><b>Make a key for each client</b><span class="ui">Gateway</span> → <span class="ui">Gateway keys</span>, or in a terminal <code>docker exec magpie magpie gateway-key add "Laptop"</code>, which prints the new <code>sk-magpie-key-…</code>. Every request from outside the container, the host’s own included, must carry an enabled gateway key, and one without gets 401. A key can have its own daily, weekly or monthly limit and its own list of models (<code>magpie gateway-key limit</code>, <code>magpie gateway-key models</code>).</li>
       <li><b>Publish the port</b>Recreate the container with <code>-p 3425:3425</code>, or bound to the NAS’s LAN or VPN address (<code>-p 192.168.1.20:3425:3425</code>), and with <code>-e MAGPIE_PUBLIC_URL=http://192.168.1.20:3425</code>.</li>
     </ol>
     <p>On each other computer, point the agent at the gateway with one of those keys as its API key: <code>http://192.168.1.20:3425/v1</code> for an OpenAI client, <code>http://192.168.1.20:3425</code> for an Anthropic or Gemini one. Model ids are <code>provider/model</code>, or a routing group’s; <code>GET /v1/models</code> lists them. If that computer runs magpie itself, add the container as a <a href="/docs/remote">Remote magpie</a> instead, and magpie wires its agents for you.</p>
-    <div class="callout"><b>Over the internet, prefer a VPN</b> such as Tailscale or WireGuard to opening 3425. A reverse proxy or tunnel in front of the container is the network too: turn sharing on first, so that its clients need a gateway key.</div>
+    <p><span class="ui">Settings</span> → <span class="ui">Share on local network</span> isn’t needed in the container: turning it on also makes a gateway key named <span class="ui">Magpie</span>, and the gateway asks for a key from outside the container either way.</p>
+    <p><b>Upgrading from an earlier image.</b> An agent outside the container that sends <code>magpie</code>, or any other key that isn’t an enabled gateway key, now gets 401 (“the API key sent is not an enabled magpie gateway key”). Make it a key as above and put that in the agent’s settings. Agents that already send a gateway key, and a Remote magpie set up with one, keep working.</p>
+    <div class="callout"><b>Over the internet, prefer a VPN</b> such as Tailscale or WireGuard to opening 3425. A reverse proxy or tunnel in front of the container is the network too: its clients need a gateway key like any other machine’s.</div>
 
     <h2 id="compose"><a class="anchor" href="#compose">Docker Compose on a NAS</a></h2>
     <div class="code">
@@ -173,7 +174,7 @@ docker logs magpie</pre>
     image: ghcr.io/yetone/magpie:latest
     restart: unless-stopped
     ports:
-      <span class="c"># on loopback until sharing is on and there is a gateway key</span>
+      <span class="c"># 127.0.0.1: the host alone; every caller outside the container needs a gateway key</span>
       - "127.0.0.1:3425:3425"
       - "127.0.0.1:3430:3430"
     environment:
@@ -183,7 +184,7 @@ docker logs magpie</pre>
       - ./config:/config
     command: [web, --addr, 0.0.0.0:3430, --no-open]</pre>
     </div>
-    <p>Then: <code>sudo chown -R 65532:65532 ./config</code>, <code>docker compose up -d</code>, open <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code> through an SSH tunnel, add your providers, turn on <span class="ui">Share on local network</span> and make a gateway key for each machine. Then change the gateway’s line to <code>"3425:3425"</code> (or the NAS’s LAN or VPN address) and run <code>docker compose up -d</code> again.</p>
+    <p>Then: <code>sudo chown -R 65532:65532 ./config</code>, <code>docker compose up -d</code>, open <code>http://127.0.0.1:3430/?k=&lt;random-key&gt;</code> through an SSH tunnel, add your providers and make a gateway key for each machine. For other machines to reach the gateway, change its line to <code>"3425:3425"</code> (or the NAS’s LAN or VPN address) and run <code>docker compose up -d</code> again.</p>
 
     <h2 id="ops"><a class="anchor" href="#ops">Health, terminal, updates</a></h2>
     <ul>
