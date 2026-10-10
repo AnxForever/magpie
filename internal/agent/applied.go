@@ -102,6 +102,11 @@ func (a *Agent) Apply(key, v string) error {
 		}
 	}
 	record(a.ID, f.Key, f.Get())
+	// magpie picked in by the user's own hand (magpie model, a pick in
+	// the CLI) connects it again
+	if a.Wired() {
+		forget(a.ID + disconnectedKey)
+	}
 	return nil
 }
 
@@ -479,7 +484,16 @@ func (a *Agent) ConnectHow() (Connection, error) {
 	return a.connect()
 }
 
+// disconnectedKey, after an agent's id, marks in the stash an agent the
+// user disconnected: Disconnect sets it, connecting again takes it out.
+const disconnectedKey = ".disconnected"
+
+// Disconnected reports whether the user disconnected the agent and hasn't
+// connected it since.
+func (a *Agent) Disconnected() bool { return stashLoad()[a.ID+disconnectedKey] == "1" }
+
 func (a *Agent) connect() (Connection, error) {
+	forget(a.ID + disconnectedKey)
 	// what it is on now, for Disconnect to put back what it can't
 	// otherwise (Goose's own model)
 	now := a.Values()
@@ -647,6 +661,10 @@ func (a *Agent) Disconnect() error {
 	if !a.Wired() {
 		return nil
 	}
+	// the user's say, kept till they connect it again: nothing magpie does
+	// by itself (a start's Sync, Codex's account failover) puts magpie back
+	// in, this Disconnect's own writes included (paynezhuang on Discord)
+	stash(map[string]string{a.ID + disconnectedKey: "1"})
 	before, rec := a.Values(), appliedOf(a.ID)
 	if a.Unwire != nil {
 		if err := a.Unwire(); err != nil {
