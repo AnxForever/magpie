@@ -28,6 +28,15 @@
   let fitObserver = null;
   let focus = null;           // { agent, id, until }: a session to bring into sight once drawn
   let recordingBusy = false;
+  // An open folder draws its latest SM_PAGE sessions and a "Show N more"
+  // that adds the next page where it is (ChildhoodAndy on X: with thousands
+  // of sessions, switching to the page or to another agent, a keystroke in
+  // the filter and opening a session each drew every row again, 17,000
+  // elements for 1,000 sessions, and scrolling stuttered). drawnIn is how
+  // many of each folder's sessions are drawn, by cwd; it starts again at a
+  // page when the agent or the filter changes.
+  const SM_PAGE = 100;
+  const drawnIn = new Map();
 
   // A session seen only through magpie's gateway has no folder magpie knows
   // (its agent's files are on another computer, in a container or under
@@ -243,8 +252,8 @@
     q.placeholder = t("Filter sessions");
     q.value = query;
     q.hidden = trashOn;
-    q.oninput = () => { query = q.value; redrawList(); };
-    q.onkeydown = (e) => { if (e.key === "Escape" && q.value) { e.stopPropagation(); q.value = ""; query = ""; redrawList(); } };
+    q.oninput = () => { query = q.value; drawnIn.clear(); redrawList(); };
+    q.onkeydown = (e) => { if (e.key === "Escape" && q.value) { e.stopPropagation(); q.value = ""; query = ""; drawnIn.clear(); redrawList(); } };
     const tr = el("button", "text sm-trash-btn" + (trashOn ? " on" : ""));
     tr.type = "button";
     tr.setAttribute("aria-pressed", String(trashOn));
@@ -455,6 +464,7 @@
     if (openedFor !== data.agent) {
       openedFor = data.agent;
       opened.clear();
+      drawnIn.clear();
       if (list[0]) opened.add(groupOf(list[0]));
     }
     const groups = new Map();
@@ -508,10 +518,38 @@
 
       r.title = path;
       g.append(r);
-      if (open) for (const s of items) g.append(item(s));
+      if (open) {
+        // a page, or as many as were drawn before, and down to the session
+        // opened to its details (from the Usage page's list, #752)
+        const at = detail ? items.findIndex((s) => s.id === detail) : -1;
+        const n = Math.min(items.length, Math.max(drawnIn.get(cwd) || SM_PAGE, at + 1));
+        for (const s of items.slice(0, n)) g.append(item(s));
+        if (n < items.length) g.append(moreRow(cwd, items, n));
+      }
       tree.append(g);
     }
     toFocus();
+  }
+
+  // moreRow adds the folder's next page of sessions above itself, leaving
+  // the rows drawn as they are, so what the reader looks at doesn't move
+  function moreRow(cwd, items, n) {
+    drawnIn.set(cwd, n);
+    const b = el("button", "text sess-page-more sm-more");
+    b.type = "button";
+    b.dataset.unrolls = ""; // it goes down with the rows it opens
+    const label = () => t("Show {n} more", { n: Math.min(SM_PAGE, items.length - n) });
+    b.textContent = label();
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const next = Math.min(items.length, n + SM_PAGE);
+      b.before(...items.slice(n, next).map(item));
+      n = next;
+      drawnIn.set(cwd, n);
+      if (n >= items.length) b.remove();
+      else b.textContent = label();
+    };
+    return b;
   }
 
   function item(s) {
@@ -580,10 +618,17 @@
       del.onclick = (e) => { e.stopPropagation(); askDelete([s.id]); };
       r.append(del);
     }
+    // only the session opened and the one closed are drawn again
     r.onclick = () => {
       if (window.getSelection()?.toString()) return;
+      const was = detail;
       detail = detail === s.id ? "" : s.id;
-      redrawList();
+      if (was && was !== s.id) {
+        const old = page.querySelector(`.row.sm-sess[data-id="${CSS.escape(was)}"]`)?.closest(".sm-item");
+        const prev = data.sessions.find((x) => x.id === was);
+        if (old && prev) old.replaceWith(item(prev));
+      }
+      wrap.replaceWith(item(s));
     };
     wrap.append(r);
     if (detail === s.id) wrap.append(details(s));
