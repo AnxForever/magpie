@@ -19944,6 +19944,23 @@ function renderReplies(s, keep) {
   box.append(r, l);
 }
 
+// REDACT_KINDS are redact.Categories as Settings lists them: id, name,
+// what it finds, and whether it is masked until the user chooses (a Go test
+// holds the ids and the defaults to redact's). The ones in nearly every
+// coding request (the agent's folder, logs, configs) are off.
+const REDACT_KINDS = [
+  ["ssn", "Social Security numbers", "US SSNs, in the ranges that are given out", true],
+  ["passport", "Passport numbers", "After the word passport, 护照 or パスポート", true],
+  ["iban", "IBANs", "Bank account numbers whose checksum adds up", true],
+  ["birthday", "Birthdays", "A date after birthday, DOB, born or 生日; a date alone stays", true],
+  ["mac", "MAC addresses", "A network card's hardware address", true],
+  ["serial", "Serial numbers", "After S/N, Serial or 序列号", true],
+  ["home", "User name in home folders", "The name in /Users/name, /home/name and C:\\Users\\name. Off by default: agents send their folder with every request", false],
+  ["userhost", "User and computer names", "user@host in a shell prompt or an ssh command, and hostname or user lines", false],
+  ["ip", "Public IP addresses", "Private, local and documentation addresses stay. Off by default: logs and configs are full of them", false],
+  ["bucket", "Cloud storage buckets", "The bucket in s3://, gs://, oss://, cos:// and storage URLs; the path in it stays", false],
+];
+
 // renderRedact: what the gateway masks before a request goes to a vendor —
 // secrets, personal data, the user's own words — and puts back in what the
 // vendor answers.
@@ -19968,6 +19985,19 @@ function renderRedact(s, keep) {
       if (redactPersonal) window.hideAccounts?.set(true);
       savePrefs({ ...keep, redactPersonal });
     }));
+  // each other kind of personal data, on or off of its own while personal
+  // data is masked; only the user's choices are kept (redactKinds)
+  if (s.redactPersonal) for (const [id, name, sub, on] of REDACT_KINDS) {
+    const kinds = s.redactKinds || {};
+    const r = el("div", "row pref redact-kind");
+    r.dataset.redact = id;
+    const who = el("div", "who");
+    who.append(el("div", "name", t(name)), el("div", "sub", t(sub)));
+    const val = el("div", "val");
+    val.append(onOff(kinds[id] ?? on, (v) => savePrefs({ ...keep, redactKinds: { ...kinds, [id]: v } })));
+    r.append(who, val);
+    box.append(r);
+  }
   // Routing's and Usage's Hide accounts, here too, where privacy is looked for
   if (window.hideAccounts) row(t("Hide accounts"), t("Email addresses and account names on Usage and Routing are blurred, for a screenshot to share"),
     onOff(window.hideAccounts.on(), (on) => { window.hideAccounts.set(on); renderSettings(); }));
@@ -20520,7 +20550,7 @@ function prefsKeep(s) {
     uiFont: s.uiFont || null, codeFont: s.codeFont || null,
     otel: s.otel || {},
     trayUsages: s.trayUsages || [],
-    redact: !!s.redact, redactPersonal: !!s.redactPersonal, redactWords: s.redactWords || [], codexWarmup: s.codexWarmup || "",
+    redact: !!s.redact, redactPersonal: !!s.redactPersonal, redactKinds: s.redactKinds || {}, redactWords: s.redactWords || [], codexWarmup: s.codexWarmup || "",
     claudeWarmup: s.claudeWarmup || "", codexWarmAt: s.codexWarmAt || "", claudeWarmAt: s.claudeWarmAt || "",
     codexWarmAts: warmTimes(s.codexWarmAts, s.codexWarmAt), claudeWarmAts: warmTimes(s.claudeWarmAts, s.claudeWarmAt), workbuddyCheckin: !!s.workbuddyCheckin, traeCheckin: !!s.traeCheckin, minimaxCheckin: !!s.minimaxCheckin, qoderCheckin: !!s.qoderCheckin, noStats: !!s.noStats, noUsageStats: !!s.noUsageStats,
     memberModel: !!s.memberModel, noLoopGuard: !!s.noLoopGuard,

@@ -2647,6 +2647,9 @@ input.words.compact-num { flex: none; width: 76px; font-variant-numeric: tabular
 .row.pref.rule-row { flex-wrap: wrap; row-gap: 8px; }
 .row.pref.rule-row .who { flex: 1 1 100%; }
 .row.pref.rule-row .sub { white-space: normal; }
+/* a kind of personal data, under Mask personal data */
+.row.pref.redact-kind .who { padding-left: 14px; min-width: 0; }
+.row.pref.redact-kind .sub { white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 /* an update that failed says why in full (the version row) */
 .row .sub.wraps { white-space: normal; overflow-wrap: anywhere; }
 .prefs .val.rule-add { flex: 1 1 100%; max-width: none; margin-left: 0; gap: 6px; }
