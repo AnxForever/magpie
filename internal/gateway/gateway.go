@@ -898,13 +898,17 @@ func (s *Server) model(w http.ResponseWriter, r *http.Request) {
 // for it (claudeLooking): anthropic/magpie-<number>, mythos-magpie-<number>,
 // magpie-<number>.anthropic.<Claude model>, or, as it listed them
 // before, "anthropic/" put in front of magpie's id — or by its flat
-// spelling (unflat). An id that is magpie's as it stands (a provider named
+// spelling (unflat) or its Claude version dashed (provider.ClaudeUndashed).
+// An id that is magpie's as it stands (a provider named
 // anthropic) is left alone.
 func unprefixed(id string) string {
 	if real, ok := aliased(id); ok {
 		return real
 	}
 	if real := unflat(id); real != id {
+		return real
+	}
+	if real, ok := provider.ClaudeUndashed(id); ok {
 		return real
 	}
 	rest, ok := strings.CutPrefix(id, "anthropic/")
@@ -4760,6 +4764,11 @@ func validateModel(model string) (string, error) {
 	}
 	if p, m, ok := strings.Cut(model, "/"); ok && (p == "" || m == "") {
 		return "", errors.New("invalid request: expected provider/model with both parts nonempty")
+	}
+	if real, ok := provider.ClaudeUndashed(model); ok {
+		// Claude Code is given a dotted Claude id with dashes, which it
+		// otherwise reads as Claude Opus 4 (provider.ClaudeSpelled)
+		return real, nil
 	}
 	return unflat(model), nil
 }
