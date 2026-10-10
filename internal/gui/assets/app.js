@@ -2936,11 +2936,16 @@ const TIER_EFFORTS = TIERS.map((tier) => tier + " effort");
 const FOLLOWS_MODEL = [...TIERS, "subagents", "smol", "slow"];
 // omp's roles share one square as Claude Code's tiers do (#1397), each
 // with its thinking level under its model: the level omp reads off the end
-// of the role's model ("…:high"). plan, vision and advisor don't follow
-// the model: unset, omp picks for each itself, the advisor the slow
-// role's model first
-const OMP_ROLES = ["subagents", "smol", "slow", "plan", "vision", "advisor"];
-const OMP_OWN_PICK = ["plan", "vision", "advisor"];
+// of the role's model ("…:high"). The roles after slow don't follow the
+// model; each says what omp does when it is unset: plan and vision are
+// omp's own pick, the advisor the slow role's model first, commit and tiny
+// the smol role's, memory the tiny role's (omp's chat roles, #1397)
+const OMP_UNSET = {
+  plan: "omp's own pick", vision: "omp's own pick", advisor: "the slow role's model, else omp's own pick",
+  commit: "the smol role's model", tiny: "the smol role's model", memory: "the tiny role's model, else the smol role's",
+};
+const OMP_OWN_PICK = Object.keys(OMP_UNSET);
+const OMP_ROLES = ["subagents", "smol", "slow", ...OMP_OWN_PICK];
 // omp, a named profile of it (omp#<name>) or either in a WSL distro
 const ompAgent = (a) => a.id.split("@wsl:")[0].split("#")[0] === "omp";
 // the roles an agent's square lists, and whether a field is one of them or
@@ -3060,8 +3065,7 @@ function tierMenu(a) {
   // Claude model of that tier magpie serves, else on the chat's model
   const main = a.fields.find((f) => f.key === "model");
   const mainName = main && (optionFor(main, main.value)?.label || main.value);
-  const unset = (f) => omp && f.label === "advisor" ? t("the slow role's model, else omp's own pick")
-    : omp && OMP_OWN_PICK.includes(f.label) ? t("omp's own pick")
+  const unset = (f) => omp && OMP_OWN_PICK.includes(f.label) ? t(OMP_UNSET[f.label])
     : main ? t("same as model ({model})", { model: mainName }) : t("a Claude model of the tier, else the chat's model");
   // a tier's effort, offered while there are levels to pick (Claude Code
   // through magpie); unset, the tier runs at the effort Claude Code asks.
@@ -3790,8 +3794,7 @@ function openPicker(agent, field, anchor, ev, only) {
       : PICKS_ITSELF.includes(agent.id) && field.key === "model" ? "clears the default model; {agent} picks one on its own"
       : field.label === MEMORIES ? MEMORIES_DEFAULT
       : field.label === SUB_MODEL ? "each subagent on the model {agent}'s lead asks for"
-      : ompAgent(agent) && field.label === "advisor" ? "the slow role's model, else omp's own pick"
-      : ompAgent(agent) && OMP_OWN_PICK.includes(field.label) ? "omp's own pick"
+      : ompAgent(agent) && OMP_OWN_PICK.includes(field.label) ? OMP_UNSET[field.label]
       : asideAccount(agent, field) ? "the account active in {agent}"
       : "what {agent} ships with";
     options.unshift({ value: "", label: t("Default"), note: t(note, { agent: agent.name, field: t(field.label) }), icon: agent.icon, reset: true });

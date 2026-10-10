@@ -359,6 +359,18 @@ func ompAt(at place, dir string, entry func() ompProviderEntry) *Agent {
 		role("plan", "plan", "plan", true),
 		role("vision", "vision", "vision", true),
 		role("advisor", "advisor", "advisor", true),
+		// the rest of omp's chat roles (CHAT_MODEL_ROLE_IDS in pi-tui's
+		// model-browser.ts, 18.6 to 18.8.8; #1397 named commit and tiny):
+		// commit writes commit messages and falls to smol when unset
+		// (commit/model-selection.ts), tiny names sessions and classifies
+		// and takes smol's model, memory takes tiny's, else smol's
+		// (ROLE_CONFIGURED_FALLBACK). omp's other roles (KIND_ROLE_IDS)
+		// are for kinds of model other than the chat models magpie writes
+		// for omp: image making, web search, speech, dictation, and the
+		// judge its find tool turns on for a TypeSafe jev model
+		role("commit", "commit", "commit", true),
+		role("tiny", "tiny", "tiny", true),
+		role("memory", "memory", "memory", true),
 	}
 	// each role but the default one has a thinking level of its own, the
 	// ":level" omp reads off the end of the role's model
