@@ -72,6 +72,10 @@ const (
 	// CheckinCaptcha is a plugin's check-in the vendor asked a captcha
 	// of: the user checks in in its own app, magpie never solves one
 	CheckinCaptcha = "captcha"
+	// CheckinOwnApp is a check-in the vendor pays out only to its own
+	// app (Trae CN's 9074 to a device its app didn't register): an
+	// answer for the day, and the user checks in in the vendor's app
+	CheckinOwnApp = "own-app"
 )
 
 // wbCheckinSoon is how long a check-in that never reached WorkBuddy waits

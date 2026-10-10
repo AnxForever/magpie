@@ -827,12 +827,32 @@ func checkinWords(r provider.WorkBuddyCheckin) string {
 		return who + ": no check-in event now"
 	case provider.CheckinCaptcha:
 		return who + " asks for a captcha: check in in its own app"
+	case provider.CheckinOwnApp:
+		return who + ": " + ownAppWords(r)
 	}
 	msg := r.Msg
 	if msg == "" {
 		msg = "no answer"
 	}
 	return who + " couldn't check in: " + msg
+}
+
+// ownAppName is the vendor whose own app alone gets r's check-in credits.
+func ownAppName(r provider.WorkBuddyCheckin) string {
+	switch {
+	case r.By == "trae":
+		return "Trae CN"
+	case r.Vendor != "":
+		return r.Vendor
+	}
+	return "the vendor"
+}
+
+// ownAppWords says a check-in the vendor pays only to its own app
+// (Trae CN's 9074, #808) is to be done in that app.
+func ownAppWords(r provider.WorkBuddyCheckin) string {
+	name := ownAppName(r)
+	return name + " only gives check-in credits to its own app; check in in the " + name + " app"
 }
 
 // checkinCell is a WorkBuddy (China) or Trae CN account's check-in on its
@@ -862,6 +882,8 @@ func checkinCell(q provider.SubscriptionQuota, now time.Time) string {
 		return sMuted.Render("签到 no event now")
 	case provider.CheckinCaptcha:
 		return sMuted.Render("签到 needs a captcha · check in in its app")
+	case provider.CheckinOwnApp:
+		return sMuted.Render("签到 only in " + ownAppName(*r) + "'s own app · check in there")
 	}
 	return sBad.Render("签到 failed") + sMuted.Render(" · c tries again")
 }

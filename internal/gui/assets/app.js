@@ -15027,6 +15027,11 @@ function checkinRow(q, first, subs) {
         // the vendor wants a captcha, which magpie never solves
         text = t("Asks for a captcha; check in in its own app") + (r.msg ? " · " + r.msg : "");
         break;
+      case "own-app":
+        // the vendor pays only its own app (Trae CN's 9074, #808): not
+        // tried again today
+        text = t("{name} only gives check-in credits to its own app; check in in the {name} app", { name: checkinVendorName(r, q.name) });
+        break;
       default:
         kind = "bad";
         // why, in the row: a reason only in the tooltip read as no reason (#808)
@@ -15040,7 +15045,7 @@ function checkinRow(q, first, subs) {
   const say = el("span", "ci-say");
   say.append(el("i", "ci-dot" + (kind ? " " + kind : "")), el("span", "", text));
   say.title = [t(vendor.say),
-    r?.outcome === "failed" || r?.outcome === "ineligible" ? r.msg : ""].filter(Boolean).join("\n");
+    r?.outcome === "failed" || r?.outcome === "ineligible" || r?.outcome === "own-app" ? r.msg : ""].filter(Boolean).join("\n");
   row.append(say);
   if (!first) return row;
   const auto = el("button", "text ci-auto" + (on ? " on" : ""), t("Auto check-in"));
@@ -15083,6 +15088,12 @@ function checkinRow(q, first, subs) {
     row.append(now);
   }
   return row;
+}
+
+// checkinVendorName is the vendor of check-in r by name: a plugin's as
+// it says, a built-in check-in's own, else fallback.
+function checkinVendorName(r, fallback) {
+  return r?.vendor || { trae: "Trae CN", minimax: "MiniMax Code", qoder: "Qoder", "": "WorkBuddy" }[r?.by || ""] || fallback || "";
 }
 
 // wbToday is today as WorkBuddy's check-in counts it, a Beijing day
@@ -20819,6 +20830,8 @@ function wbCheckinLine(r) {
       return t("{user}: no check-in event now", { user: r.user });
     case "captcha":
       return t("{user} is asked for a captcha; check in in the app", { user: r.user });
+    case "own-app":
+      return t("{user}: {name} only gives check-in credits to its own app; check in in the {name} app", { user: r.user, name: checkinVendorName(r) });
     default:
       return t("{user} couldn't check in, tried again later", { user: r.user });
   }
