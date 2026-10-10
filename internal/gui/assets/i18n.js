@@ -4,6 +4,10 @@
 // works. {name} slots are filled by t(str, vars).
 const I18N = {
   zh: {
+    "account": "账号",
+    "active in Aside": "Aside 正在使用",
+    "the account active in {agent}": "{agent} 当前使用的账号",
+    "Local Account": "本地账号",
     "Yesterday": "昨天",
     "This month": "本月",
     "Last month": "上个月",
@@ -4088,6 +4092,10 @@ const I18N = {
     "Video · 7 days": "视频 · 7 天",
   },
   "zh-TW": {
+    "account": "帳號",
+    "active in Aside": "Aside 正在使用",
+    "the account active in {agent}": "{agent} 目前使用的帳號",
+    "Local Account": "本機帳號",
     "Yesterday": "昨天",
     "This month": "本月",
     "Last month": "上個月",
@@ -8155,6 +8163,10 @@ const I18N = {
     "Video · 7 days": "影片 · 7 天",
   },
   ja: {
+    "account": "アカウント",
+    "active in Aside": "Aside で使用中",
+    "the account active in {agent}": "{agent} で使用中のアカウント",
+    "Local Account": "ローカルアカウント",
     "Yesterday": "昨日",
     "This month": "今月",
     "Last month": "先月",
@@ -12224,6 +12236,10 @@ const I18N = {
     "Main navigation": "メインナビゲーション",
   },
   de: {
+    "account": "Konto",
+    "active in Aside": "in Aside aktiv",
+    "the account active in {agent}": "das in {agent} aktive Konto",
+    "Local Account": "Lokales Konto",
     "Yesterday": "Gestern",
     "This month": "Dieser Monat",
     "Last month": "Letzter Monat",

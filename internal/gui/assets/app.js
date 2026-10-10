@@ -301,7 +301,8 @@ function renderAgents() {
     // Code's, until it runs through magpie where magpie takes any key), or
     // a small model with none to pick (Snow CLI's, on a profile of the
     // user's own)
-    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in" || f.key === "small") && !f.options.length && !f.value;
+    // nor Aside's account with one account only (#1499)
+    const none = (f) => (f.key === "effort" || f.key === "ultracode" || f.label === "subagents" || f.label === SUB_EFFORT || f.label === SUB_MODEL || f.label === MEMORIES || f.label === "sign-in" || f.key === "small" || asideAccount(a, f)) && !f.options.length && !f.value;
     const shownFields = a.fields.filter((f) => !grouped(a, f) && !none(f));
     const tiers = tierMenu(a);
     if (tiers) shownFields.push(tiers);
@@ -3791,6 +3792,7 @@ function openPicker(agent, field, anchor, ev, only) {
       : field.label === SUB_MODEL ? "each subagent on the model {agent}'s lead asks for"
       : ompAgent(agent) && field.label === "advisor" ? "the slow role's model, else omp's own pick"
       : ompAgent(agent) && OMP_OWN_PICK.includes(field.label) ? "omp's own pick"
+      : asideAccount(agent, field) ? "the account active in {agent}"
       : "what {agent} ships with";
     options.unshift({ value: "", label: t("Default"), note: t(note, { agent: agent.name, field: t(field.label) }), icon: agent.icon, reset: true });
   }
@@ -4262,7 +4264,9 @@ function renderList() {
     if (rate) words.append(rate);
     const ctx = contextTag(o.context, o.label);
     if (ctx) words.append(ctx);
-    let note = o.note && o.note !== (o.label || o.value) ? (own ? t(o.note) : o.note) : "";
+    // an Aside account's note is its e-mail, or Aside's "Local Account",
+    // then whether Aside has it active: the words are magpie's, the e-mail not
+    let note = o.note && o.note !== (o.label || o.value) ? (own ? t(o.note) : asideAccount(pick.agent, pick.field) ? o.note.split(" · ").map((w) => t(w)).join(" · ") : o.note) : "";
     // which way the model goes, as a tag the note's ellipsis can't cut
     // off: "· via magpie" ended a long note (an account's e-mail), and
     // Claude Code's own models said nothing, so an Opus asked of Anthropic
@@ -4443,6 +4447,12 @@ async function commit(value) {
   // (#726)
   if (leavesMagpie(agent, field, value, opt)) { askLeave(agent, field, value, opt); return; }
   return setPick(agent, field, value, opt);
+}
+
+// asideAccount: Aside's account field, which of its accounts (~/.aside/u/N)
+// magpie configures; empty follows the one Aside has active (#1499)
+function asideAccount(a, f) {
+  return a?.id === "aside" && f?.key === "account";
 }
 
 // leavesMagpie: picking value in field takes the connected agent off
