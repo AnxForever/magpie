@@ -76,6 +76,12 @@ type pluginEntryJSON struct {
 	// Package is the package installed from a git repository, which its
 	// own package.json names
 	Package string `json:"package,omitempty"`
+	// Commit is the commit of its repository a git one was installed at,
+	// and Head the commit the repository was at when last asked (asking
+	// it again is /api/plugins/git's): an update is out only when they
+	// differ, whatever the version in its package.json says
+	Commit string `json:"commit,omitempty"`
+	Head   string `json:"head,omitempty"`
 	// Moved are the built-in subscriptions moved onto it, which go back
 	// to themselves when it is removed or turned off
 	Moved []string `json:"moved"`
@@ -175,6 +181,7 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		}
 		if plugin.IsGit(e.Spec) {
 			j.Package = plugin.Name(e.Spec)
+			j.Commit, j.Head = plugin.ShortCommit(plugin.GitCommit(e.Spec)), plugin.ShortCommit(plugin.GitHeadCached(e.Spec))
 		}
 		if u, ok := plugin.LastUpdated(plugin.Name(e.Spec), time.Now().Add(-autoUpdatedFor)); ok && !plugin.IsPath(e.Spec) {
 			j.AutoUpdated = &u
@@ -339,6 +346,14 @@ func pluginRoutes(mux *http.ServeMux, w Windows) {
 			repos[i].Icon = ic
 		}
 		writeJSON(rw, map[string]any{"repos": repos, "topic": plugin.Topic})
+	})
+	// the commit each installed git plugin's repository is at now (asked
+	// at most every ten minutes), by spec; one that didn't answer is left
+	// out
+	mux.HandleFunc("GET /api/plugins/git", func(rw http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		writeJSON(rw, map[string]any{"heads": plugin.GitHeads(ctx)})
 	})
 	mux.HandleFunc("GET /api/plugins/npm", func(rw http.ResponseWriter, r *http.Request) {
 		names := []string{}
