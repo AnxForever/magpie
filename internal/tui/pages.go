@@ -844,6 +844,8 @@ func ownAppName(r provider.WorkBuddyCheckin) string {
 		return "Trae CN"
 	case r.Vendor != "":
 		return r.Vendor
+	case r.By == "":
+		return "WorkBuddy"
 	}
 	return "the vendor"
 }
