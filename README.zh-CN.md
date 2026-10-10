@@ -190,6 +190,23 @@ flowchart LR
   <img width="760" src="site/public/img/routing-zh-light.png" alt="路由页：四个 Agent 经过 magpie 连到七个 provider，实时显示">
 </picture>
 
+<table>
+<tr>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/img/intent-trace-zh-dark.png">
+  <img src="site/public/img/intent-trace-zh-light.png" alt="一轮意图路由，逐步解释">
+</picture>
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/img/nested-routing-zh-dark.png">
+  <img src="site/public/img/nested-routing-zh-light.png" alt="路由组里套路由组">
+</picture>
+</td>
+</tr>
+</table>
+
 ### 插件
 
 ```sh

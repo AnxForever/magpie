@@ -190,6 +190,23 @@ A conversation **stays with the account that answered it** while the vendor's pr
   <img width="760" src="site/public/img/routing-light.png" alt="The Routing view: four agents through magpie to seven providers, live">
 </picture>
 
+<table>
+<tr>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/img/intent-trace-dark.png">
+  <img src="site/public/img/intent-trace-light.png" alt="An intent-routed turn, explained step by step">
+</picture>
+</td>
+<td width="50%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="site/public/img/nested-routing-dark.png">
+  <img src="site/public/img/nested-routing-light.png" alt="A routing group inside a routing group">
+</picture>
+</td>
+</tr>
+</table>
+
 ### Plugins
 
 ```sh
