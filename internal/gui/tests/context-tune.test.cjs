@@ -6,7 +6,8 @@
 // leanest says so and has no button; one a variable comes before is told
 // of and has none either; one magpie put in has Undo. Drawn before the
 // gateway has read anything, in Chromium and WebKit, at a phone's width and
-// a desk's, in every language, none of it wider than the page.
+// a desk's, in every language, none of it wider than the page. Each row
+// draws what every setting would have spent past the advice.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -107,7 +108,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(await rows.nth(0).locator(".ctx-tune-val.best b").innerText(), /160K/);
         assert.match(await rows.nth(2).locator(".ctx-tune-src").innerText(), /CLAUDE_CODE_PROMPT_CACHE_TTL/);
         assert.equal(await rows.nth(1).locator(".ctx-tune-val.best").count(), 0, "a window already the leanest shows no other");
-        assert.equal(await page.locator(".ctx-tune-curve svg").first().isVisible(), width > 520);
+        // the curve is what each setting spends past the advice: the window
+        // set now says how much more, the advice sits on the level
+        assert.equal(await rows.nth(0).locator(".ctx-tc-dot.now .ctx-tc-tag").innerText(), "+42%");
+        assert.equal(await rows.nth(0).locator(".ctx-tc-dot.best").evaluate((e) => e.style.top), "84%");
+        assert.equal(await rows.nth(2).locator(".ctx-tc-x span").count(), 2, "a cache lifetime's two choices");
+        assert.ok(await rows.nth(0).locator(".ctx-tune-chart svg").isVisible());
 
         // nothing wider than the page, nor than its card
         const over = await page.evaluate(() => {

@@ -732,31 +732,74 @@
   };
   const ttlName = (v) => v === "1h" ? t("1 hour") : v === "5m" ? t("5 min") : v || "—";
 
-  // curve draws what the range would have cost at each window, the one
-  // set and the best marked on it
-  function curve(c) {
-    const pts = c.curve || [];
+  // chart draws what each setting would have cost over the range, as the
+  // tokens it spends past the advice: the area over the advice's level is
+  // what the others waste, and the one set now says how much
+  let chartN = 0;
+  function chart(pts, current, best, show) {
     if (pts.length < 2) return null;
-    const W = 220, H = 44, pad = 4;
-    const xs = pts.map((p) => p.value), ys = pts.map((p) => p.cost);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const x = (v) => pad + ((v - x0) / (x1 - x0 || 1)) * (W - 2 * pad);
-    const y = (v) => H - pad - ((v - y0) / (y1 - y0 || 1)) * (H - 2 * pad);
-    const d = pts.map((p, i) => (i ? "L" : "M") + x(p.value).toFixed(1) + " " + y(p.cost).toFixed(1)).join(" ");
-    const box = el("div", "ctx-tune-curve");
+    const near = (v) => pts.reduce((a, p) => Math.abs(p.value - v) < Math.abs(a.value - v) ? p : a, pts[0]);
+    const now = typeof current === "number" ? near(current) : pts.find((p) => p.value === current);
+    const top = typeof best === "number" ? near(best) : pts.find((p) => p.value === best);
+    if (!top) return null;
+    // measured from the advice, not the cheapest point: tune takes the
+    // largest window within 1% of it, and those cost nothing more here
+    const low = top.cost;
+    const extra = (p) => Math.max(0, p.cost - low);
+    const most = Math.max(...pts.map(extra));
+    if (!(most > 0)) return null;
+    const worst = pts.reduce((a, p) => p.cost > a.cost ? p : a, pts[0]);
+    const W = 300, H = 100, top0 = 22, base = 84;
+    const X = (i) => (i / (pts.length - 1)) * W;
+    const Y = (p) => base - (extra(p) / most) * (base - top0);
+    const xy = pts.map((p, i) => [X(i), Y(p)]);
+    // a smooth line through every point that never swings past its neighbours
+    let d = `M${xy[0][0].toFixed(1)} ${xy[0][1].toFixed(1)}`;
+    for (let i = 1; i < xy.length; i++) {
+      const [x0, y0] = xy[i - 1], [x1, y1] = xy[i], m = (x1 - x0) / 2;
+      d += ` C${(x0 + m).toFixed(1)} ${y0.toFixed(1)} ${(x1 - m).toFixed(1)} ${y1.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+    }
+    const id = "ctx-waste-" + ++chartN;
+    const box = el("div", "ctx-tune-chart");
     const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     s.setAttribute("viewBox", `0 0 ${W} ${H}`);
     s.setAttribute("preserveAspectRatio", "none");
-    const at = (v) => pts.reduce((a, p) => Math.abs(p.value - v) < Math.abs(a.value - v) ? p : a, pts[0]);
-    const now = at(c.current), best = at(c.best);
-    s.innerHTML = `<path class="line" d="${d}"/>` +
-      (now.value !== best.value ? `<circle class="now" cx="${x(now.value).toFixed(1)}" cy="${y(now.cost).toFixed(1)}" r="3"/>` : "") +
-      `<circle class="best" cx="${x(best.value).toFixed(1)}" cy="${y(best.cost).toFixed(1)}" r="3.5"/>`;
-    box.append(s);
-    const ends = el("div", "ctx-tune-ends");
-    ends.append(el("span", "", fmtK(x0)), el("span", "", fmtK(x1)));
-    box.append(ends);
-    box.dataset.tt = t("What the range would have cost at each window: lower is fewer tokens");
+    s.innerHTML = `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0" class="hot"/><stop offset="1" class="cool"/></linearGradient></defs>` +
+      `<line class="level" x1="0" x2="${W}" y1="${base}" y2="${base}"/>` +
+      `<path class="area" fill="url(#${id})" d="${d} L${W} ${base} L0 ${base} Z"/>` +
+      `<path class="line" d="${d}"/>`;
+    const plot = el("div", "ctx-tc-plot");
+    plot.append(s);
+    box.append(plot);
+    const at = (p, cls, label) => {
+      const i = pts.indexOf(p);
+      const dot = el("span", "ctx-tc-dot " + cls);
+      dot.style.left = (i / (pts.length - 1)) * 100 + "%";
+      dot.style.top = (Y(p) / H) * 100 + "%";
+      if (label) {
+        const tag = el("b", "ctx-tc-tag", label);
+        if (i === 0) tag.classList.add("start");
+        if (i === pts.length - 1) tag.classList.add("end");
+        dot.append(tag);
+      }
+      dot.dataset.tt = p === top
+        ? t("{value}: the fewest tokens for how you work", { value: show(p.value) })
+        : t("{value}: {tokens} more tokens over the range (+{pct})", { value: show(p.value), tokens: fmtK(extra(p)), pct: pct(extra(p) / low) });
+      plot.append(dot);
+    };
+    if (worst !== now && worst !== top) at(worst, "worst", "+" + pct(extra(worst) / low));
+    at(top, "best", t("Leanest"));
+    if (now && now !== top) at(now, "now", "+" + pct(extra(now) / low));
+    const axis = el("div", "ctx-tc-x");
+    for (const p of new Set([pts[0], top, now, pts[pts.length - 1]].filter(Boolean))) {
+      const i = pts.indexOf(p);
+      const tick = el("span", (p === top ? "best" : p === now ? "now" : "") + (i === 0 ? " start" : i === pts.length - 1 ? " end" : ""), show(p.value));
+      tick.style.left = (i / (pts.length - 1)) * 100 + "%";
+      axis.append(tick);
+    }
+    box.append(axis);
+    box.dataset.tt = t("Tokens each setting would have spent past the leanest, on your own calls");
     return box;
   }
 
@@ -784,8 +827,11 @@
     };
     vals.append(val("Now", cur, "now"));
     if (!same) vals.append(el("span", "ctx-tune-arrow", "→"), val("Best for you", best, "best"));
-    if (a.compact) { const c = curve(a.compact); if (c) vals.append(el("span", "grow"), c); }
     row.append(vals);
+    const c = a.compact
+      ? chart(a.compact.curve || [], r.current, r.best, show)
+      : chart([{ value: "5m", cost: r.short }, { value: "1h", cost: r.hour }], r.current, r.best, show);
+    if (c) row.append(c);
 
     const why = el("p", "ctx-tune-why");
     const f = r.facts || {};
@@ -865,7 +911,7 @@
     const head = el("div", "row-head ctx-sess-head");
     head.append(el("span", "label", t("Tuned for you")), el("span", "grow"));
     pane.append(head);
-    pane.append(el("p", "usage-note", t("Your own calls of the range, replayed setting by setting from your agents' session files: the settings that would have spent the fewest tokens, for how you work. Tokens are weighed as the vendor charges them: a cache read is a tenth of one.")));
+    pane.append(el("p", "usage-note ctx-tune-note", t("Your own calls of the range, replayed setting by setting from your agents' session files: the settings that would have spent the fewest tokens, for how you work. Tokens are weighed as the vendor charges them: a cache read is a tenth of one.")));
     if (!tuneData) {
       pane.append(el("p", "usage-note", t("Working it out from your sessions…")));
       return;
