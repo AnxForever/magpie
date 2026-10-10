@@ -653,7 +653,7 @@ func claudeIn(at place) *Agent {
 	// Claude Desktop's ids too while it runs on magpie, its Code tab being
 	// Claude Code on this settings.json
 	desktopOn := func() bool {
-		return at.id == "" && at.sys == nil && desktopWired(desktopPathsOf(desktopDirs(desktopdir.OS, at.home, os.Getenv)))
+		return at.id == "" && at.sys == nil && desktopWiredAny(desktopSets(desktopdir.OS, at.home, os.Getenv))
 	}
 	writeCaps := func(models ...string) error {
 		if env(claudeCapsEnv) != "" && !capsOurs() {
