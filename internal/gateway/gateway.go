@@ -1767,6 +1767,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		streams = strings.Contains(r.URL.Path, "streamGenerateContent")
 	}
 	gaveWay := map[string]bool{} // keys and accounts that gave way, full, to one free (laneMate)
+	// a group's members that failed in a way that passes are asked again,
+	// once each has been, for up to its Patience (#1418)
+	var patience time.Duration
+	if isGroup {
+		patience = g.Waits()
+	}
+	var busyNow []busyTry  // the members of this round that failed so
+	rounds := 0            // the rounds they were asked again in
+	var waitFrom time.Time // when every member had first failed so
 	for i := 0; i < len(cands); i++ {
 		c := cands[i]
 		if j := s.laneMate(cands, i, isGroup, gaveWay); j > i {
@@ -1784,7 +1793,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// for its allowance running out to be told as that one's error
 		// and once the agent has the stream's headers from an earlier try's
 		// keepalives, for a failure to be told as the stream's error
-		hw := newHoldWriter(w, !last || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2)
+		hw := newHoldWriter(w, !last || again < max(lastRetries, rateRetries) || other != nil || kept.sent || autoPicks(c) && repicked < 2 ||
+			patience > 0 && rounds < replanRounds && (waitFrom.IsZero() || time.Since(waitFrom) < patience))
 		// Claude's and GPT's reasoning is held for a refusal after it only
 		// while another candidate could answer instead: the last one's
 		// refusal isn't asked again, so holding it only kept a lone relay's
@@ -2416,11 +2426,45 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			try.Fail, try.Rest = rest.Why, &rest
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
+			if patience > 0 && !hw.turnedAway && busy(hw.code(), hw.errBody()) {
+				busyNow = noteBusy(busyNow, c, hw.header)
+			}
 			continue
 		}
-		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !hw.turnedAway && hw.failed() {
+		if _, same := passing(hw.code(), hw.header, hw.errBody(), again); last && patience > 0 && !protected && !hw.turnedAway && !hw.refused && hw.failed() && busy(hw.code(), hw.errBody()) &&
+			(len(busyNow) > 0 || !same) {
+			// every member has failed, each in a way that passes — busy,
+			// overloaded, rate limited for a moment — with nothing of a
+			// reply sent: after a pause, longer each round and no shorter
+			// than a Retry-After, those back by then are asked again in
+			// turn, while the group's Patience for the request lasts
+			// (#1418: Codex's turn ended on server_is_overloaded, to be
+			// told "continue" by hand). Another member busy too, this one
+			// isn't asked again alone first, as the last one left is: they
+			// take turns. The patience is counted from the first time
+			// every member had failed, when the agent would have had the
+			// error
+			if waitFrom.IsZero() {
+				waitFrom = time.Now()
+			}
+			busyNow = noteBusy(busyNow, c, hw.header)
+			if next, wait, ok := replan(busyNow, rounds, waitFrom.Add(patience)); ok {
+				try.Fail, try.Again, try.Replan, try.Patience = failureOf(c, hw.code(), hw.errBody()), wait.Milliseconds(), len(next), int(patience/time.Second)
+				s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
+				skipped = append(skipped, c.label()+": "+call.Error)
+				rounds, busyNow = rounds+1, nil
+				if pauseAlive(r.Context(), w, kept, streams, start, wait) {
+					cands = append(cands[:i+1:i+1], next...)
+					continue
+				}
+				call.Status, call.Error = 499, "the agent canceled the request"
+				break
+			}
+		}
+		if wait, ok := passing(hw.code(), hw.header, hw.errBody(), again); ok && !protected && !hw.turnedAway && hw.failed() && waitFrom.IsZero() {
 			// nobody else is left: the same one again, after a moment (not
-			// what Antigravity turned away: it turns it away again)
+			// what Antigravity turned away: it turns it away again; nor
+			// once the group's patience is spent)
 			try.Fail, try.Again = failureOf(c, hw.code(), hw.errBody()), wait.Milliseconds()
 			s.trace.update(tr, func(t *Route) { t.Tries[len(t.Tries)-1] = try })
 			skipped = append(skipped, c.label()+": "+call.Error)
