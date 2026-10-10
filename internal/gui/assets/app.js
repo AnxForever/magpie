@@ -3196,14 +3196,35 @@ async function load(again) {
   if (view === "gateway" && !providers) renderGatewayLoading();
   try {
     const since = prefsWrites;
-    const next = await api("state");
+    const asked = api("state");
+    // the first load draws the state magpie kept from its last read while
+    // the fresh one is read (#1519, fatkun): reading every agent's config,
+    // and a WSL distro's through \\wsl.localhost, took seconds after a
+    // start or after light mode let the window go. The fresh state
+    // replaces it the moment it is in, so an agent leaves the list only
+    // once that says it is gone.
+    let relang = false, shown = null;
+    if (!load.done) {
+      const last = await Promise.race([api("state?last=1").catch(() => null), asked.then(() => null, () => null)]);
+      if (last?.last && !load.done) {
+        state = shown = last;
+        relang = applyPrefs(state.settings, state.fx);
+        tintPanel();
+        tintTitleBar();
+        renderAgents();
+      }
+    }
+    let next = await asked;
+    // a change made on the rows drawn from it answered with a state read
+    // after this one was asked for: that one stands
+    if (shown && state !== shown) next = state;
     // a setting changed while this was on its way (it can take seconds):
     // what came back is from before it, and would put the old theme back
     if (!prefsSettled(since) && load.done) next.settings = state.settings;
     state = next;
     load.done = true;
     // the library may have drawn itself before the saved language was known
-    if (applyPrefs(state.settings, state.fx)) {
+    if (applyPrefs(state.settings, state.fx) || relang) {
       again = false; // the Usage page too is drawn again, in the new language
       if (view === "library") window.loadLibrary?.();
       if (view === "plugins") window.loadPlugins?.();

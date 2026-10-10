@@ -264,6 +264,9 @@ type stateJSON struct {
 	// #1505) that were read from their last good generation: the page
 	// tells the user once each
 	Recovered []lastgood.Note `json:"recovered,omitempty"`
+	// Last: this is the state kept from the last read (laststate.go), for
+	// the page to draw while the fresh one is read
+	Last bool `json:"last,omitempty"`
 }
 
 // unlistedJSON is a model of a provider kept for routing groups, and the
@@ -704,7 +707,19 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// without its vendor's list (one whose try at start-up failed) is
 		// asked again in the background, not only from the Providers page
 		provider.FetchNewSoon(8 * time.Second)
-		writeJSON(rw, state())
+		// ?last=1: the state kept from the last read, at once (#1519);
+		// null when none is kept
+		if r.URL.Query().Get("last") == "1" {
+			if s, ok := lastKnown(); ok {
+				writeJSON(rw, s)
+			} else {
+				writeJSON(rw, nil)
+			}
+			return
+		}
+		s := state()
+		writeJSON(rw, s)
+		keepState(s)
 	})
 	mux.HandleFunc("POST /api/set", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Agent, Field, Value string }
