@@ -4,7 +4,10 @@ const $$ = (s) => document.querySelectorAll(s);
 const params = new URLSearchParams(location.search);
 const mode = params.get("mode") || "window";
 // The panel loads Wails for ExecJS readiness, but stays attached to the tray.
-if (mode === "panel") $("header.top").style.setProperty("--wails-draggable", "no-drag");
+// On Linux it is dragged by its header like the window: a Wayland window
+// can't be put by the icon, so KWin places it, and since it has no KWin
+// title bar (#1283) the header is the only handle it has (#1430).
+if (mode === "panel" && !document.body.classList.contains("linux")) $("header.top").style.setProperty("--wails-draggable", "no-drag");
 // `magpie web`: the page in a browser tab, with no window of the app's
 // around it — it opens links itself, and what is the desktop's is left out
 const web = !!window.bootPrefs?.web;
