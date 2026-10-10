@@ -1778,7 +1778,11 @@ type compactResult struct {
 	ID     string          `json:"id"`
 	Output []compactOutput `json:"output"`
 	Usage  json.RawMessage `json:"usage"`
-	Error  *struct {
+	// Status is how the response ended ("completed", "incomplete"), and
+	// IncompleteDetails why when it was cut short: max_output_tokens (#1466)
+	Status            string          `json:"status"`
+	IncompleteDetails json.RawMessage `json:"incomplete_details"`
+	Error             *struct {
 		Message string `json:"message"`
 	} `json:"error"`
 }
@@ -1817,6 +1821,10 @@ func compactReply(b []byte) (compactResult, error) {
 		case "response.completed", "response.incomplete":
 			if ev.Response != nil {
 				res.Output, res.Usage = ev.Response.Output, ev.Response.Usage
+				res.Status, res.IncompleteDetails = ev.Response.Status, ev.Response.IncompleteDetails
+			}
+			if res.Status == "" {
+				res.Status = strings.TrimPrefix(ev.Type, "response.")
 			}
 		case "response.failed", "error":
 			failed = ev.Message
