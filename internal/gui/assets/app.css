@@ -2925,6 +2925,33 @@ body.panel .modal { padding: 16px 12px; }
   body.web .pop { max-width: calc(100vw - 16px); max-height: calc(100% - 16px); }
   body.web .pop .picker-body { min-height: 0; }
   body.web .pop #list li { min-height: 44px; }
+  /* A row's trailing pills go to a second line on a phone rather than
+     squeeze its name to a letter or push its switch out of the card
+     (zaidu259434 on X): the empty ::after is the line break. */
+  body.web :is(.row.provider, .row.model, .row.gw, .call)::after { content: ""; order: 1; flex-basis: 100%; }
+  body.web :is(.row.provider, .row.model) { flex-wrap: wrap; row-gap: 3px; }
+  body.web :is(.row.provider, .row.model) > .who { flex: 1 1 0; }
+  body.web .row.provider > .key { order: 2; margin-left: 37px; }
+  body.web .row.provider.off > .key { margin-left: 27px; }
+  body.web .row.provider > .uses { order: 3; }
+  body.web .row.model > .minfo { order: 2; margin-left: 0; flex-wrap: wrap; }
+  body.web .row.gw { flex-wrap: wrap; }
+  body.web .row.gw > .who { flex: 1 1 0; min-width: 0; }
+  body.web .row.gw .sub { white-space: normal; }
+  body.web .row.gw > .url { order: 2; margin-left: 17px; max-width: calc(100% - 17px); }
+  body.web .call { flex-wrap: wrap; height: auto; min-height: 24px; padding: 3px 6px; }
+  body.web .call > .m { order: 2; margin-left: 20px; min-width: 0; }
+  body.web .call > .p { order: 3; }
+  body.web .call > .st { max-width: none; }
+  /* a key's or account's own buttons follow its name on a line of their own */
+  body.web .acc { flex-wrap: wrap; row-gap: 4px; }
+  body.web .acc > .grow { flex: 1 0 100%; height: 0; margin: -2px 0; }
+  body.web .acc > .grow + * { margin-left: auto; }
+  /* nothing hovers on a phone: what a row shows on hover is shown, and a
+     key's row gives it back the room it folds away till a hover (#841) */
+  body.web .acc :is(.text.quiet, .proto, .amodels, .alane) { opacity: 1; }
+  body.web .accts.keys .acc > :is(.amodels, .proto, .alane, .text.quiet) { max-width: none !important; padding: 0 7px !important; flex-shrink: 0 !important; }
+  body.web .accts.keys .acc > .alane:not(.set) { margin-left: 0 !important; }
 }
 
 /* Import from other apps: a checklist per app */
