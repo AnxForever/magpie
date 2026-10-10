@@ -174,7 +174,7 @@ func desktopModels(entries []provider.Entry) []map[string]any {
 		m := modelObject(e)
 		m["display_name"] = names[i]
 		m["id"] = claudeLooking(e)
-		if longest && e.Context >= desktop1M {
+		if desktopListed1M(e, longest) {
 			m["id"] = m["id"].(string) + "[1m]"
 			m["description"] = desktop1MSaid
 		}
@@ -206,6 +206,16 @@ func desktopModels(entries []provider.Entry) []map[string]any {
 // (desktop1MSaid); its id, which Desktop hands Claude Code, has the "[1m]"
 // that gives a session the 1M window.
 const desktop1M = 1_000_000
+
+// desktopListed1M says e is listed to Claude Desktop by its "[1m]" id,
+// longest being settings.DesktopLongest.
+func desktopListed1M(e provider.Entry, longest bool) bool { return longest && e.Context >= desktop1M }
+
+// DesktopListed1M says Claude Desktop is shown e by its "[1m]" id, which
+// its Code tab hands Claude Code, so a session on it has the 1M window.
+func DesktopListed1M(e provider.Entry) bool {
+	return desktopListed1M(e, settings.Load().DesktopLongest)
+}
 
 // desktop1MSaid is the description Claude Desktop gives the 1M entry it
 // adds (WLt in its app.asar, 2.7032).
