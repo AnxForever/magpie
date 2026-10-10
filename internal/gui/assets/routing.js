@@ -515,6 +515,14 @@
     }
     const rule = ruleWhy(r, false);
     if (rule) out.push(rule);
+    // a member a pause rule holds for now is out of the group: not tried,
+    // not a fallback
+    for (const p of r.group?.paused || []) {
+      const when = (p.when || []).map(condText).join(", ");
+      out.push(p.group
+        ? t("{model} is paused by rule {n} of {group} ({when}), so it is left out until that ends.", { model: p.member, n: p.rule, group: r.group?.subs?.find((s) => s.id === p.group)?.name || p.group, when })
+        : t("{model} is paused by rule {n} ({when}), so it is left out until that ends.", { model: p.member, n: p.rule, when }));
+    }
     const smart = (x) => !x.routing && (x.kind === "account" || x.known);
     const someKnown = r.order.some((x) => x.known);
     for (const x of r.order.slice(1)) {
@@ -3306,7 +3314,7 @@
     if (g.firstToken > 0 && !manual) tags.append(el("span", "tag", t("Next after {n} without a first token", { n: took(g.firstToken * 1000) })));
     if (g.rules?.length) {
       const r = el("span", "tag" + (manual ? " idle" : ""), t(g.rules.length === 1 ? "1 rule" : "{n} rules", { n: g.rules.length }));
-      r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${memberLabel(g, x.use)}`).join("\n");
+      r.title = (manual ? t("The rules wait while you pick the model by hand.") + "\n" : "") + g.rules.map((x, i) => `${i + 1}. ${ruleText(x)} → ${x.pause ? t("pause") + " " : ""}${memberLabel(g, x.use)}`).join("\n");
       tags.append(r);
     }
     if (g.disabled) tags.append(el("span", "tag idle", t("switched off")));
@@ -3952,6 +3960,10 @@
           drawTime(); warn();
         });
         drawTime();
+        // a pause holds by hours, days and agents only: the others are
+        // about a request, and a pause keeps the model out of every one
+        const byRequest = [tk, im, ef, it, cp];
+        for (const c of byRequest) c.hidden = !!r.pause;
         when.append(tk, im, ef, ag, it, cp, tm, dayBtn);
         // the member it sends to
         const use = el("div", "rt-use");
@@ -3963,16 +3975,30 @@
         const hint = el("span", "rt-rwarn");
         const warn = () => {
           const m = infoOf(r.use), bits = [];
-          if (r.images && m && m.ready && !m.images) bits.push(t("it doesn't take images"));
-          if (r.tokens && m?.context && m.context < r.tokens) bits.push(t("it takes {n} tokens", { n: m.context.toLocaleString() }));
+          if (r.pause) bits.push(t("left out of the group then: not tried, not a fallback"));
+          if (!r.pause && r.images && m && m.ready && !m.images) bits.push(t("it doesn't take images"));
+          if (!r.pause && r.tokens && m?.context && m.context < r.tokens) bits.push(t("it takes {n} tokens", { n: m.context.toLocaleString() }));
           // a summary longer than it takes goes by the next rule, or the group
-          if (r.compact && m?.context && d.members.some((id) => (infoOf(id)?.context || 0) > m.context)) bits.push(t("longer conversations skip it: it takes {n} tokens", { n: m.context.toLocaleString() }));
+          if (!r.pause && r.compact && m?.context && d.members.some((id) => (infoOf(id)?.context || 0) > m.context)) bits.push(t("longer conversations skip it: it takes {n} tokens", { n: m.context.toLocaleString() }));
           const from = clockOf(r.time?.from), to = clockOf(r.time?.to);
           if (from && to && to < from) bits.push(t("runs past midnight, into the next day"));
           hint.textContent = bits.join(" · ");
         };
         warn();
-        use.append(el("span", "w", t("send to")), ub, hint);
+        // what it does: send the turn there first, or keep the model out
+        // of the group while the rule holds (John on Discord: a model
+        // paused in its vendor's peak hours)
+        const act = el("button", "rt-cond rt-act" + (r.pause ? " on" : ""), t(r.pause ? "pause" : "send to"));
+        act.onclick = (ev) => pickFrom("action", act, ev, [
+          { value: "send", label: t("send to"), note: t("goes first; the others stay behind it") },
+          { value: "pause", label: t("pause"), note: t("left out of the group: not tried, not a fallback") },
+        ], (v) => {
+          r.pause = v === "pause";
+          // what a pause doesn't take is cleared, not kept out of sight
+          if (r.pause) Object.assign(r, { tokens: 0, images: false, effort: "", intent: "", compact: false });
+          drawRules();
+        }, r.pause ? "pause" : "send");
+        use.append(act, ub, hint);
         const ctl = el("span", "ctl");
         if (i) { const up = el("button", "text", t("Up")); up.onclick = () => { d.rules.splice(i - 1, 0, d.rules.splice(i, 1)[0]); drawRules(); }; ctl.append(up); }
         const rm = el("button", "text", t("Remove"));
@@ -3986,7 +4012,7 @@
       focusIntent = null;
     };
     let focusIntent = null;
-    const newRule = () => ({ use: d.members[d.members.length - 1], tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, time: null });
+    const newRule = () => ({ use: d.members[d.members.length - 1], pause: false, tokens: 0, images: false, effort: "", agents: [], intent: "", compact: false, time: null });
     rAdd.onclick = () => { d.rules.push(newRule()); drawRules(); };
     const addIntentRule = () => {
       asking = newRule();
@@ -4132,8 +4158,10 @@
           ? t("Rule {n}: its hours are the whole day — pick days, or other hours", { n: badTime + 1 })
           : t("Rule {n}: the hours are two times like 09:00 and 18:00", { n: badTime + 1 }), "warn");
       }
-      const bare = d.rules.findIndex((r) => !r.tokens && !r.images && !r.effort && !r.agents.length && !r.intent && !r.compact && !r.time);
+      const bare = d.rules.findIndex((r) => !r.pause && !r.tokens && !r.images && !r.effort && !r.agents.length && !r.intent && !r.compact && !r.time);
       if (bare >= 0) return status(t("Rule {n} needs a condition", { n: bare + 1 }), "warn");
+      const bareP = d.rules.findIndex((r) => r.pause && !r.time && !r.agents.length);
+      if (bareP >= 0) return status(t("Rule {n}: a pause needs hours, days or agents", { n: bareP + 1 }), "warn");
       if (d.rules.some((r) => r.intent) && !d.classifier) return status(t("Choose the model that tells which intent a message is"), "warn");
       if (d.effort === "auto" && !d.classifier) return status(t("Choose the model that rates how hard a turn is"), "warn");
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");

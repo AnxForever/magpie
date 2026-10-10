@@ -122,6 +122,9 @@ type GroupRef struct {
 	Via []string `json:"via,omitempty"`
 	// Fast: those of Members sent in their vendor's fast mode
 	Fast []string `json:"fast,omitempty"`
+	// Paused: the models a pause rule left out of the request, so not in
+	// Members (provider.PausedOut)
+	Paused []provider.Paused `json:"paused,omitempty"`
 }
 
 // SubGroup is a routing group in the group a request asked for.

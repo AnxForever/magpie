@@ -58,8 +58,11 @@ const (
 const EffortAuto = "auto"
 
 // Ruled reports whether the group decides anything as a user's turn
-// begins: a rule to put a member first, or the turn's effort.
-func (g Group) Ruled() bool { return len(g.Rules) > 0 || g.Effort == EffortAuto }
+// begins: a rule to put a member first, or the turn's effort. A pause
+// rule decides nothing then (PausedOut is looked at on every request).
+func (g Group) Ruled() bool {
+	return slices.ContainsFunc(g.Rules, func(r Rule) bool { return !r.Pause }) || g.Effort == EffortAuto
+}
 
 // Manual is a group's routing when the user picks which member it uses,
 // as CC Switch has one provider on at a time (#317): every request goes to

@@ -1392,6 +1392,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		turnedAway()
 		return
 	}
+	// a model a pause rule holds for now is out of the group: not first,
+	// not a failover, not where the conversation was (John on Discord: a
+	// model paused in its vendor's peak hours)
+	var paused []provider.Paused
+	if isGroup {
+		ms, paused = provider.PausedOut(g, ms, agent, ruleClock())
+		if len(ms) == 0 && len(paused) > 0 {
+			call.Status, call.Error = 503, "every model paused"
+			writeError(w, from, 503, pausedError(call.Model, paused))
+			turnedAway()
+			return
+		}
+	}
 	// a Codex subagent's task its lead sealed — the lead answered by a
 	// ChatGPT account, the group's own or Codex's — goes only to a ChatGPT
 	// account, the lead's first (#619), or back to the Responses provider
@@ -1532,6 +1545,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// a routing group: every member's keys or accounts weighed together
 		cands, pl = s.planGroup(g, ms, from)
 		group = groupRef(g, ms)
+		group.Paused = paused
 		scope, mode, rotate = provider.GroupPrefix+g.ID, g.Affinity, g.Routing == provider.Rotate
 		leadScope = scope
 		if words != "" {
