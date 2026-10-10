@@ -697,8 +697,8 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
       <tr><td><code>id</code></td><td>Agent 页、用量和命令行里用的 id：小写字母、数字、<code>.</code>、<code>_</code> 和 <code>-</code>。和 magpie 内置 Agent 相同的 id（<code>codex</code>、<code>claude</code> 等）会被拒绝：插件是添加 Agent，不是替换。</td></tr>
       <tr><td><code>name</code></td><td>页面上显示的名字。不写就用 id。</td></tr>
       <tr><td><code>config</code></td><td>magpie 修改的文件。会展开 <code>~</code> 和 <code>$VAR</code>。文件不存在时会新建。</td></tr>
-      <tr><td><code>format</code></td><td><code>json</code>、<code>yaml</code> 或 <code>env</code>，文件名看不出格式时才需要写（<code>.json</code>/<code>.jsonc</code>、<code>.yaml</code>/<code>.yml</code>、<code>.env</code>）。暂不支持 TOML。</td></tr>
-      <tr><td><code>model</code></td><td>文件里模型的键，JSON 和 YAML 用点分路径（<code>llm.model</code>）。</td></tr>
+      <tr><td><code>format</code></td><td><code>json</code>、<code>yaml</code>、<code>toml</code> 或 <code>env</code>，文件名看不出格式时才需要写（<code>.json</code>/<code>.jsonc</code>、<code>.yaml</code>/<code>.yml</code>、<code>.toml</code>、<code>.env</code>）。</td></tr>
+      <tr><td><code>model</code></td><td>文件里模型的键，JSON、YAML 和 TOML 用点分路径（<code>llm.model</code>）。</td></tr>
       <tr><td><code>prefix</code></td><td>写在 magpie 模型 id 前面的内容：通过 LiteLLM 访问 OpenAI 兼容接口的 Agent 用 <code>openai/</code>。id 本身是网关接受的 <code>&lt;供应商&gt;/&lt;模型&gt;</code>。</td></tr>
       <tr><td><code>bin</code>、<code>dir</code></td><td><code>PATH</code> 上的命令和配置目录，用来判断 Agent 是否已安装。</td></tr>
       <tr><td><code>ua</code></td><td>Agent 的 User-Agent 里的词，请求没带它的 key 时，用来在用量里认出它。</td></tr>

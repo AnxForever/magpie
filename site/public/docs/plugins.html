@@ -697,8 +697,8 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
       <tr><td><code>id</code></td><td>Its id, as the Agents page, usage and the CLI name it: lower-case letters, digits, <code>.</code>, <code>_</code> and <code>-</code>. One of magpie’s own agents’ ids (<code>codex</code>, <code>claude</code>, …) is refused: a plugin adds an agent, it doesn’t replace one.</td></tr>
       <tr><td><code>name</code></td><td>What the page calls it. The id when left out.</td></tr>
       <tr><td><code>config</code></td><td>The file magpie edits. <code>~</code> and <code>$VAR</code> are expanded. It is made when it isn’t there.</td></tr>
-      <tr><td><code>format</code></td><td><code>json</code>, <code>yaml</code> or <code>env</code>, when the file’s name doesn’t say it (<code>.json</code>/<code>.jsonc</code>, <code>.yaml</code>/<code>.yml</code>, <code>.env</code>). TOML isn’t supported yet.</td></tr>
-      <tr><td><code>model</code></td><td>The key of the model in the file, as a dotted path for JSON and YAML (<code>llm.model</code>).</td></tr>
+      <tr><td><code>format</code></td><td><code>json</code>, <code>yaml</code>, <code>toml</code> or <code>env</code>, when the file’s name doesn’t say it (<code>.json</code>/<code>.jsonc</code>, <code>.yaml</code>/<code>.yml</code>, <code>.toml</code>, <code>.env</code>).</td></tr>
+      <tr><td><code>model</code></td><td>The key of the model in the file, as a dotted path for JSON, YAML and TOML (<code>llm.model</code>).</td></tr>
       <tr><td><code>prefix</code></td><td>Written before magpie’s model id: <code>openai/</code> for an agent that reaches OpenAI-compatible endpoints through LiteLLM. The id itself is <code>&lt;provider&gt;/&lt;model&gt;</code>, as the gateway takes it.</td></tr>
       <tr><td><code>bin</code>, <code>dir</code></td><td>The command on <code>PATH</code> and the folder that say the agent is installed.</td></tr>
       <tr><td><code>ua</code></td><td>Words of the agent’s User-Agent, to name its requests in Usage when they come without its key.</td></tr>

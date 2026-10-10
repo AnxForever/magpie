@@ -12,9 +12,11 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -133,6 +135,8 @@ func (f pluggedFile) get(key string) (string, bool) {
 		return edit.GetJSON(f.path, key)
 	case "yaml":
 		return edit.GetYAML(f.path, key)
+	case "toml":
+		return edit.GetTOML(f.path, key)
 	}
 	return edit.GetEnvFile(f.path, key)
 }
@@ -149,6 +153,8 @@ func (f pluggedFile) raw(key string) (string, bool) {
 		return r.Raw, r.Exists()
 	case "yaml":
 		return edit.GetYAMLText(f.path, key)
+	case "toml":
+		return edit.GetTOMLText(f.path, key)
 	}
 	return edit.GetEnvFile(f.path, key)
 }
@@ -160,6 +166,8 @@ func (f pluggedFile) back(v string) any {
 		return json.RawMessage(v)
 	case "yaml":
 		return edit.YAMLText(v)
+	case "toml":
+		return edit.Raw(v)
 	}
 	return v
 }
@@ -173,6 +181,27 @@ func (f pluggedFile) set(kvs []edit.KV) error {
 		return edit.SetJSON(f.path, kvs...)
 	case "yaml":
 		return edit.SetYAML(f.path, kvs...)
+	case "toml":
+		for i, kv := range kvs {
+			switch x := kv.Value.(type) {
+			case nil:
+				kvs[i].Value = ""
+			case float64:
+				if x == math.Trunc(x) {
+					kvs[i].Value = int(x)
+				} else {
+					kvs[i].Value = edit.Raw(strconv.FormatFloat(x, 'f', -1, 64))
+				}
+			case int64:
+				kvs[i].Value = int(x)
+			case uint64:
+				kvs[i].Value = int(x)
+			case string, bool, int, edit.Raw:
+			default:
+				return fmt.Errorf("%s: a TOML config takes a scalar under %q, not %T", f.path, kv.Path, kv.Value)
+			}
+		}
+		return edit.SetTOML(f.path, kvs...)
 	}
 	for i, kv := range kvs {
 		switch v := kv.Value.(type) {
@@ -196,6 +225,8 @@ func (f pluggedFile) del(keys []string) error {
 		return edit.DelJSON(f.path, keys...)
 	case "yaml":
 		return edit.DelYAML(f.path, keys...)
+	case "toml":
+		return edit.DelTOML(f.path, keys...)
 	}
 	return edit.DelEnvFile(f.path, keys...)
 }

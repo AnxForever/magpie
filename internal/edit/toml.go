@@ -191,8 +191,9 @@ func SetTOMLKey(path, name, key string, value any) error {
 
 // setTOMLKeyLines is SetTOMLKey on lines: the key named `key` (as the parser
 // names it, quotes taken off) is set, and a new one is written as `spelled`.
+// A value spelled over several lines replaces or fills that many lines.
 func setTOMLKeyLines(lines []string, name, key, spelled string, value any) ([]string, error) {
-	line := spelled + " = " + tomlLiteral(value)
+	added := strings.Split(spelled+" = "+tomlLiteral(value), "\n")
 	table, err := parseTOMLTable(lines, name)
 	if err != nil {
 		return nil, err
@@ -202,18 +203,20 @@ func setTOMLKeyLines(lines []string, name, key, spelled string, value any) ([]st
 		if len(out) > 0 {
 			out = append(out, "")
 		}
-		return append(out, "["+name+"]", line, ""), nil
+		out = append(out, "["+name+"]")
+		out = append(out, added...)
+		return append(out, ""), nil
 	}
 	from, to := table.from+1, table.from+1
 	for _, kv := range table.keys {
 		if kv.name == key {
 			from, to = kv.from, kv.to
-			line = kv.prefix + tomlLiteral(value) + kv.suffix
+			added = strings.Split(kv.prefix+tomlLiteral(value)+kv.suffix, "\n")
 			break
 		}
 		from, to = kv.to, kv.to
 	}
-	return append(append(append([]string{}, lines[:from]...), line), lines[to:]...), nil
+	return append(append(append([]string{}, lines[:from]...), added...), lines[to:]...), nil
 }
 
 // DelTOMLKey removes one key of table `name`, and the table with it when
@@ -417,6 +420,175 @@ func DelTOMLTop(path string, keys ...string) error {
 	}
 	out = append(out, lines[at:]...)
 	return writeTOML(path, out)
+}
+
+// GetTOML reads the scalar at keyPath of a TOML file, wherever the file
+// spells that key: as the key of the table the path's longest table prefix
+// names (a.b.c is c in [a.b]), as a dotted key of a table on the way (b.c
+// in [a]), or as a top-level key spelled with dots. A string is decoded;
+// other scalars are their literal text. A missing file or key is ("", false).
+func GetTOML(path, keyPath string) (string, bool) {
+	doc, err := tomlFileOf(path)
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(keyPath, ".")
+	for i := len(parts) - 1; i >= 1; i-- {
+		table, ok := tomlTableNamed(doc.tables, strings.Join(parts[:i], "."))
+		if !ok || table.array {
+			continue
+		}
+		for _, kv := range table.keys {
+			if kv.name == strings.Join(parts[i:], ".") && kv.scalar {
+				return kv.value, true
+			}
+		}
+	}
+	for _, kv := range doc.root.keys {
+		if kv.name == keyPath && kv.scalar {
+			return kv.value, true
+		}
+	}
+	return "", false
+}
+
+// GetTOMLText reads the value at keyPath as the file spells it, quotes and
+// all, without the trailing comment, a value over several lines included —
+// what SetTOML writes back unchanged as a Raw.
+func GetTOMLText(path, keyPath string) (string, bool) {
+	doc, err := tomlFileOf(path)
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(keyPath, ".")
+	for i := len(parts) - 1; i >= 1; i-- {
+		table, ok := tomlTableNamed(doc.tables, strings.Join(parts[:i], "."))
+		if !ok || table.array {
+			continue
+		}
+		if kv := tomlKeyNamed(table, strings.Join(parts[i:], ".")); kv != (tomlKeySpan{}) {
+			return kv.text, true
+		}
+	}
+	if kv := tomlKeyNamed(doc.root, keyPath); kv != (tomlKeySpan{}) {
+		return kv.text, true
+	}
+	return "", false
+}
+
+// SetTOML sets the scalar at each keyPath, wherever the file spells it, in
+// place with its spacing and trailing comment kept, and creates it when it
+// isn't there: under the longest table on its path that exists, else, when
+// the path's first table is only spelled by top-level dotted keys, as one
+// of them, else as `table.key` under a new header — a path of one key is
+// top-level. It takes string, bool, int and Raw; the whole write is refused
+// before any change when a value cannot be spelled, and the file is read
+// and written once for all the keys.
+func SetTOML(path string, kvs ...KV) error {
+	raw, err := Read(path)
+	if err != nil {
+		return err
+	}
+	lines := splitLines(string(raw))
+	for _, kv := range kvs {
+		if lines, err = setTOMLAtLines(lines, kv.Path, kv.Value); err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	return writeTOML(path, lines)
+}
+
+// setTOMLAtLines is SetTOML for one key on lines: the key is located as
+// GetTOML locates it, replaced in place, or written the plain way.
+func setTOMLAtLines(lines []string, keyPath string, value any) ([]string, error) {
+	switch value.(type) {
+	case string, bool, int, Raw:
+	default:
+		return nil, fmt.Errorf("%T is not a TOML scalar; spell it as a string or Raw", value)
+	}
+	doc, err := parseTOMLFile(lines)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(keyPath, ".")
+	for i := len(parts) - 1; i >= 1; i-- {
+		table, ok := tomlTableNamed(doc.tables, strings.Join(parts[:i], "."))
+		if !ok || table.array {
+			continue
+		}
+		if kv := tomlKeyNamed(table, strings.Join(parts[i:], ".")); kv != (tomlKeySpan{}) {
+			return replaceTOMLValue(lines, kv, value)
+		}
+	}
+	if kv := tomlKeyNamed(doc.root, keyPath); kv != (tomlKeySpan{}) {
+		return replaceTOMLValue(lines, kv, value)
+	}
+	// The key isn't there: write it the plain way.
+	if len(parts) == 1 {
+		return addTOMLRoot(lines, doc, keyPath, value), nil
+	}
+	for i := len(parts) - 1; i >= 1; i-- {
+		if _, ok := tomlTableNamed(doc.tables, strings.Join(parts[:i], ".")); ok {
+			return setTOMLKeyLines(lines, strings.Join(parts[:i], "."), strings.Join(parts[i:], "."), strings.Join(parts[i:], "."), value)
+		}
+	}
+	for _, kv := range doc.root.keys {
+		if kv.name == parts[0] || strings.HasPrefix(kv.name, parts[0]+".") {
+			return addTOMLRoot(lines, doc, keyPath, value), nil
+		}
+	}
+	return setTOMLKeyLines(lines, strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1], parts[len(parts)-1], value)
+}
+
+// replaceTOMLValue spells value over the key's whole span, its spacing and
+// trailing comment kept, a value over several lines included.
+func replaceTOMLValue(lines []string, kv tomlKeySpan, value any) ([]string, error) {
+	line := kv.prefix + tomlLiteral(value) + kv.suffix
+	return append(append(append([]string{}, lines[:kv.from]...), strings.Split(line, "\n")...), lines[kv.to:]...), nil
+}
+
+// addTOMLRoot adds a top-level key after the last one, or first when there
+// is none — where SetTOMLTop puts a new key.
+func addTOMLRoot(lines []string, doc tomlFile, keyPath string, value any) []string {
+	at := 0
+	if n := len(doc.root.keys); n > 0 {
+		at = doc.root.keys[n-1].to
+	}
+	out := append([]string{}, lines[:at]...)
+	out = append(out, strings.Split(keyPath+" = "+tomlLiteral(value), "\n")...)
+	return append(out, lines[at:]...)
+}
+
+// DelTOML removes the scalar at each keyPath, wherever the file spells it,
+// a table left empty with it. A key that isn't there is fine. Each key is
+// its own write.
+func DelTOML(path string, keyPaths ...string) error {
+	for _, keyPath := range keyPaths {
+		doc, err := tomlFileOf(path)
+		if err != nil {
+			return err
+		}
+		parts := strings.Split(keyPath, ".")
+		found := false
+		for i := len(parts) - 1; i >= 1 && !found; i-- {
+			table, ok := tomlTableNamed(doc.tables, strings.Join(parts[:i], "."))
+			if !ok || table.array {
+				continue
+			}
+			if tomlKeyNamed(table, strings.Join(parts[i:], ".")) != (tomlKeySpan{}) {
+				found = true
+				if err := DelTOMLKey(path, strings.Join(parts[:i], "."), strings.Join(parts[i:], ".")); err != nil {
+					return err
+				}
+			}
+		}
+		if !found && tomlKeyNamed(doc.root, keyPath) != (tomlKeySpan{}) {
+			if err := DelTOMLTop(path, keyPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type tomlTableSpan struct {

@@ -41,7 +41,8 @@ import (
 var Formats = map[string]string{
 	".json": "json", ".jsonc": "json",
 	".yaml": "yaml", ".yml": "yaml",
-	".env": "env",
+	".toml": "toml",
+	".env":  "env",
 }
 
 // Desc is what a module's agent export says.
@@ -245,11 +246,11 @@ func (d *Desc) check() error {
 		}
 	}
 	switch d.Format {
-	case "json", "yaml", "env":
+	case "json", "yaml", "toml", "env":
 	case "":
-		return fmt.Errorf("agent.config %q: say its agent.format (json, yaml or env)", d.Config)
+		return fmt.Errorf("agent.config %q: say its agent.format (json, yaml, toml or env)", d.Config)
 	default:
-		return fmt.Errorf("agent.format %q: json, yaml or env", d.Format)
+		return fmt.Errorf("agent.format %q: json, yaml, toml or env", d.Format)
 	}
 	for i, u := range d.UA {
 		d.UA[i] = strings.ToLower(u)

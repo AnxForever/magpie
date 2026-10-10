@@ -169,7 +169,7 @@ export default {
 func TestPluggedRefused(t *testing.T) {
 	pluggedHome(t,
 		`export const agent = { id: "codex", config: "~/x.json", model: "m" };`,
-		`export const agent = { id: "bad", config: "~/x.toml", model: "m" };`,
+		`export const agent = { id: "bad", config: "~/x.ini", model: "m" };`,
 		`export const agent = { id: "boom", config: "~/.boom.json", model: "m" };
 export function connect() { throw new Error("no gateway for me"); }`,
 		`syntax error here (`,
@@ -197,6 +197,68 @@ export function connect() { throw new Error("no gateway for me"); }`,
 	}
 	if _, err := os.Stat(a.Path); err == nil {
 		t.Fatal("written though connect threw")
+	}
+}
+
+const handsSrc = `
+export const agent = { id: "hands", name: "OpenHands", bin: "openhands", config: "~/.openhands/config.toml", model: "llm.model", ua: ["openhands"] };
+export function connect({ gateway, model }) {
+  return { "llm.base_url": gateway.v1, "llm.api_key": gateway.key, "llm.temperature": model.id.endsWith("pro") ? 0.3 : 2 };
+}
+`
+
+func TestPluggedTOML(t *testing.T) {
+	home := pluggedHome(t, handsSrc)
+	path := filepath.Join(home, ".openhands", "config.toml")
+	mine := "# mine\n[llm]\nmodel = \"gpt-5\" # main\napi_key = \"sk-mine\"\ntemperature = 0.1\n\n[core]\nverbosity = 2\n"
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte(mine), 0o644)
+	read := func() string {
+		b, _ := os.ReadFile(path)
+		return string(b)
+	}
+
+	a, err := Find("hands")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Plugin == "" || a.Name != "OpenHands" || !a.Detected() {
+		t.Fatalf("agent: %+v", a)
+	}
+	f := a.Field("model")
+	if f.Get() != "gpt-5" || a.Check() != "" {
+		t.Fatalf("get %q, check %q", f.Get(), a.Check())
+	}
+	if err := f.Set("magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != "# mine\n[llm]\nmodel = \"deepseek/pro\" # main\napi_key = \""+gateway.TokenFor("hands")+"\"\ntemperature = 0.3\nbase_url = \""+gateway.URL()+"/v1\"\n\n[core]\nverbosity = 2\n" {
+		t.Fatalf("wired:\n%s", got)
+	}
+	if f.Get() != "magpie/deepseek/pro" || a.Check() != "" {
+		t.Fatalf("get %q, check %q", f.Get(), a.Check())
+	}
+	// another of magpie's models keeps what was stashed first
+	if err := f.Set("magpie/deepseek/flash"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !strings.Contains(got, "model = \"deepseek/flash\"") || !strings.Contains(got, "temperature = 2\n") {
+		t.Fatalf("flash:\n%s", got)
+	}
+	// its own model: every key comes back as the user had it, spelled as it was
+	if err := f.Set("gpt-5.5"); err != nil {
+		t.Fatal(err)
+	}
+	own := strings.Replace(mine, `"gpt-5"`, `"gpt-5.5"`, 1)
+	if got := read(); got != own {
+		t.Fatalf("own:\n%s\nwant:\n%s", got, own)
+	}
+	if _, ok := stashLoad()["plugin:hands:"+path]; ok {
+		t.Fatal("the stash outlived the wiring")
+	}
+	// the gateway names its requests by the key, and by the UA it says
+	if usage.AgentOf("openhands/0.52.0") != "hands" {
+		t.Fatalf("UA: %q", usage.AgentOf("openhands/0.52.0"))
 	}
 }
 
