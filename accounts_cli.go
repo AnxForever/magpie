@@ -452,8 +452,9 @@ const importUsage = "usage: magpie accounts import <codex|claude|antigravity|fac
 
 // importAccounts: `magpie accounts import <agent> <file>... [--yes]` brings
 // in accounts from other tools' files, as the window's "Import accounts from
-// a file…" does (#1453): Codex's auth.json, Cockpit Tools', CLIProxyAPI's
-// and Sub2API's exports for ChatGPT; Claude Code's .credentials.json and
+// a file…" does (#1453): Codex's auth.json, codexbar's config.json, and
+// Cockpit Tools', CLIProxyAPI's and Sub2API's exports for ChatGPT; Claude
+// Code's .credentials.json and
 // CLIProxyAPI's for Claude; Antigravity Cockpit's, Antigravity Manager's
 // and CLIProxyAPI's for Antigravity; Factory API keys. The files are only
 // read. What importing does to the tool the file came from is said first,
@@ -510,7 +511,7 @@ func importAccounts(args []string) error {
 	switch id {
 	case "codex":
 		say = []string{"Each account's sign-in is refreshed with ChatGPT before it is added, as signing in does.",
-			"That spends the file's sign-in: the tool it came from (Codex CLI on another computer, Cockpit Tools, CLIProxyAPI) is signed out of that account and has to sign in again. From then on the account is magpie's.",
+			"That spends the file's sign-in: the tool it came from (Codex CLI on another computer, codexbar, Cockpit Tools, CLIProxyAPI) is signed out of that account and has to sign in again. From then on the account is magpie's.",
 			"The files are only read, never changed. An account magpie holds already is left as it is."}
 	case "claude":
 		say = []string{provider.ClaudeRisk,
