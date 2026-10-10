@@ -85,6 +85,13 @@ func WriteAtomic(path string, data []byte) error {
 		cleanup()
 		return err
 	}
+	// on the disk before it is renamed in: a machine that goes down
+	// between the two can leave the file at its length, all zero (#1505)
+	if err := steady.Sync(tmp); err != nil {
+		tmp.Close()
+		cleanup()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		cleanup()
 		return err

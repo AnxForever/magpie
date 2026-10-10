@@ -3229,6 +3229,22 @@ async function load(again) {
   renderUpdateBadge();
   cliBehindOnce();
   whatsNewOnce();
+  recoveredOnce();
+}
+
+// recoveredOnce tells, once each, of a file of magpie's own a crash left
+// unreadable (all zero, #1505) that was read back from its last good copy:
+// the accounts in it are as they were then, a later change may be missing.
+const recoveredShown = new Set();
+function recoveredOnce() {
+  const fresh = (state?.recovered || []).filter((n) => !recoveredShown.has(n.path + "\n" + n.at));
+  if (!fresh.length) return;
+  for (const n of fresh) recoveredShown.add(n.path + "\n" + n.at);
+  const files = fresh.map((n) => n.file).join(", ");
+  const bak = fresh.length === 1 && fresh[0].bak && !fresh[0].bak.startsWith("0001-") ? new Date(fresh[0].bak) : null;
+  status(bak
+    ? t("{file} was damaged (the computer likely stopped mid-write), so magpie restored it from its backup of {time}. A change made after that may be missing; the damaged file is kept beside it.", { file: files, time: bak.toLocaleString(locale) })
+    : t("{file} was damaged (the computer likely stopped mid-write), so magpie restored it from its backup. A change made after that may be missing; the damaged file is kept beside it.", { file: files }), "warn", 20000);
 }
 
 // installFrom is what a restart to update tells the app: the window's tab,

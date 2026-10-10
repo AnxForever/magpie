@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -925,6 +926,10 @@ func (h *host) dispatch(m message) {
 		switch m.Event {
 		case "auth":
 			changed()
+		case "recovered":
+			// the host read plugin-auth.json from its last good
+			// generation (#1505): the GUI says so
+			lastgood.Noted(AuthPath(), m.Said)
 		case "renewing":
 			h.renewing.Store(int32(m.Count))
 		case "signIn":

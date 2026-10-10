@@ -23,6 +23,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -360,9 +361,23 @@ func read() (file, error) {
 		return f, &unreadableError{Path(), err}
 	}
 	if err := json.Unmarshal(b, &f); err != nil {
-		return file{}, &unreadableError{Path(), err}
+		// one left all zero by a crash (#1505) is its last good generation
+		bak, ferr := lastgood.Fallback(Path(), b, validProviders)
+		if ferr != nil {
+			return file{}, &unreadableError{Path(), err}
+		}
+		f = file{}
+		if err := json.Unmarshal(bak, &f); err != nil {
+			return file{}, &unreadableError{Path(), err}
+		}
 	}
 	return f, nil
+}
+
+// validProviders is providers.json's contents read as the catalog.
+func validProviders(b []byte) bool {
+	var f file
+	return json.Unmarshal(b, &f) == nil
 }
 
 // FileError is why providers.json can't be read, nil when it can or isn't
@@ -388,6 +403,9 @@ func store(f file) error {
 	}
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := lastgood.Keep(p, validProviders, 0o600); err != nil {
 		return err
 	}
 	if err := writePrivate(p, append(b, '\n')); err != nil {

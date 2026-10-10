@@ -36,6 +36,7 @@ import (
 	"github.com/yetone/magpie/internal/fonts"
 	"github.com/yetone/magpie/internal/fx"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/profile"
@@ -259,6 +260,10 @@ type stateJSON struct {
 	// Unlisted are the models kept for routing groups, which the pickers
 	// don't offer: a filter that finds one of them says why it isn't there
 	Unlisted []unlistedJSON `json:"unlisted,omitempty"`
+	// Recovered are magpie's files a crash left unreadable (all zero,
+	// #1505) that were read from their last good generation: the page
+	// tells the user once each
+	Recovered []lastgood.Note `json:"recovered,omitempty"`
 }
 
 // unlistedJSON is a model of a provider kept for routing groups, and the
@@ -1764,6 +1769,7 @@ func state() stateJSON {
 			s.Profiles = append(s.Profiles, pj)
 		}
 	}
+	s.Recovered = lastgood.Recovered()
 	return s
 }
 

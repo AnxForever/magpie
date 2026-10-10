@@ -28,6 +28,7 @@ import (
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filememo"
 	"github.com/yetone/magpie/internal/fonts"
+	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/steady"
 )
@@ -830,9 +831,22 @@ func load() Settings {
 	// the settings for every model of every agent (hundreds of reads, a
 	// fifth of the Agents page's wait)
 	if b, err := filememo.Read("settings", Path(), func(b []byte) ([]byte, error) { return b, nil }); err == nil {
-		_ = json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &s)
+		// parsed once: this runs for every model of every agent
+		if err := json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &s); err != nil {
+			// one left all zero by a crash (#1505) is its last good generation
+			if bak, err := lastgood.Fallback(Path(), b, validSettings); err == nil {
+				s = Settings{}
+				_ = json.Unmarshal(bytes.TrimPrefix(bak, []byte("\xef\xbb\xbf")), &s)
+			}
+		}
 	}
 	return s.normal()
+}
+
+// validSettings is settings.json's contents read as Settings.
+func validSettings(b []byte) bool {
+	var s Settings
+	return json.Unmarshal(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")), &s) == nil
 }
 
 // CheckProxy says whether p is a proxy setting magpie takes: "" (follow),
@@ -1037,7 +1051,14 @@ func save(s Settings, recording bool) error {
 		if len(bytes.TrimSpace(b)) != 0 {
 			var stored Settings
 			if err := json.Unmarshal(b, &stored); err != nil {
-				return fmt.Errorf("could not read settings at %s; repair or move that file aside before saving: %w", Path(), err)
+				// a file a crash left all zero (#1505) is saved over once it
+				// is kept aside, when Load had its last good generation
+				bak, ferr := lastgood.Fallback(Path(), b, validSettings)
+				if ferr != nil {
+					return fmt.Errorf("could not read settings at %s; repair or move that file aside before saving: %w", Path(), err)
+				}
+				stored = Settings{}
+				_ = json.Unmarshal(bytes.TrimPrefix(bak, []byte("\xef\xbb\xbf")), &stored)
 			}
 			consent = stored.GatewayConversations
 		}
@@ -1046,6 +1067,11 @@ func save(s Settings, recording bool) error {
 	}
 	if !recording {
 		s.GatewayConversations = consent
+	}
+	// the file there now is kept first, before anything below can make
+	// one: as the last good generation, or aside when it doesn't read
+	if err := lastgood.Keep(Path(), validSettings, 0o600); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
