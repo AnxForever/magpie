@@ -115,17 +115,22 @@ func TestClaudeAsRootEnv(t *testing.T) {
 		}
 	}
 
-	claudeEuid = func() int { return 0 }
-	for _, c := range []struct{ env, want []string }{
-		{base, append(slices.Clone(base), "IS_SANDBOX=1")},
-		// a value Claude Code doesn't take is put right
-		{[]string{"IS_SANDBOX=true", "PATH=/bin"}, []string{"PATH=/bin", "IS_SANDBOX=1"}},
-		// already let through: kept as it is
-		{[]string{"PATH=/bin", "IS_SANDBOX=1"}, []string{"PATH=/bin", "IS_SANDBOX=1"}},
-		{[]string{"PATH=/bin", "CLAUDE_CODE_BUBBLEWRAP=1"}, []string{"PATH=/bin", "CLAUDE_CODE_BUBBLEWRAP=1"}},
-	} {
-		if got := local.asRoot(slices.Clone(c.env)); !slices.Equal(got, c.want) {
-			t.Errorf("root %q: %q, want %q", c.env, got, c.want)
+	// magpie's own process as root is Linux' and macOS' (root()): a Windows
+	// one is never root, and what decides there is a WSL distro's user,
+	// below
+	if runtime.GOOS != "windows" {
+		claudeEuid = func() int { return 0 }
+		for _, c := range []struct{ env, want []string }{
+			{base, append(slices.Clone(base), "IS_SANDBOX=1")},
+			// a value Claude Code doesn't take is put right
+			{[]string{"IS_SANDBOX=true", "PATH=/bin"}, []string{"PATH=/bin", "IS_SANDBOX=1"}},
+			// already let through: kept as it is
+			{[]string{"PATH=/bin", "IS_SANDBOX=1"}, []string{"PATH=/bin", "IS_SANDBOX=1"}},
+			{[]string{"PATH=/bin", "CLAUDE_CODE_BUBBLEWRAP=1"}, []string{"PATH=/bin", "CLAUDE_CODE_BUBBLEWRAP=1"}},
+		} {
+			if got := local.asRoot(slices.Clone(c.env)); !slices.Equal(got, c.want) {
+				t.Errorf("root %q: %q, want %q", c.env, got, c.want)
+			}
 		}
 	}
 

@@ -425,7 +425,9 @@ func TestSweepBridgeProjectsTakesOnlyTheBridgesFolders(t *testing.T) {
 	real = evalSymlinks(real) // what Claude Code names a folder after
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(filepath.Join(base, "real"), link); err != nil {
-		t.Fatal(err)
+		// Windows without the symlink privilege (SeCreateSymbolicLink):
+		// the sweep itself is the same everywhere
+		t.Skipf("symlinks aren't available on this machine: %v", err)
 	}
 	claudeDir := filepath.Join(base, "claude")
 	projects := filepath.Join(claudeDir, "projects")
