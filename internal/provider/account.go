@@ -210,6 +210,12 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	for k, v := range AuthHeaders(p, proto) {
 		req.Header.Set(k, v)
 	}
+	if p.IsAgentRouter() {
+		// a relay that serves Claude Code clients alone knows the request by
+		// Claude Code's own headers, which magpie sends it (agentrouter.go).
+		// Before the user's own, so a header of theirs of the same name wins.
+		AgentRouterClient(req.Header)
+	}
 	// The user's own headers ride on plain key+URL providers, after auth so
 	// they can override a default when a gateway insists on a private scheme.
 	// Written with the name as the user typed it — some gateways match

@@ -515,6 +515,17 @@ var presets = []PresetDef{
 			{ID: "cn", Name: "China Mainland", Chat: "https://cn.yylx.io/v1", Anthropic: "https://cn.yylx.io"},
 		}},
 
+	// AgentRouter serves coding CLIs alone: anything else is answered 401
+	// "unauthorized client detected", so every request magpie makes to it —
+	// a turn, a test, the model list — carries Claude Code's own headers
+	// (agentrouter.go). One key reaches Claude, GPT and DeepSeek models;
+	// its Messages API is at the root and its OpenAI-style APIs under /v1,
+	// as its guides give them
+	{ID: "agentrouter", Name: "AgentRouter", Icon: "agentrouter-color", Kind: KindRelay,
+		Chat: "https://agentrouter.org/v1", Responses: "https://agentrouter.org/v1", Anthropic: "https://agentrouter.org",
+		Note:    "Claude Code clients only",
+		Website: "https://agentrouter.org", KeysURL: "https://agentrouter.org/console/token"},
+
 	// Jev answers no conversation: it decides which of a routing group's
 	// models takes a turn, and how hard it thinks
 	{ID: "typesafe", Name: "TypeSafe Jev", Icon: "typesafe", Kind: KindVendor,

@@ -106,20 +106,26 @@ func (p *Provider) remoteMagpieEndpoints() {
 	p.Decide = p.Chat
 }
 
-// listHeaders are the headers p's model list is asked with: a remote
-// magpie is asked for its image, video and decision models too, and its prices.
+// listHeaders are the headers p's model list is asked with: an AgentRouter
+// list is served to Claude Code alone, and a remote magpie is asked for its
+// image, video and decision models too, and its prices.
 func (p Provider) listHeaders() map[string]string {
-	if !p.IsRemoteMagpie() {
+	if !p.IsAgentRouter() && !p.IsRemoteMagpie() {
 		return p.Headers
 	}
 	h := maps.Clone(p.Headers)
 	if h == nil {
 		h = map[string]string{}
 	}
-	h[DrawersHeader] = "1"
-	h[VideomakersHeader] = "1"
-	h[PricesHeader] = "1"
-	h[DecidersHeader] = "1"
+	if p.IsAgentRouter() {
+		maps.Copy(h, agentRouterHeaders)
+	}
+	if p.IsRemoteMagpie() {
+		h[DrawersHeader] = "1"
+		h[VideomakersHeader] = "1"
+		h[PricesHeader] = "1"
+		h[DecidersHeader] = "1"
+	}
 	return h
 }
 
