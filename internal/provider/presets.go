@@ -514,6 +514,22 @@ var presets = []PresetDef{
 			{ID: "global", Name: "Global", Chat: "https://global.yylx.io/v1", Anthropic: "https://global.yylx.io"},
 			{ID: "cn", Name: "China Mainland", Chat: "https://cn.yylx.io/v1", Anthropic: "https://cn.yylx.io"},
 		}},
+	// Prime Relay (primerelay.online) is a New API relay whose keys are
+	// group-scoped: a key's group serves its own models alone, and a model
+	// of another group answers 404 "not available for this group". Some
+	// groups also refuse Anthropic's Messages ("This group does not allow
+	// /v1/messages dispatch", 403), which is no refusal magpie reads as
+	// "ask another API" (wrongEndpoint), so it would be handed to the
+	// agent as a failure of the model rather than of the API that key is
+	// on. The preset therefore sets no Anthropic endpoint: Claude Code's
+	// turns are translated to Chat Completions, which every group serves.
+	// Chat carries the prompt cache as Messages does — a second turn of
+	// the same 3k-token prefix reported its reads in cached_tokens — so
+	// nothing is lost by it.
+	{ID: "primerelay", Name: "Prime Relay", Icon: "primerelay-color", Kind: KindRelay,
+		Chat: "https://primerelay.online/v1", Responses: "https://primerelay.online/v1",
+		Note:    "keys are group-scoped",
+		Website: "https://primerelay.online", KeysURL: "https://primerelay.online/keys"},
 
 	// Jev answers no conversation: it decides which of a routing group's
 	// models takes a turn, and how hard it thinks
